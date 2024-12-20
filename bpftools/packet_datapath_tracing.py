@@ -1,7 +1,7 @@
 #!/usr/bin/python3
 
-#from bcc import BPF
-from bpfcc import BPF
+from bcc import BPF
+#from bpfcc import BPF
 from socket import inet_ntop, AF_INET, inet_aton, htonl
 from struct import pack, unpack
 from time import strftime
@@ -24,12 +24,12 @@ dst_ip = args.dst if args.dst else "0.0.0.0"
 src_port = args.src_port if args.src_port else 0
 dst_port = args.dst_port if args.dst_port else 0
 
-print(f"Monitoring source IP: {src_ip}")
-print(f"Monitoring destination IP: {dst_ip}")
-print(f"Protocol: {args.protocol}")
+print("Monitoring source IP: {}".format(src_ip))
+print("Monitoring destination IP: {}".format(dst_ip))
+print("Protocol: {}".format(args.protocol))
 if args.protocol in ['tcp', 'udp']:
-    print(f"Source port: {src_port}")
-    print(f"Destination port: {dst_port}")
+    print("Source port: {}".format(src_port))
+    print("Destination port: {}".format(dst_port))
 
 src_ip_hex = ip_to_hex(src_ip)
 dst_ip_hex = ip_to_hex(dst_ip)
@@ -38,10 +38,13 @@ bpf_text = """
 #include <uapi/linux/ptrace.h>
 #include <net/sock.h>
 #include <bcc/proto.h>
-#include <linux/skbuff.h>
-#include <linux/icmp.h>
-#include <linux/ip.h>
 #include <linux/netdevice.h>
+#include <linux/skbuff.h>
+#include <linux/ip.h>
+#include <linux/icmp.h>
+#include <net/tcp.h>
+#include <net/udp.h>
+#include <linux/if_ether.h>
 
 BPF_HASH(ipv4_count, u32, u64);
 BPF_STACK_TRACE(stack_traces, 8192);  
@@ -69,14 +72,12 @@ struct tun_xmit_data_t {
 };
 BPF_PERF_OUTPUT(tun_xmit);
 
-//int trace_tun_net_xmit(struct pt_regs *ctx, struct sk_buff *skb)
 int trace_tun_net_xmit(struct pt_regs *ctx)
 {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
     if (skb == NULL)
         return 0;
 
-    // 检查是否为 IPv4 数据包
     u16 protocol;
     bpf_probe_read_kernel(&protocol, sizeof(protocol), &skb->protocol);
     if (protocol != htons(ETH_P_IP))
@@ -165,13 +166,12 @@ struct dropped_skb_data_t {
 };
 BPF_PERF_OUTPUT(kfree_drops);
 
-int trace_kfree_skb(struct pt_regs *ctx, struct sk_buff *skb)
+int trace_kfree_skb(struct pt_regs *ctx)
 {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
     if (skb == NULL)
         return 0;
 
-    // 检查是否为 IPv4 数据包
     u16 protocol;
     bpf_probe_read_kernel(&protocol, sizeof(protocol), &skb->protocol);
     if (protocol != htons(ETH_P_IP))
@@ -259,13 +259,12 @@ struct netif_receive_skb_data_t {
 };
 BPF_PERF_OUTPUT(netif_receive_skb_data);
 
-int trace_netif_receive_skb(struct pt_regs *ctx, struct sk_buff *skb)
+int trace_netif_receive_skb(struct pt_regs *ctx)
 {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
     if (skb == NULL)
         return 0;
 
-    // 检查是否为 IPv4 数据包
     u16 protocol;
     bpf_probe_read_kernel(&protocol, sizeof(protocol), &skb->protocol);
     if (protocol != htons(ETH_P_IP))
@@ -354,13 +353,12 @@ struct net_dev_start_xmit_data_t {
 };
 BPF_PERF_OUTPUT(net_dev_start_xmit_data);
 
-int trace_net_dev_start_xmit(struct pt_regs *ctx, struct sk_buff *skb)
+int trace_net_dev_start_xmit(struct pt_regs *ctx)
 {
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
     if (skb == NULL)
         return 0;
 
-    // 检查是否为 IPv4 数据包
     u16 protocol;
     bpf_probe_read_kernel(&protocol, sizeof(protocol), &skb->protocol);
     if (protocol != htons(ETH_P_IP))
@@ -442,8 +440,8 @@ b = BPF(text=bpf_text % (src_ip_hex, dst_ip_hex, src_port, dst_port, protocol_nu
 
 b.attach_kprobe(event="tun_net_xmit", fn_name="trace_tun_net_xmit")
 b.attach_kprobe(event="kfree_skb", fn_name="trace_kfree_skb")
-b.attach_kprobe(event="netif_receive_skb", fn_name="trace_netif_receive_skb_icmp")
-b.attach_kprobe(event="dev_hard_start_xmit", fn_name="trace_net_dev_start_xmit_icmp")
+b.attach_kprobe(event="netif_receive_skb", fn_name="trace_netif_receive_skb")
+b.attach_kprobe(event="dev_hard_start_xmit", fn_name="trace_net_dev_start_xmit")
 
 def print_basic_skb_data(cpu, data, size, perf_event=""):
     event = b[perf_event].event(data)

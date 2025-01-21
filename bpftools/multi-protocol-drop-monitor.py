@@ -29,12 +29,12 @@ dst_ip = args.dst if args.dst else "0.0.0.0"
 src_port = args.src_port if args.src_port else 0
 dst_port = args.dst_port if args.dst_port else 0
 
-print(f"Monitoring source IP: {src_ip}")
-print(f"Monitoring destination IP: {dst_ip}")
-print(f"Protocol: {args.protocol}")
+print("Monitoring source IP: {}".format(src_ip))
+print("Monitoring destination IP: {}".format(dst_ip))
+print("Protocol: {}".format(args.protocol))
 if args.protocol in ['tcp', 'udp']:
-    print(f"Source port: {src_port}")
-    print(f"Destination port: {dst_port}")
+    print("Source port: {}".format(src_port))
+    print("Destination port: {}".format(dst_port))
 
 src_ip_hex = ip_to_hex(src_ip)
 dst_ip_hex = ip_to_hex(dst_ip)

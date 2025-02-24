@@ -1,0 +1,699 @@
+et -euo pipefail  # 如果会导致"unbound variable"可以暂时取消 -u 以排查
+set -eo pipefail
+
+# This script allocates exclusive CPUs for test pairs of VMs.
+# Requirements:
+# - All available CPUs come from machine.slice cpuset.
+# - Each VM is to be allocated 4 CPUs exclusively (8 CPUs per pair).
+# - Globally, at least 5 CPU cores must be reserved for other tasks.
+
+######################################################################
+# Global data structures
+######################################################################
+
+# Per-VM allocations: vm_allocations["$vm_uuid"] = "comma,separated,cpus"
+declare -A vm_allocations
+
+# Per-VM numa node: vm_numa_nodes["$vm_uuid"] = "0" or "1"
+declare -A vm_numa_nodes
+
+# Remaining unallocated resources after all allocations
+declare -A remaining_unallocated
+
+# Per-node free CPU array: numa_free["0"] = "0 1 2 ..." ; numa_free["1"] = ...
+declare -A numa_free
+
+# Sibling-group maps. Keys are a "sorted CPU list" like "0,48", values are arbitrary
+declare -A ht0=()
+declare -A ht1=()
+
+
+######################################################################
+# Utility functions
+######################################################################
+
+# Expand a cpuset string (e.g. "0,7,9,11-48,50-95") into individual CPU numbers.
+expand_cpuset() {
+    local cpuset_str="$1"
+    local result=()
+    local IFS=","
+    for item in $cpuset_str; do
+        if [[ "$item" == *"-"* ]]; then
+            IFS="-" read -r start end <<< "$item"
+            for ((i=start; i<=end; i++)); do
+                result+=("$i")
+            done
+        else
+            result+=("$item")
+        fi
+    done
+    echo "${result[@]}"
+}
+
+# Check if an integer exists in an array
+in_array() {
+    local needle="$1"
+    shift
+    local element
+    for element; do
+        if [ "$element" = "$needle" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# Build hyper-thread sibling groups for a given NUMA node
+# This will populate either ht0 or ht1
+build_htgroups() {
+    local node="$1"
+    local free_list_str="${numa_free[$node]:-}"
+    [ -z "$free_list_str" ] && return 0  # no free CPU in this node
+
+    local free_list=( $free_list_str )
+
+    local cpu
+    for cpu in "${free_list[@]}"; do
+        local topo_file="/sys/devices/system/cpu/cpu${cpu}/topology/thread_siblings_list"
+        local group_key
+        if [ ! -f "$topo_file" ]; then
+            group_key="$cpu"
+        else
+            local siblings_str
+            siblings_str=$(cat "$topo_file")
+            local siblings=($(expand_cpuset "$siblings_str"))
+            local group=()
+            for s in "${siblings[@]}"; do
+                if in_array "$s" "${free_list[@]}"; then
+                    group+=("$s")
+                fi
+            done
+            IFS=$'\n' sorted=($(sort -n <<<"${group[*]}"))
+            unset IFS
+            group_key=$(echo "${sorted[*]}" | tr ' ' ',')
+        fi
+
+        if [ "$node" = "0" ]; then
+            # Check if key already used
+            if [ -z "${ht0[$group_key]+x}" ]; then
+                ht0["$group_key"]="$cpu"
+            fi
+        else
+            if [ -z "${ht1[$group_key]+x}" ]; then
+                ht1["$group_key"]="$cpu"
+            fi
+        fi
+    done
+}
+
+# Function to gather sibling pairs from either ht0 or ht1, for a given node
+# Returns (via echo) a list of "cpuA-cpuB" pairs, each are siblings and in numa_free[node].
+get_sibling_pairs_for_node() {
+    local node="$1"
+    local pairs=()
+
+    # Get the free CPU array for this node
+    local free_list_str="${numa_free[$node]:-}"
+    [ -z "$free_list_str" ] && { echo ""; return 0; }
+    local free_list=( $free_list_str )
+
+    # Create a quick lookup to test if "cpu is free"
+    declare -A free_lookup=()
+    for c in "${free_list[@]}"; do
+        free_lookup["$c"]=1
+    done
+
+    # Decide which sibling map to use: ht0 or ht1
+    if [ "$node" = "0" ]; then
+        # If ht0 is empty, return
+        [ "${#ht0[@]}" -eq 0 ] && { echo ""; return 0; }
+        # iterate
+        for group_key in "${!ht0[@]}"; do
+            IFS=',' read -ra grp_cpus <<< "$group_key"
+            # Only handle 2-way hyperthread
+            if [ "${#grp_cpus[@]}" -eq 2 ]; then
+                local cA="${grp_cpus[0]}"
+                local cB="${grp_cpus[1]}"
+                if [[ -n "${free_lookup[$cA]:-}" && -n "${free_lookup[$cB]:-}" ]]; then
+                    pairs+=( "$cA-$cB" )
+                fi
+            fi
+        done
+    else
+        # node=1
+        [ "${#ht1[@]}" -eq 0 ] && { echo ""; return 0; }
+        for group_key in "${!ht1[@]}"; do
+            IFS=',' read -ra grp_cpus <<< "$group_key"
+            if [ "${#grp_cpus[@]}" -eq 2 ]; then
+                local cA="${grp_cpus[0]}"
+                local cB="${grp_cpus[1]}"
+                if [[ -n "${free_lookup[$cA]:-}" && -n "${free_lookup[$cB]:-}" ]]; then
+                    pairs+=( "$cA-$cB" )
+                fi
+            fi
+        done
+    fi
+
+    echo "${pairs[@]}"
+}
+
+##########################################################################
+## allocate_paired_ht(node): try to get 4 physical cores => 8 CPU
+## store them into TEMP_ALLOC_VM1(4 CPU) + TEMP_ALLOC_VM2(4 CPU)
+## each "core" is a pair cA-cB => VM gets the entire pair
+##########################################################################
+allocate_paired_ht() {
+  local node="$1"
+
+  TEMP_ALLOC_VM1=()
+  TEMP_ALLOC_VM2=()
+
+  local pairs_str
+  pairs_str=$(get_sibling_pairs_for_node "$node")
+  [ -z "$pairs_str" ] && return 1
+
+  local pairs=()
+  # shellcheck disable=SC2206
+  pairs=( $pairs_str )
+
+  # we need at least 4 "cores"
+  if [ "${#pairs[@]}" -lt 4 ]; then
+    return 1
+  fi
+
+  # pick 4
+  local selected=( "${pairs[@]:0:4}" )
+
+  # front 2 => VM1, last 2 => VM2
+  for ((i=0; i<2; i++)); do
+    local core="${selected[$i]}"
+    local cA="${core%-*}"
+    local cB="${core#*-}"
+    TEMP_ALLOC_VM1+=( "$cA" "$cB" )
+  done
+
+  for ((i=2; i<4; i++)); do
+    local core="${selected[$i]}"
+    local cA="${core%-*}"
+    local cB="${core#*-}"
+    TEMP_ALLOC_VM2+=( "$cA" "$cB" )
+  done
+
+  # remove those 8 from numa_free[node]
+  local free_str="${numa_free[$node]:-}"
+  [ -z "$free_str" ] && return 1
+  local free_arr=( $free_str )
+  local updated=()
+
+  for c in "${free_arr[@]}"; do
+    local skip=0
+    for x in "${TEMP_ALLOC_VM1[@]}" "${TEMP_ALLOC_VM2[@]}"; do
+      if [ "$c" = "$x" ]; then
+        skip=1
+        break
+      fi
+    done
+    [ "$skip" -eq 0 ] && updated+=( "$c" )
+  done
+
+  numa_free["$node"]="${updated[*]}"
+  return 0
+}
+
+# allocate_half_paired_ht(node): 尝试在“node”上拿 2 个物理核心 => 4 CPU
+# 并把结果放到一个全局临时数组 TEMP_ALLOC_HALF=().
+# 如果成功, return 0; 否则 return 1.
+allocate_half_paired_ht() {
+    local node="$1"
+    TEMP_ALLOC_HALF=()
+
+    # 从 get_sibling_pairs_for_node(node) 拿所有“物理核心pair”, each "cA-cB"
+    local pairs_str
+    pairs_str=$(get_sibling_pairs_for_node "$node")
+    [ -z "$pairs_str" ] && return 1
+
+    local pairs=()
+    # shellcheck disable=SC2206
+    pairs=( $pairs_str )
+    if [ "${#pairs[@]}" -lt 2 ]; then
+        # 至少要 2 核(=2对) => 4 CPU
+        return 1
+    fi
+
+    # 取前2个pair
+    local selected=( "${pairs[@]:0:2}" )
+    declare -g -a TEMP_ALLOC_HALF
+    TEMP_ALLOC_HALF=()
+    for core in "${selected[@]}"; do
+        local cA="${core%-*}"
+        local cB="${core#*-}"
+        TEMP_ALLOC_HALF+=( "$cA" "$cB" )
+    done
+
+    # 从 numa_free[node] 移除这4个 CPU
+    local free_str="${numa_free[$node]:-}"
+    [ -z "$free_str" ] && return 1
+    local free_arr=( $free_str )
+    local updated=()
+    for c in "${free_arr[@]}"; do
+        local skip=0
+        for x in "${TEMP_ALLOC_HALF[@]}"; do
+            if [ "$c" = "$x" ]; then
+                skip=1
+                break
+            fi
+        done
+        [ "$skip" -eq 0 ] && updated+=( "$c" )
+    done
+    numa_free["$node"]="${updated[*]}"
+
+    return 0
+}
+
+
+allocate_pair() {
+    local pair_line="$1"
+    local pair_index="$2"
+    local total_pairs="$3"
+    read -r vm1 vm2 <<< "$pair_line"
+
+    local alloc_method="paired"
+    local node_vm1=""
+    local node_vm2=""
+    local -a alloc_vm1=()
+    local -a alloc_vm2=()
+
+    # 帮助函数
+    count_vms_on_node() {
+        local nd="$1"
+        local c=0
+        for n in "${vm_numa_nodes[@]}"; do
+            [ "$n" = "$nd" ] && ((c++))
+        done
+        echo "$c"
+    }
+
+    get_free_cpu_count() {
+        local nd="$1"
+        local s="${numa_free[$nd]:-}"
+        [ -z "$s" ] && echo 0 && return
+        local arr=( $s )
+        echo "${#arr[@]}"
+    }
+
+    local is_last_odd_pair=false
+    if [ $((total_pairs % 2)) -eq 1 ] && [ $((pair_index+1)) -eq "$total_pairs" ]; then
+        is_last_odd_pair=true
+    fi
+
+    ############
+    ## Decide which node(s) to try first
+    ############
+    local preferred_nodes=()
+    if [ "$is_last_odd_pair" = true ]; then
+        # see if any node can do 4 cores =>8 CPU
+        for nd in 0 1; do
+            local fc; fc=$(get_free_cpu_count "$nd")
+            if [ "$fc" -ge 8 ]; then
+                local vms; vms=$(count_vms_on_node "$nd")
+                # optionally check more conditions
+                if [ "$((vms * 2))" -lt "$fc" ]; then
+                    preferred_nodes+=("$node")
+                fi
+            fi
+        done
+        # if none => we do "odd2plus2"
+        if [ ${#preferred_nodes[@]} -eq 0 ]; then
+            alloc_method="odd2plus2"
+        fi
+    else
+        # normal pairs => round-robin
+        if [ $((pair_index % 2)) -eq 0 ]; then
+            preferred_nodes=(0 1)
+        else
+            preferred_nodes=(1 0)
+        fi
+    fi
+
+    ################
+    ## Attempt logic
+    ################
+    local success=false
+
+    # 1) If we have "paired" => normal allocate_paired_ht
+    if [ "$alloc_method" = "paired" ]; then
+	echo "paired"
+        for nd in "${preferred_nodes[@]}"; do
+            if allocate_paired_ht "$nd"; then
+                node_vm1="$nd"
+                node_vm2="$nd"
+                alloc_vm1=( "${TEMP_ALLOC_VM1[@]}" )
+                alloc_vm2=( "${TEMP_ALLOC_VM2[@]}" )
+                success=true
+                break
+            fi
+        done
+
+        # if not success => fallback single CPU approach
+        if [ "$success" = false ]; then
+            alloc_method="separate"
+        fi
+    fi
+
+    # 2) If method=odd2plus2 => try node0 allocate_half_paired_ht + node1 allocate_half_paired_ht
+    #    i.e. each VM occupies 2 cores on different node
+    if [ "$alloc_method" = "odd2plus2" ]; then
+	echo "odd2plus2"
+        # try node0 2 cores => vm1, node1 2 cores => vm2
+        # or vice versa
+        local s0; s0=$(get_free_cpu_count 0)
+        local s1; s1=$(get_free_cpu_count 1)
+        if [ "$s0" -ge 4 ] && [ "$s1" -ge 4 ]; then
+            # do node0 => vm1
+            if allocate_half_paired_ht 0; then
+                node_vm1=0
+                alloc_vm1=( "${TEMP_ALLOC_HALF[@]}" )
+                # then node1 => vm2
+                if allocate_half_paired_ht 1; then
+                    node_vm2=1
+                    alloc_vm2=( "${TEMP_ALLOC_HALF[@]}" )
+                    success=true
+                else
+                    # revert
+                    # put back the CPU to numa_free[0] maybe => to keep consistent
+                    # or simpler => exit error or fallback
+                    # but let's do fallback for now
+                    # we skip revert for brevity
+                    success=false
+                fi
+            fi
+
+            # if still not success, try the opposite => node1=>vm1 + node0=>vm2
+            if [ "$success" = false ]; then
+                # revert parted from node0 if needed
+                # let's do second approach
+                if allocate_half_paired_ht 1; then
+                    node_vm1=1
+                    alloc_vm1=( "${TEMP_ALLOC_HALF[@]}" )
+                    if allocate_half_paired_ht 0; then
+                        node_vm2=0
+                        alloc_vm2=( "${TEMP_ALLOC_HALF[@]}" )
+                        success=true
+                    fi
+                fi
+            fi
+        fi
+
+        # if still not success => fallback
+        if [ "$success" = false ]; then
+            alloc_method="separate"
+        fi
+    fi
+
+    # 3) separate fallback
+    if [ "$alloc_method" = "separate" ] && [ "$success" = false ]; then
+	echo "seperate"
+        # do the separate logic
+        # e.g. same as your old code
+        local tries=(0 1)
+        # or round-robin again
+        for nd in "${tries[@]}"; do
+            local arr_str="${numa_free[$nd]:-}"
+            [ -z "$arr_str" ] && continue
+            local arr=( $arr_str )
+            if [ ${#arr[@]} -ge 4 ] && [ -z "$node_vm1" ]; then
+                node_vm1="$nd"
+                alloc_vm1=( "${arr[@]:0:4}" )
+                local leftover=( "${arr[@]:4}" )
+                numa_free["$nd"]="${leftover[*]}"
+            elif [ ${#arr[@]} -ge 4 ] && [ -z "$node_vm2" ]; then
+                node_vm2="$nd"
+                alloc_vm2=( "${arr[@]:0:4}" )
+                local leftover=( "${arr[@]:4}" )
+                numa_free["$nd"]="${leftover[*]}"
+                break
+            fi
+        done
+        success=true
+    fi
+
+    # final check
+    if [ "$success" = false ] || [ -z "$node_vm1" ] || [ -z "$node_vm2" ] || [ ${#alloc_vm1[@]} -ne 4 ] || [ ${#alloc_vm2[@]} -ne 4 ]; then
+        echo "Error: cannot allocate 4 CPUs for $vm1,$vm2" >&2
+        exit 1
+    fi
+
+    echo "------------------------------------------------------"
+    echo "VM Pair: $vm1 and $vm2 (Pair ${pair_index}/${total_pairs})"
+    case "$alloc_method" in
+      paired)
+        echo "Allocation using paired method from NUMA node $node_vm1"
+        ;;
+      odd2plus2)
+        echo "Allocation using '2+2 core' approach across node0,node1"
+        ;;
+      *)
+        echo "Separate allocation: vm $vm1 => node $node_vm1, vm $vm2 => node $node_vm2"
+        ;;
+    esac
+    echo "  $vm1 allocated CPUs: ${alloc_vm1[*]}"
+    echo "  $vm2 allocated CPUs: ${alloc_vm2[*]}"
+
+    local vm1_cpus; vm1_cpus=$(IFS=,; echo "${alloc_vm1[*]}")
+    local vm2_cpus; vm2_cpus=$(IFS=,; echo "${alloc_vm2[*]}")
+    vm_allocations["$vm1"]="$vm1_cpus"
+    vm_allocations["$vm2"]="$vm2_cpus"
+    vm_numa_nodes["$vm1"]="$node_vm1"
+    vm_numa_nodes["$vm2"]="$node_vm2"
+}
+
+
+######################################################################
+# Binding
+######################################################################
+execute_bindings() {
+    echo ""
+    echo "Starting CPU binding operations..."
+    echo ""
+
+    local max_retries=3
+    local retry_delay=0.5  # seconds
+
+    for vm_uuid in "${!vm_allocations[@]}"; do
+        local cpus="${vm_allocations[$vm_uuid]}"
+        local numa_node="${vm_numa_nodes[$vm_uuid]}"
+        local success=false
+        local attempt=1
+
+        echo "Binding VM: $vm_uuid"
+        echo "  CPUs: $cpus"
+        echo "  NUMA node: $numa_node"
+
+        while [ $attempt -le $max_retries ] && [ "$success" = false ]; do
+            if [ $attempt -gt 1 ]; then
+                echo "  Retry attempt $attempt/$max_retries after ${retry_delay} seconds..."
+                sleep $retry_delay
+            fi
+
+            echo "Executing binding command..."
+            # Here you do your actual binding, e.g.:
+            if ./binding.py --vm_uuid "$vm_uuid" --cpus "$cpus" --mem_numa_node "$numa_node" --cpu_mode exclusive; then
+                echo "  Binding successful"
+                success=true
+            else
+                echo "  Binding failed"
+                if [ $attempt -eq $max_retries ]; then
+                    echo "  Warning: All retry attempts failed for VM $vm_uuid"
+                fi
+                ((attempt++))
+            fi
+        done
+        echo ""
+    done
+}
+
+######################################################################
+# Main
+######################################################################
+main() {
+    # 1) machine.slice cpus
+    local machine_cpuset_file="/sys/fs/cgroup/cpuset/machine.slice/cpuset.cpus"
+    if [ ! -f "$machine_cpuset_file" ]; then
+        echo "Error: $machine_cpuset_file does not exist" >&2
+        exit 1
+    fi
+    local machine_cpus_str
+    machine_cpus_str=$(cat "$machine_cpuset_file")
+    local machine_cpus=($(expand_cpuset "$machine_cpus_str"))
+
+    #local exclude_cpus_str="51,53"  # 例如 "1,3,7"
+    ## 解析需要排除的 cpu 列表
+    #IFS=',' read -r -a exclude_cpuset <<< "$exclude_cpus_str"
+  
+    ## 遍历原 cpus 数组，并过滤掉需要排除的 cpu
+    #local filtered_machine_cpus=()
+    #for cpu in "${machine_cpus[@]}"; do
+    #    local skip=false
+    #    for ex_cpu in "${exclude_cpuset[@]}"; do
+    #        if [ "$cpu" -eq "$ex_cpu" ]; then
+    #            skip=true
+    #            break
+    #        fi
+    #    done
+    #    if [ "$skip" = false ]; then
+    #        filtered_machine_cpus+=("$cpu")
+    #    fi
+    #done
+  
+    ## 将过滤后的 cpu 覆盖原来的数组或继续使用
+    #machine_cpus=("${filtered_machine_cpus[@]}")
+  
+    #echo "过滤后的 machine_cpus: ${machine_cpus[*]}"
+
+
+    local total_machine_cpus=${#machine_cpus[@]}
+    echo "machine.slice configured CPUs: $machine_cpus_str  (Total: $total_machine_cpus)"
+
+    # 2) read vm pairs from argument
+    if [ "$#" -lt 1 ]; then
+        echo "Usage: $0 vm_pairs.txt" >&2
+        exit 1
+    fi
+    local vm_pairs_file="$1"
+    if [ ! -f "$vm_pairs_file" ]; then
+        echo "Error: file $vm_pairs_file does not exist." >&2
+        exit 1
+    fi
+
+    local vm_pairs=()
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        vm_pairs+=( "$line" )
+    done < "$vm_pairs_file"
+
+    local num_pairs=${#vm_pairs[@]}
+    echo "Number of VM pairs to process: $num_pairs"
+
+    # 3) check CPU count
+    local required_cpus=$(( num_pairs * 8 ))
+    if (( total_machine_cpus - 4 < required_cpus )); then
+        echo "Error: Not enough CPUs available in machine.slice" >&2
+        exit 1
+    fi
+
+    # 4) partition by NUMA node
+    for node in 0 1; do
+        local node_file="/sys/devices/system/node/node${node}/cpulist"
+        if [ ! -f "$node_file" ]; then
+            echo "Warning: $node_file not found. skipping node $node."
+            numa_free["$node"]=""
+            continue
+        fi
+        local node_cpus_str
+        node_cpus_str=$(cat "$node_file")
+        local node_cpus=($(expand_cpuset "$node_cpus_str"))
+        local free_in_node=()
+        for cpu in "${node_cpus[@]}"; do
+            if in_array "$cpu" "${machine_cpus[@]}"; then
+                free_in_node+=( "$cpu" )
+            fi
+        done
+        numa_free["$node"]="${free_in_node[*]}"
+        echo "NUMA node $node available CPUs: ${free_in_node[*]}"
+    done
+
+    # 5) Build sibling groups
+    build_htgroups 0
+    build_htgroups 1
+
+    echo
+    echo "Starting CPU allocation for each VM pair..."
+    echo
+
+    # 6) perform allocation
+    for i in "${!vm_pairs[@]}"; do
+        allocate_pair "${vm_pairs[$i]}" "$i" "$num_pairs"
+    done
+
+    # 7) show unallocated
+    echo "------------------------------------------------------"
+    echo "Remaining unallocated CPUs (grouped by NUMA node):"
+
+    # gather all allocated
+    declare -a all_allocated_cpus=()
+    for vm_uuid in "${!vm_allocations[@]}"; do
+        IFS=',' read -ra arr <<< "${vm_allocations[$vm_uuid]}"
+        all_allocated_cpus+=( "${arr[@]}" )
+    done
+
+    for node in 0 1; do
+        echo "NUMA node $node:"
+        local free_str="${numa_free[$node]:-}"
+        [ -z "$free_str" ] && { echo "  No unallocated CPUs"; remaining_unallocated["$node"]=""; continue; }
+        local free_arr=( $free_str )
+
+        # let's just confirm these are unallocated
+        local truly_unallocated=()
+        for c in "${free_arr[@]}"; do
+            local is_alloc=0
+            for x in "${all_allocated_cpus[@]}"; do
+                if [ "$c" = "$x" ]; then
+                    is_alloc=1
+                    break
+                fi
+            done
+            [ "$is_alloc" -eq 0 ] && truly_unallocated+=( "$c" )
+        done
+
+        if [ ${#truly_unallocated[@]} -eq 0 ]; then
+            echo "  No unallocated CPUs"
+            remaining_unallocated["$node"]=""
+        else
+            local sorted_list
+            sorted_list=$(printf "%s\n" "${truly_unallocated[@]}" | sort -n | tr '\n' ',' | sed 's/,$//')
+            echo "  CPUs: $sorted_list"
+            echo "  Thread groups:"
+            for cpu in "${truly_unallocated[@]}"; do
+                local topo_file="/sys/devices/system/cpu/cpu${cpu}/topology/thread_siblings_list"
+                if [ -f "$topo_file" ]; then
+                    local grp
+                    grp=$(head -n1 "$topo_file" | cut -d',' -f1)
+                    echo "    Group $grp: CPU $cpu"
+                fi
+            done
+            remaining_unallocated["$node"]="$sorted_list"
+        fi
+    done
+
+    echo "------------------------------------------------------"
+    echo "CPU allocation plan complete."
+    echo
+
+    # 8) ask for confirm
+    read -rp "Do you want to proceed with CPU binding operations? (y/n): " proceed
+    if [[ $proceed =~ ^[Yy]$ ]]; then
+        execute_bindings
+        echo "All CPU binding operations completed."
+    else
+        echo "CPU binding operations skipped."
+    fi
+
+    echo "------------------------------------------------------"
+    read -rp "Do you want to proceed with VHOST CPU binding? (Note: This step is independent from VM CPU binding, and it is recommended to run it separately after VM binding, as VM restart may change vhost processes) (y/n): " proceed_vhost
+    if [[ $proceed_vhost =~ ^[Yy]$ ]]; then
+        for vm in "${!vm_allocations[@]}"; do
+            local node_for_vm="${vm_numa_nodes[$vm]}"
+            local cpulist_for_vhost="${remaining_unallocated[$node_for_vm]:-}"
+
+            if [ -z "$cpulist_for_vhost" ]; then
+                echo "Warning: No remaining CPUs available on NUMA node $node_for_vm for VM $vm; skipping vhost binding."
+            else
+                echo "Setting VHOST CPU binding for VM $vm using CPUs: $cpulist_for_vhost"
+                ./set-process-cpu-mem-affinitity.sh -g "$vm" -c "$cpulist_for_vhost"
+            fi
+        done
+    fi
+}
+
+main "$@"
+

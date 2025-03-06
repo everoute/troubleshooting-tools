@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python2
 
 #from bpfcc import BPF
 #from bpfcc.utils import printb

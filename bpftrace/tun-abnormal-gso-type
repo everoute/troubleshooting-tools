@@ -1,0 +1,1567 @@
+#!/usr/bin/env bpftrace
+
+// Add required kernel headers
+#include <linux/skbuff.h>
+#include <linux/ip.h>
+#include <linux/ptr_ring.h>
+#include <linux/netdevice.h>
+#include <linux/kernel.h>
+#include <net/ip.h>
+#include <uapi/linux/vhost.h>
+#include <uapi/asm-generic/ioctl.h>
+//#include <drivers/vhost/vhost.h>
+
+
+struct tun_struct {
+	struct tun_file __rcu	*tfiles[256];
+	unsigned int            numqueues;
+	unsigned int 		flags;
+	kuid_t			owner;
+	kgid_t			group;
+
+	struct net_device	*dev;
+	netdev_features_t	set_features;
+
+	int			align;
+	int			vnet_hdr_sz;
+	int			sndbuf;
+	struct sock_fprog	fprog;
+	bool			filter_attached;
+	int debug;
+	spinlock_t lock;
+	struct timer_list flow_gc_timer;
+	unsigned long ageing_time;
+	unsigned int numdisabled;
+	struct list_head disabled;
+	void *security;
+	u32 flow_count;
+	u32 rx_batched;
+	struct tun_pcpu_stats __percpu *pcpu_stats;
+	struct bpf_prog __rcu *xdp_prog;
+	struct tun_prog __rcu *steering_prog;
+	struct tun_prog __rcu *filter_prog;
+}
+
+struct tun_file {
+	struct sock sk;
+	long: 64;
+	long: 64;
+	long: 64;
+	long: 64;
+	struct socket socket;
+	struct tun_struct *tun;
+	struct fasync_struct *fasync;
+	unsigned int flags;
+	union {
+		u16 queue_index;
+		unsigned int ifindex;
+	};
+	struct napi_struct napi;
+	bool napi_enabled;
+	bool napi_frags_enabled;
+	struct mutex napi_mutex;
+	struct list_head next;
+	struct tun_struct *detached;
+	long: 64;
+	long: 64;
+	long: 64;
+	struct ptr_ring tx_ring;
+	struct xdp_rxq_info xdp_rxq;
+};
+
+/* The virtqueue structure describes a queue attached to a device. */
+struct vhost_virtqueue {
+	//struct vhost_dev *dev;
+
+	/* The actual ring of buffers. */
+	struct mutex mutex;
+	unsigned int num;
+	struct vring_desc __user *desc;
+	struct vring_avail __user *avail;
+	struct vring_used __user *used;
+	struct file *kick;
+	struct eventfd_ctx *call_ctx;
+	struct eventfd_ctx *error_ctx;
+	struct eventfd_ctx *log_ctx;
+
+
+	/* The routine to call when the Guest pings us, or timeout. */
+
+	/* Last available index we saw. */
+	u16 last_avail_idx;
+
+	/* Caches available index value from user. */
+	u16 avail_idx;
+
+	/* Last index we used. */
+	u16 last_used_idx;
+
+	/* Used flags */
+	u16 used_flags;
+
+	/* Last used index value we have signalled on */
+	u16 signalled_used;
+
+	/* Last used index value we have signalled on */
+	bool signalled_used_valid;
+
+	/* Log writes to used structure. */
+	bool log_used;
+	u64 log_addr;
+
+	struct iovec iotlb_iov[64];
+	struct iovec *indirect;
+	struct vring_used_elem *heads;
+	/* Protected by virtqueue mutex. */
+	struct vhost_umem *umem;
+	struct vhost_umem *iotlb;
+	void *private_data;
+	u64 acked_features;
+	u64 acked_backend_features;
+	/* Log write descriptors */
+	void __user *log_base;
+	struct vhost_log *log;
+
+	/* Ring endianness. Defaults to legacy native endianness.
+	 * Set to true when starting a modern virtio device. */
+	bool is_le;
+	/* Ring endianness requested by userspace for cross-endian support. */
+	bool user_be;
+	u32 busyloop_timeout;
+};
+
+struct vhost_net_virtqueue {
+	struct vhost_virtqueue vq;
+	size_t vhost_hlen;
+	size_t sock_hlen;
+	/* vhost zerocopy support fields below: */
+	/* last used idx for outstanding DMA zerocopy buffers */
+	int upend_idx;
+	/* For TX, first used idx for DMA done zerocopy buffers
+	 * For RX, number of batched heads
+	 */
+	int done_idx;
+	/* an array of userspace buffers info */
+	struct ubuf_info *ubuf_info;
+	/* Reference counting for outstanding ubufs.
+	 * Protected by vq mutex. Writers must also take device mutex. */
+	struct vhost_net_ubuf_ref *ubufs;
+	struct ptr_ring *rx_ring;
+};
+
+
+
+struct vhost_net {
+//	struct vhost_dev dev;
+	struct vhost_net_virtqueue vqs[2];
+	/* Number of TX recently submitted.
+	 * Protected by tx vq lock. */
+	unsigned tx_packets;
+	/* Number of times zerocopy TX recently failed.
+	 * Protected by tx vq lock. */
+	unsigned tx_zcopy_err;
+	/* Flush in progress. Protected by tx vq lock. */
+	bool tx_flush;
+};
+
+
+//kprobe:dev_hard_start_xmit
+//{
+//  // Firt arg is sk_buff.
+//    $skb = (struct sk_buff *)arg0;
+//    $skb_net_dev = $skb->dev;
+//    $skb_dev_name = $skb->dev->name;
+//    $skb_dev_index = $skb_net_dev->ifindex;
+//
+//    $mac_header = (struct ethhdr *) $skb->data;
+//    $eth_proto = $mac_header->h_proto;
+//    $iph = (struct iphdr *)($skb->head + $skb->network_header);
+//    $sip = ntop(AF_INET, $iph->saddr);
+//    $dip = ntop(AF_INET, $iph->daddr);
+//    $sip_str = str($iph->saddr);
+//    $dip_str = str($iph->daddr);
+//    if ($skb_dev_name == "vnet0") {
+//      printf("dev_hard_start_xmit probe: %s (PID: %d): dev %s, kstack: %s, ustack: %s\n", comm, pid, $skb_dev_name, kstack, ustack);
+//      printf("##### end dev_hard_start_xmit probe\n\n\n");
+//    }
+//}
+
+kprobe:tun_net_xmit
+{
+  // Firt arg is sk_buff.
+    $skb = (struct sk_buff *)arg0;
+    $skb_net_dev = $skb->dev;
+    $skb_dev_name = $skb->dev->name;
+    $skb_dev_index = $skb_net_dev->ifindex;
+    $ignore_df = $skb->ignore_df;
+
+    $shinfo = (struct skb_shared_info *) ($skb->head + $skb->end);
+    $gso_size = (uint32) $shinfo->gso_size;
+    $gso_segs = (uint32) $shinfo->gso_segs;
+    $gso_type = (uint32) $shinfo->gso_type;
+    $nr_frags = (uint32) $shinfo->nr_frags;
+
+    //$dev = (struct net_device *)arg1; 
+    //$priv = (unsigned char *)$dev + ALIGN(sizeof(struct net_device), NETDEV_ALIGN);
+
+     $dev = (struct net_device *)arg1;
+    // 手动计算对齐后的大小
+    $aligned_size = (sizeof(struct net_device) + NETDEV_ALIGN - 1) & ~(NETDEV_ALIGN - 1);
+    //$priv = (unsigned char *)$dev + $aligned_size;
+    //$tun = (struct tun_struct *)$priv;
+    $tun = (struct tun_struct *)($dev + $aligned_size);
+    $tx_queue = (uint64) $skb->queue_mapping;
+    $tfile = $tun->tfiles[1];
+    $ptr_ring = $tfile->tx_ring;
+    $batch = $ptr_ring.batch;
+    $ptr_ring_size = $ptr_ring.size;
+    $ptr_ring_producer = $ptr_ring.producer;
+    $ptr_ring_queue = $ptr_ring.queue;
+    $ptr_ring_producer_plus_one = ($ptr_ring.producer + 1);
+    //$ptr_ring_producer_next = $ptr_ring_producer_plus_one % $ptr_ring_size;
+    $ptr_ring_producer_next = $ptr_ring_producer_plus_one; 
+    if ($ptr_ring_producer_next == $ptr_ring_size) {
+        $ptr_ring_producer_next = 0;
+    }
+    $ptr_ring_consumer_head = $ptr_ring.consumer_head;
+    $ptr_ring_consumer_tail = $ptr_ring.consumer_tail;
+    $tun_dev = $tun->dev;
+
+    $mac_header = (struct ethhdr *) $skb->data;
+    $eth_proto = $mac_header->h_proto;
+    $iph = (struct iphdr *)($skb->head + $skb->network_header);
+    $sip = ntop(AF_INET, $iph->saddr);
+    $dip = ntop(AF_INET, $iph->daddr);
+    $sip_str = str($iph->saddr);
+    $dip_str = str($iph->daddr);
+    //if ($skb_dev_name == "vnet0" && $ptr_ring_producer_next == $ptr_ring_consumer_tail) {
+    //if ($skb_dev_name == "vnet0" && $ptr_ring_producer == $ptr_ring_consumer_tail) {
+
+    if ($skb_dev_name == "vnet0") {
+	if ($gso_type == 0 && $gso_size != 0) {
+	    printf("###### tun_net_xmit unexpected gso type:0x%02x, gso size: %-4u\n", $gso_type, $gso_size);
+            printf("##### tun dev name: %s, ptr_ring_size: %d, ptr_ring batch: %d, producer: %d, consumer_head: %d, consumer_tail: %d, queue: %d\n", $tun_dev->name, $ptr_ring_size, $batch, $ptr_ring_producer, $ptr_ring_consumer_head, $ptr_ring_consumer_tail, $ptr_ring_queue);
+            printf("tun_net_xmit probe: %s (PID: %d): dev %s, gso_type: %d, gso_size: %d, kstack: %s, ustack: %s\n", comm, pid, $skb_dev_name, $gso_type, $gso_size, kstack, ustack);
+            printf("##### end tun_net_xmit probe\n\n\n");
+	} else {
+            return;
+        }
+    }
+}
+
+//
+//kprobe:vhost_poll_wakeup
+//{
+//  printf("vhost_poll_wakeup probe: %s (PID: %d) kstack: %s, ustack: %s\n", comm, pid, kstack, ustack);
+//  printf("##### end vhost_poll_wakeup probe\n\n\n");
+//  // Firt arg is sk_buff.
+//}
+//
+//kprobe:vhost_poll_func
+//{
+//  printf("vhost_poll_func probe: %s (PID: %d) kstack: %s, ustack: %s\n", comm, pid, kstack, ustack);
+//  printf("##### end vhost_poll_func probe\n\n\n");
+//  // Firt arg is sk_buff.
+//}
+//
+//kprobe:vhost_net_chr_poll
+//{
+//  printf("vhost_net_chr_poll  probe: %s (PID: %d) kstack: %s, ustack: %s\n", comm, pid, kstack, ustack);
+//  printf("##### end vhost_net_chr_poll probe\n\n\n");
+//  // Firt arg is sk_buff.
+//}
+//
+//
+//kprobe:vhost_net_chr_write_iter
+//{
+//  printf("vhost_net_chr_write_iter  probe: %s (PID: %d) kstack: %s, ustack: %s\n", comm, pid, kstack, ustack);
+//  printf("##### end vhost_net_chr_write_iter probe\n\n\n");
+//  // Firt arg is sk_buff.
+//}
+//
+//kprobe:vhost_net_chr_read_iter
+//{
+//  printf("vhost_net_chr_read_iter  probe: %s (PID: %d) kstack: %s, ustack: %s\n", comm, pid, kstack, ustack);
+//  printf("##### end vhost_net_chr_read_ter probe\n\n\n");
+//  // Firt arg is sk_buff.
+//}
+//
+//kprobe:vhost_chr_read_iter
+//{
+//  printf("vhost_chr_read_iter  probe: %s (PID: %d) kstack: %s, ustack: %s\n", comm, pid, kstack, ustack);
+//  printf("##### end vhost_chr_read_iter probe\n\n\n");
+//  // Firt arg is sk_buff.
+//}
+
+//kprobe:vhost_net_ioctl
+//{
+//  $ioctl = arg1; 
+//  printf("vhost_net_ioctl  probe: %s (PID: %d), ioctl: %d, kstack: %s, ustack: %s\n", comm, pid, $ioctl, kstack, ustack);
+//  printf("##### end vhost_net_ioctl probe\n\n\n");
+//  if ($ioctl == 0x0102) {
+//	  printf("vhost_net_ioctl  reset owner probe: %s (PID: %d), ioctl: %d, kstack: %s, ustack: %s\n", comm, pid, $ioctl, kstack, ustack);
+//	  printf("##### end vhost_net_ioctl probe\n\n\n");
+//  }
+//
+//  // Firt arg is sk_buff.
+//}
+//
+//kprobe:tun_sendmsg
+//{
+//  printf("tun_sendmsg  probe: %s (PID: %d), kstack: %s, ustack: %s\n", comm, pid, kstack, ustack);
+//  printf("##### end tun_sendmsg probe\n\n\n");
+//}
+//
+//kprobe:tun_recvmsg
+//{
+//  printf("tun_recvmsg  probe: %s (PID: %d), kstack: %s, ustack: %s\n", comm, pid, kstack, ustack);
+//  printf("##### end tun_recvmsg probe\n\n\n");
+//}
+//
+//kprobe:handle_rx_kick
+//{
+//  printf("handle_rx_kick  probe: %s (PID: %d), kstack: %s, ustack: %s\n", comm, pid, kstack, ustack);
+//  printf("##### end handle_rx_kick probe\n\n\n");
+//}
+//
+//kprobe:handle_rx_net
+//{
+//  printf("handle_rx_net  probe: %s (PID: %d), kstack: %s, ustack: %s\n", comm, pid, kstack, ustack);
+//  printf("##### end handle_rx_net probe\n\n\n");
+//}
+
+//kprobe:handle_rx
+//{
+//  $vhost_net = (struct vhost_net *)arg0;
+//  $vhost_net_virtqueue_tx = $vhost_net->vqs[1];
+//  $vhost_net_virtqueue_rx = $vhost_net->vqs[0];
+//  //$vhost_net_virtqueue_tx = (struct vhost_net_virtqueue )$vhost_net->vqs[1];
+//  $vhost_virtqueue_tx = $vhost_net_virtqueue_tx.vq;
+//  $vhost_virtqueue_rx = $vhost_net_virtqueue_rx.vq;
+//  $tx_busyloop_timeout = $vhost_virtqueue_tx.busyloop_timeout;
+//  $rx_busyloop_timeout = $vhost_virtqueue_rx.busyloop_timeout;
+//  if ( $tx_busyloop_timeout != 0 || $rx_busyloop_timeout != 0) {
+//	  printf("handle rx tx_busyloop timeout: %d, rx_busyloop timeout: %d \n", $tx_busyloop_timeout, $rx_busyloop_timeout);
+//	  printf("handle_rx  probe: %s (PID: %d), kstack: %s, ustack: %s\n", comm, pid, kstack, ustack);
+//	  printf("##### end handle_rx probe\n\n\n");
+//  }
+//}
+
+//
+//kprobe:vhost_dev_set_owner
+//{
+//  printf("vhost_dev_set_owner  probe: %s (PID: %d), kstack: %s, ustack: %s\n", comm, pid, kstack, ustack);
+//  printf("##### end vhost_dev_set_owner probe\n\n\n");
+//}
+
+//kprobe:vhost_vq_avail_empty
+//{
+//  printf("vhsot_vq_avail_empty  probe: %s (PID: %d), kstack: %s, ustack: %s\n", comm, pid, kstack, ustack);
+//  printf("##### end vhost_vq_avail_empty probe\n\n\n");
+//}
+//
+//kretprobe:vhost_vq_avail_empty
+//{
+//    //if ( retval == true ) {
+//    if ( retval == false ) {
+//	  printf("ret vhsot_vq_avail_empty  probe: %s (PID: %d), kstack: %s, ustack: %s\n", comm, pid, kstack, ustack);
+//	  printf("##### end ret vhost_vq_avail_empty probe\n\n\n");
+//    }
+//}
+//
+//kprobe:vhost_vring_ioctl
+//{
+//    $ioctl = arg1;
+//    printf("vhost vring ioctl set vring busyloop timeout  probe: %s (PID: %d), ioctl: %d, kstack: %s, ustack: %s\n", comm, pid, $ioctl, kstack, ustack);
+//    printf("##### end vhost_vring_ioctl probe\n\n\n");
+//    if ( $ioctl == 1077950499 ) {
+//	  printf("vhost vring ioctl set vring busyloop timeout  probe: %s (PID: %d), kstack: %s, ustack: %s\n", comm, pid, kstack, ustack);
+//	  printf("##### end vhost_vring_ioctl probe\n\n\n");
+//    }
+//}
+
+//kretprobe:tun_net_xmit
+//{
+//    if ( retval != 0) {
+//        printf("#### tun_net_xmit ret value : %d\n", retval); 
+//    }
+//}
+
+// ovs netdev vport netdev ops send callback, dev_queue_xmit,  dev_hard_start_xmit (maybe traverse qdisc routine), xmit_one, netdev_start_xmit, netdev ops : ndo_start_xmit(tun_net_xmit)    
+//tracepoint:net:net_dev_xmit
+//{
+//    $skb = (struct sk_buff *)args->skbaddr;
+//    $skb_net_dev = $skb->dev;
+//    $skb_dev_name = $skb->dev->name;
+//    $skb_dev_index = $skb_net_dev->ifindex;
+//
+//    //if ($skb_dev_name == "vnet0" && args->rc != 0) {
+//    if ($skb_dev_name == "vnet0") {
+//      printf("tun_net_xmit probe: %s (PID: %d): dev %s, rc=%d, kstack: %s, ustack: %s\n", comm, pid, $skb_dev_name, args->rc, kstack, ustack);
+//      printf("##### end tun_net_xmit probe\n\n\n");
+//    }
+//}
+
+kprobe:sch_direct_xmit
+{
+    $func = func;
+    $skb = (struct sk_buff *) arg0;
+    $validate = arg5;
+    $skb_net_dev = $skb->dev;
+    $dev_name = $skb->dev->name;
+    $skb_netdev_features = $skb_net_dev->features;
+    $ignore_df = $skb->ignore_df;
+
+    $shinfo = (struct skb_shared_info *) ($skb->head + $skb->end);
+    $gso_size = (uint32) $shinfo->gso_size;
+    $gso_segs = (uint32) $shinfo->gso_segs;
+    $gso_type = (uint32) $shinfo->gso_type;
+    $nr_frags = (uint32) $shinfo->nr_frags;
+
+    $nh = (uint32) $skb->network_header;
+    $th = (uint32) $skb->transport_header;
+    $inh = (uint32) $skb->inner_network_header;
+    $ith = (uint32) $skb->inner_transport_header;
+    $inner_protocol = (($skb->inner_protocol & 0xff00) >> 8) | (($skb->inner_protocol & 0x00ff) << 8);
+    $inner_protocol_type = $skb->inner_protocol_type;
+    $encap = (uint32) $skb->encapsulation;
+    $len = (uint32) $skb->len;
+
+    $mac_header = (struct ethhdr *) $skb->data;
+    $ip_header = (struct iphdr *)($skb->head + $skb->network_header);
+    $sip = ntop(AF_INET, $ip_header->saddr);
+    $dip = ntop(AF_INET, $ip_header->daddr);
+    $ether_protocol = (($mac_header->h_proto & 0xff00) >> 8) | (($mac_header->h_proto & 0x00ff) << 8) ;
+    //printf("netif_receive_skb_internal probe, dev name : %s, gso_type: %d, gso_size: %d\n", $dev_name, $gso_type, $gso_size);
+    //if ($ether_protocol != 0x0800) {
+    //    //printf("ether protocol: %llx\n", $ether_protocol);
+    //    return
+    //}
+    //$addr = pton(AF_INET, "0.0.0.0");
+    //if (strcmp(str("0.0.0.0"), str($addr), 4) == 0) {
+    //    printf("src addr 0.0.0.0\n")
+    //    return
+    //}
+    if ($ip_header->protocol == IPPROTO_UDP)
+    {
+      //$udp_header = (struct udphdr *) $transport_header_offset;
+      $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+      $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+      $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+      if ($up_src == 67 || $up_src == 68) {
+          return
+      }
+      //if ($up_dst != 5201 || $up_src == 5201) {
+      //    return
+      //}
+    }
+
+    //if ($ip_header->protocol == IPPROTO_TCP)
+    //{
+    //     $tcp_header = (struct tcphdr *)($skb->head + $skb->transport_header);
+    //     $tp_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+    //     $tp_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+    //     if ($tp_dst != 5201 || $tp_src == 5201) {
+    //        return
+    //     }
+    //}
+
+    if ($gso_type == 0 && $gso_size != 0) {
+        printf("###### sch_direct_xmit unexpected gso type:0x%02x, gso size: %-4u\n", $gso_type, $gso_size);
+    }
+    //if ($dev_name == "eth0" || $dev_name == "vnet0") 
+    //if ($dev_name == "vnet0") 
+    if ($dev_name == "vnet0" && $dev_name == "port-storage" ) 
+    {
+        printf("sch_direct_xmit probe\n");
+        $frag_list = $shinfo->frag_list;
+        $ip_summed = $skb->ip_summed;
+        $cb = (struct inet_skb_parm *) $skb->cb;
+        $netdev_features = $skb_net_dev->features;
+        $netdev_hw_features = $skb_net_dev->hw_features;
+        $netdev_wanted_features = $skb_net_dev->wanted_features;
+        $netdev_hwenc_features = $skb_net_dev->hw_enc_features;
+        $netdev_gso_partial_features = $skb_net_dev->gso_partial_features;
+
+        printf("####### frag_list: %d,  ip_summed: %llx\n", $frag_list, $ip_summed);
+        printf("####### skb cb frag_max_size: %d, skb validate %d\n", $cb->frag_max_size, $validate);
+
+        printf("####### skb info, dev_name: %-4s\t, skb dev features: %llx\t, ignore df: %d\t skb_len: %u,\t network_header: %u,\t transport_header: %u,\t encap: %-3u,\t inner_network_header: %u,\t inner_transport_header: %u,\t | gso_size: %-4u,\t gso_segs: %-4u,\t gso_type: 0x%02x,\t nr_frags: %u\t, func: %s\n", $dev_name, $skb_net_dev->features, $ignore_df, $len, $nh, $th, $encap, $inh, $ith, $gso_size, $gso_segs, $gso_type, $nr_frags, $func);
+        printf("####### dev hardware features, netdev_features: %llx\t hw_features: %llx\t wanted_features: %llx\t hwenc_features: %llx\t gso_partial_features: %llx\n", $netdev_features, $netdev_hw_features, $netdev_wanted_features, $netdev_hwenc_features, $netdev_gso_partial_features);
+
+        if ($ip_header->protocol == IPPROTO_UDP)
+        {
+          //$udp_header = (struct udphdr *) $transport_header_offset;
+          $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+          $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+          $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+
+          // Print the collected data
+          printf("####### udp header info: %s:%d => %s:%d\n", $sip, $up_src, $dip, $up_dst);
+          printf("####### MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+             $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+             $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+             $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+             $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+        }
+
+        if ($ip_header->protocol == IPPROTO_TCP)
+        {
+          $tcp_header = (struct tcphdr *)($skb->head + $skb->transport_header);
+          $tp_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+          $tp_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+
+          // Print the collected data
+          printf("####### tcp header info data: %s:%d => %s:%d\n", $sip, $tp_src, $dip, $tp_dst);
+          printf("####### MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+             $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+             $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+             $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+             $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+        }
+
+        printf("netdev name: %s\n, kstack: %s", $dev_name, kstack);
+        printf("end sch_direct_xmit skb probe\n\n\n\n\n");
+    }
+}
+
+//kprobe:__skb_gso_segment
+//{
+//    //printf("skb gso segemtation probe\n");
+//
+//    $func = func;
+//    $skb = (struct sk_buff *) arg0;
+//    $param_netdev_feature = arg1;
+//    $net_dev = $skb->dev;
+//    $dev_name = $skb->dev->name;
+//    $len = (uint32) $skb->len;
+//    $nh = (uint32) $skb->network_header;
+//    $th = (uint32) $skb->transport_header;
+//    $inh = (uint32) $skb->inner_network_header;
+//    $ith = (uint32) $skb->inner_transport_header;
+//    $inner_protocol = (($skb->inner_protocol & 0xff00) >> 8) | (($skb->inner_protocol & 0x00ff) << 8);
+//    $inner_protocol_type = $skb->inner_protocol_type;
+//
+//    $shinfo = (struct skb_shared_info *) ($skb->head + $skb->end);
+//    $gso_size = (uint32) $shinfo->gso_size;
+//    $gso_segs = (uint32) $shinfo->gso_segs;
+//    $gso_type = (uint32) $shinfo->gso_type;
+//    $nr_frags = (uint32) $shinfo->nr_frags;
+//
+//    /* BUG: Loading u8 (encapsulation) garbles last value pushed onto stack. */
+//    $unused = (uint32) $skb->truesize;
+//    $encap = (uint32) $skb->encapsulation;
+//
+//    //printf("####### dev_name: %-4s\t, skb_len: %u,\t network_header: %u,\t transport_header: %u,\t encap: %-3u,\t inner_network_header: %u,\t inner_transport_header: %u,\t | gso_size: %-4u,\t gso_segs: %-4u,\t gso_type: 0x%02x,\t func: %s\n", $dev_name, $len, $nh, $th, $encap, $inh, $ith, $gso_size, $gso_segs, $gso_type, $func);
+//
+//    //printf("opening: %s, %s, %s\n", str(arg0), str(arg1), str(arg2));
+//    $pkt_type = $skb->pkt_type;
+//    $ifindex = ((struct net_device *)$skb->dev)->ifindex;
+//
+//    // MAC Header (assuming Ethernet)
+//    $mac_header = (struct ethhdr *) $skb->data;
+//
+//    // IP Header (assuming IPv4 following Ethernet)
+//    $ip_header_offset = $skb->data + ETH_HLEN;
+//    //$ip_header = (struct iphdr *) $ip_header_offset;
+//    $ip_header = (struct iphdr *)($skb->head + $skb->network_header);
+//    $sip = ntop(AF_INET, $ip_header->saddr);
+//    $dip = ntop(AF_INET, $ip_header->daddr);
+//
+//    // Transport Header (assuming TCP following IPv4)
+//    $transport_header_offset = $ip_header_offset + ($ip_header->ihl * 4);
+//
+//    //if ($dev_name == "eth0" || $dev_name == "vnet0") 
+//    if ($dev_name == "vnet0") 
+//    {
+//        if ($ip_header->protocol == IPPROTO_UDP)
+//        {
+//		printf("skb gso segemtation probe\n");
+//		printf("input param netdev features : %llx\n", $param_netdev_feature);
+//		printf("####### dev_name: %-4s\t, skb_len: %u,\t network_header: %u,\t transport_header: %u,\t encap: %-3u,\t inner_network_header: %u,\t inner_transport_header: %u,\t | gso_size: %-4u,\t gso_segs: %-4u,\t gso_type: 0x%02x,\t func: %s\n", $dev_name, $len, $nh, $th, $encap, $inh, $ith, $gso_size, $gso_segs, $gso_type, $func);
+//          //$udp_header = (struct udphdr *) $transport_header_offset;
+//          $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+//          $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+//          $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+//
+//          //if ($up_dst == 6081)
+//          //if ($ip_header->saddr == 0x20000064) 
+//
+//          // Print the collected data
+//          printf("********* command: %s, func: %s\n", comm, $func);
+//          printf("pkt_type:%d, ifindex: %d, dev_name: %s \n ", $pkt_type, $ifindex, $dev_name);
+//          printf("kstack: %s", kstack);
+//          printf("geneve tunnel encaped data: %s:%d => %s:%d\n", $sip, $up_src, $dip, $up_dst);
+//          //printf("geneve tunnel encaped data: %lx:%d => %lx:%d\n", $ip_header->saddr, $up_src, $ip_header->daddr, $up_dst);
+//          printf("inner_protocol_type: %u,\t inner_protocol: 0x%02x\n, ", $inner_protocol_type, $inner_protocol);
+//          printf("encapsulation: %d\n", $skb->encapsulation);
+//
+//          printf("MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+//             $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+//             $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+//             $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+//             $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+//
+//          printf("nr_frags: %u, gso_type: %llx, gso_size: %u\n", $nr_frags, $gso_type, $gso_size);
+//          printf("skb Dev features: %llx\n", $net_dev->features);
+//          printf("end skb_gso UDP ######### \n\n\n\n"); 
+//        }
+//
+//        if ($ip_header->protocol == IPPROTO_TCP)
+//        {
+//          //$udp_header = (struct udphdr *) $transport_header_offset;
+//          $tcp_header = (struct tcphdr *)($skb->head + $skb->transport_header);
+//          $tp_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+//          $tp_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+//
+//          //if ($tp_dst == 6081)
+//          //if ($ip_header->saddr == 0x20000064) 
+//            
+//          // Print the collected data
+//          printf("********* command: %s, func: %s\n", comm, $func);
+//          printf("pkt_type:%d, ifindex: %d, dev_name: %s \n ", $pkt_type, $ifindex, $dev_name);
+//          printf("geneve tunnel encaped data: %s:%d => %s:%d\n", $sip, $tp_src, $dip, $tp_dst);
+//          //printf("geneve tunnel encaped data: %lx:%d => %lx:%d\n", $ip_header->saddr, $tp_src, $ip_header->daddr, $tp_dst);
+//          printf("inner_protocol_type: %u,\t inner_protocol: 0x%02x\n, ", $inner_protocol_type, $inner_protocol);
+//          printf("encapsulation: %d\n", $skb->encapsulation);
+//
+//          printf("MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+//             $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+//             $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+//             $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+//             $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+//
+//          printf("nr_frags: %u, gso_type: %llx, gso_size: %u\n", $nr_frags, $gso_type, $gso_size);
+//          printf("skb Dev features: %llx\n", $net_dev->features);
+//          printf("kstack: %s", kstack);
+//          printf("end skb_gso TCP ######### \n"); 
+//        }
+//        printf("end skb_gso ######### \n\n\n\n"); 
+//    }
+//}
+
+
+//kprobe:netif_receive_skb_internal,
+kprobe:__dev_queue_xmit
+{
+    $func = func;
+    $skb = (struct sk_buff *) arg0;
+    $skb_net_dev = $skb->dev;
+    $dev_name = $skb->dev->name;
+    $skb_netdev_features = $skb_net_dev->features;
+    $ignore_df = $skb->ignore_df;
+
+    $shinfo = (struct skb_shared_info *) ($skb->head + $skb->end);
+    $gso_size = (uint32) $shinfo->gso_size;
+    $gso_segs = (uint32) $shinfo->gso_segs;
+    $gso_type = (uint32) $shinfo->gso_type;
+    $nr_frags = (uint32) $shinfo->nr_frags;
+
+    $nh = (uint32) $skb->network_header;
+    $th = (uint32) $skb->transport_header;
+    $inh = (uint32) $skb->inner_network_header;
+    $ith = (uint32) $skb->inner_transport_header;
+    $inner_protocol = (($skb->inner_protocol & 0xff00) >> 8) | (($skb->inner_protocol & 0x00ff) << 8);
+    $inner_protocol_type = $skb->inner_protocol_type;
+    $encap = (uint32) $skb->encapsulation;
+    $len = (uint32) $skb->len;
+
+    $mac_header = (struct ethhdr *) $skb->data;
+    $ip_header = (struct iphdr *)($skb->head + $skb->network_header);
+    $sip = ntop(AF_INET, $ip_header->saddr);
+    $dip = ntop(AF_INET, $ip_header->daddr);
+    $ether_protocol = (($mac_header->h_proto & 0xff00) >> 8) | (($mac_header->h_proto & 0x00ff) << 8) ;
+    //printf("%s probe, dev name : %s, gso_type: %d, gso_size: %d\n", $func, $dev_name, $gso_type, $gso_size);
+    //if ($ether_protocol != 0x0800) {
+    //    //printf("ether protocol: %llx\n", $ether_protocol);
+    //    return
+    //}
+    //$addr = pton(AF_INET, "0.0.0.0");
+    //if (strcmp(str("0.0.0.0"), str($addr), 4) == 0) {
+    //    printf("src addr 0.0.0.0\n")
+    //    return
+    //}
+    if ($ip_header->protocol == IPPROTO_UDP)
+    {
+      //$udp_header = (struct udphdr *) $transport_header_offset;
+      $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+      $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+      $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+      if ($up_src == 67 || $up_src == 68) {
+          return
+      }
+      //if ($up_dst != 5201 || $up_src == 5201) {
+      //    return
+      //}
+    }
+
+    //if ($ip_header->protocol == IPPROTO_TCP)
+    //{
+    //     $tcp_header = (struct tcphdr *)($skb->head + $skb->transport_header);
+    //     $tp_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+    //     $tp_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+    //     if ($tp_dst != 5201 || $tp_src == 5201) {
+    //        return
+    //     }
+    //}
+
+    //if ($dev_name == "eth0" || $dev_name == "vnet0") 
+    if ($dev_name == "vnet0" && $dev_name == "port-storage" ) 
+    //if ($dev_name == "vnet0" ) 
+    {
+        printf("%s probe\n", $func);
+        if ($gso_type == 0 && $gso_size != 0) {
+            printf("###### %s unexpected gso type:0x%02x, gso size: %-4u\n\n\n\n", $func, $gso_type, $gso_size);
+        }
+        $frag_list = $shinfo->frag_list;
+        $ip_summed = $skb->ip_summed;
+        $cb = (struct inet_skb_parm *) $skb->cb;
+        $netdev_features = $skb_net_dev->features;
+        $netdev_hw_features = $skb_net_dev->hw_features;
+        $netdev_wanted_features = $skb_net_dev->wanted_features;
+        $netdev_hwenc_features = $skb_net_dev->hw_enc_features;
+        $netdev_gso_partial_features = $skb_net_dev->gso_partial_features;
+
+        printf("####### frag_list: %d,  ip_summed: %llx\n", $frag_list, $ip_summed);
+        printf("####### skb cb frag_max_size: %d\n", $cb->frag_max_size);
+
+        printf("####### skb info, dev_name: %-4s\t, skb dev features: %llx\t, ignore df: %d\t skb_len: %u,\t network_header: %u,\t transport_header: %u,\t encap: %-3u,\t inner_network_header: %u,\t inner_transport_header: %u,\t | gso_size: %-4u,\t gso_segs: %-4u,\t gso_type: 0x%02x,\t nr_frags: %u\t, func: %s\n", $dev_name, $skb_net_dev->features, $ignore_df, $len, $nh, $th, $encap, $inh, $ith, $gso_size, $gso_segs, $gso_type, $nr_frags, $func);
+        printf("####### dev hardware features, netdev_features: %llx\t hw_features: %llx\t wanted_features: %llx\t hwenc_features: %llx\t gso_partial_features: %llx\n", $netdev_features, $netdev_hw_features, $netdev_wanted_features, $netdev_hwenc_features, $netdev_gso_partial_features);
+
+        if ($ip_header->protocol == IPPROTO_UDP)
+        {
+          //$udp_header = (struct udphdr *) $transport_header_offset;
+          $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+          $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+          $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+
+          // Print the collected data
+          printf("####### udp header info: %s:%d => %s:%d\n", $sip, $up_src, $dip, $up_dst);
+          printf("####### MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+             $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+             $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+             $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+             $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+        }
+
+        if ($ip_header->protocol == IPPROTO_TCP)
+        {
+          $tcp_header = (struct tcphdr *)($skb->head + $skb->transport_header);
+          $tp_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+          $tp_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+
+          // Print the collected data
+          printf("####### tcp header info data: %s:%d => %s:%d\n", $sip, $tp_src, $dip, $tp_dst);
+          printf("####### MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+             $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+             $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+             $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+             $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+        }
+
+        printf("netdev name: %s\n, kstack: %s", $dev_name, kstack);
+        printf("end %s skb probe\n\n\n\n\n", $func);
+    }
+}
+
+kprobe:netdev_frame_hook
+{
+    $func = func;
+    $pskb = (struct sk_buff **) arg0;
+    $skb = *$pskb;
+    $skb_net_dev = $skb->dev;
+    $dev_name = $skb->dev->name;
+    $skb_netdev_features = $skb_net_dev->features;
+    $ignore_df = $skb->ignore_df;
+
+    $shinfo = (struct skb_shared_info *) ($skb->head + $skb->end);
+    $gso_size = (uint32) $shinfo->gso_size;
+    $gso_segs = (uint32) $shinfo->gso_segs;
+    $gso_type = (uint32) $shinfo->gso_type;
+    $nr_frags = (uint32) $shinfo->nr_frags;
+
+    $nh = (uint32) $skb->network_header;
+    $th = (uint32) $skb->transport_header;
+    $inh = (uint32) $skb->inner_network_header;
+    $ith = (uint32) $skb->inner_transport_header;
+    $inner_protocol = (($skb->inner_protocol & 0xff00) >> 8) | (($skb->inner_protocol & 0x00ff) << 8);
+    $inner_protocol_type = $skb->inner_protocol_type;
+    $encap = (uint32) $skb->encapsulation;
+    $len = (uint32) $skb->len;
+
+    $mac_header = (struct ethhdr *) $skb->data;
+    $ip_header = (struct iphdr *)($skb->head + $skb->network_header);
+    $sip = ntop(AF_INET, $ip_header->saddr);
+    $dip = ntop(AF_INET, $ip_header->daddr);
+    $ether_protocol = (($mac_header->h_proto & 0xff00) >> 8) | (($mac_header->h_proto & 0x00ff) << 8) ;
+    //printf("netdev_frame_hook probe, dev name : %s, gso_type: %d, gso_size: %d\n", $dev_name, $gso_type, $gso_size);
+    //if ($ether_protocol != 0x0800) {
+    //    //printf("ether protocol: %llx\n", $ether_protocol);
+    //    return
+    //}
+    //$addr = pton(AF_INET, "0.0.0.0");
+    //if (strcmp(str("0.0.0.0"), str($addr), 4) == 0) {
+    //    printf("src addr 0.0.0.0\n")
+    //    return
+    //}
+    if ($ip_header->protocol == IPPROTO_UDP)
+    {
+      //$udp_header = (struct udphdr *) $transport_header_offset;
+      $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+      $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+      $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+      if ($up_src == 67 || $up_src == 68) {
+          return
+      }
+      //if ($up_dst != 5201 || $up_src == 5201) {
+      //    return
+      //}
+    }
+
+    //if ($dev_name == "eth0" || $dev_name == "vnet0") 
+    //if ($dev_name == "eth0") 
+    //{
+        if ($gso_type == 0 && $gso_size != 0) {
+        //if ($gso_type == 0 ) {
+            printf("###### netdev_frame_hook unexpected gso type:0x%02x, gso size: %-4u\n\n\n\n", $gso_type, $gso_size);
+        } else {
+	    return
+        }
+
+        printf("netdev_frame_hook probe\n");
+        $frag_list = $shinfo->frag_list;
+        $ip_summed = $skb->ip_summed;
+        $cb = (struct inet_skb_parm *) $skb->cb;
+        $netdev_features = $skb_net_dev->features;
+        $netdev_hw_features = $skb_net_dev->hw_features;
+        $netdev_wanted_features = $skb_net_dev->wanted_features;
+        $netdev_hwenc_features = $skb_net_dev->hw_enc_features;
+        $netdev_gso_partial_features = $skb_net_dev->gso_partial_features;
+
+        printf("####### frag_list: %d,  ip_summed: %llx\n", $frag_list, $ip_summed);
+        printf("####### skb cb frag_max_size: %d\n", $cb->frag_max_size);
+
+        printf("####### skb info, dev_name: %-4s\t, skb dev features: %llx\t, ignore df: %d\t skb_len: %u,\t network_header: %u,\t transport_header: %u,\t encap: %-3u,\t inner_network_header: %u,\t inner_transport_header: %u,\t | gso_size: %-4u,\t gso_segs: %-4u,\t gso_type: 0x%02x,\t nr_frags: %u\t, func: %s\n", $dev_name, $skb_net_dev->features, $ignore_df, $len, $nh, $th, $encap, $inh, $ith, $gso_size, $gso_segs, $gso_type, $nr_frags, $func);
+        printf("####### dev hardware features, netdev_features: %llx\t hw_features: %llx\t wanted_features: %llx\t hwenc_features: %llx\t gso_partial_features: %llx\n", $netdev_features, $netdev_hw_features, $netdev_wanted_features, $netdev_hwenc_features, $netdev_gso_partial_features);
+
+        if ($ip_header->protocol == IPPROTO_UDP)
+        {
+          //$udp_header = (struct udphdr *) $transport_header_offset;
+          $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+          $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+          $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+
+          // Print the collected data
+          printf("####### udp header info: %s:%d => %s:%d\n", $sip, $up_src, $dip, $up_dst);
+          printf("####### MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+             $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+             $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+             $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+             $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+        }
+
+        if ($ip_header->protocol == IPPROTO_TCP)
+        {
+          $tcp_header = (struct tcphdr *)($skb->head + $skb->transport_header);
+          $tp_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+          $tp_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+
+          // Print the collected data
+          printf("####### tcp header info data: %s:%d => %s:%d\n", $sip, $tp_src, $dip, $tp_dst);
+          printf("####### MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+             $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+             $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+             $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+             $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+        }
+
+        printf("netdev name: %s\n, kstack: %s", $dev_name, kstack);
+        printf("end netdev_frame_hook skb probe\n\n\n\n\n");
+    //}
+}
+
+//kprobe:napi_gro_receive
+//{
+//    $func = func;
+//    $skb = (struct sk_buff *) arg1;
+//    $skb_net_dev = $skb->dev;
+//    $dev_name = $skb->dev->name;
+//    $skb_netdev_features = $skb_net_dev->features;
+//    $ignore_df = $skb->ignore_df;
+//
+//    $shinfo = (struct skb_shared_info *) ($skb->head + $skb->end);
+//    $gso_size = (uint32) $shinfo->gso_size;
+//    $gso_segs = (uint32) $shinfo->gso_segs;
+//    $gso_type = (uint32) $shinfo->gso_type;
+//    $nr_frags = (uint32) $shinfo->nr_frags;
+//
+//    $nh = (uint32) $skb->network_header;
+//    $th = (uint32) $skb->transport_header;
+//    $inh = (uint32) $skb->inner_network_header;
+//    $ith = (uint32) $skb->inner_transport_header;
+//    $inner_protocol = (($skb->inner_protocol & 0xff00) >> 8) | (($skb->inner_protocol & 0x00ff) << 8);
+//    $inner_protocol_type = $skb->inner_protocol_type;
+//    $encap = (uint32) $skb->encapsulation;
+//    $len = (uint32) $skb->len;
+//
+//    $mac_header = (struct ethhdr *) $skb->data;
+//    $ip_header = (struct iphdr *)($skb->head + $skb->network_header);
+//    $sip = ntop(AF_INET, $ip_header->saddr);
+//    $dip = ntop(AF_INET, $ip_header->daddr);
+//    $ether_protocol = (($mac_header->h_proto & 0xff00) >> 8) | (($mac_header->h_proto & 0x00ff) << 8) ;
+//    //printf("netif_receive_skb_internal probe, dev name : %s, gso_type: %d, gso_size: %d\n", $dev_name, $gso_type, $gso_size);
+//    //if ($ether_protocol != 0x0800) {
+//    //    //printf("ether protocol: %llx\n", $ether_protocol);
+//    //    return
+//    //}
+//    //$addr = pton(AF_INET, "0.0.0.0");
+//    //if (strcmp(str("0.0.0.0"), str($addr), 4) == 0) {
+//    //    printf("src addr 0.0.0.0\n")
+//    //    return
+//    //}
+//    if ($ip_header->protocol == IPPROTO_UDP)
+//    {
+//      //$udp_header = (struct udphdr *) $transport_header_offset;
+//      $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+//      $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+//      $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+//      if ($up_src == 67 || $up_src == 68) {
+//          return
+//      }
+//    }
+//
+//    //if ($dev_name == "eth0" || $dev_name == "vnet0") 
+//    if ($dev_name == "eth0") 
+//    {
+//        printf("napi_gro_receive probe\n");
+//        $frag_list = $shinfo->frag_list;
+//        $ip_summed = $skb->ip_summed;
+//        $cb = (struct inet_skb_parm *) $skb->cb;
+//        $netdev_features = $skb_net_dev->features;
+//        $netdev_hw_features = $skb_net_dev->hw_features;
+//        $netdev_wanted_features = $skb_net_dev->wanted_features;
+//        $netdev_hwenc_features = $skb_net_dev->hw_enc_features;
+//        $netdev_gso_partial_features = $skb_net_dev->gso_partial_features;
+//
+//        if ($ip_header->protocol == IPPROTO_UDP)
+//        {
+//        printf("####### frag_list: %d,  ip_summed: %llx\n", $frag_list, $ip_summed);
+//        printf("####### skb cb frag_max_size: %d\n", $cb->frag_max_size);
+//
+//        printf("####### skb info, dev_name: %-4s\t, skb dev features: %llx\t, ignore df: %d\t skb_len: %u,\t network_header: %u,\t transport_header: %u,\t encap: %-3u,\t inner_network_header: %u,\t inner_transport_header: %u,\t | gso_size: %-4u,\t gso_segs: %-4u,\t gso_type: 0x%02x,\t nr_frags: %u\t, func: %s\n", $dev_name, $skb_net_dev->features, $ignore_df, $len, $nh, $th, $encap, $inh, $ith, $gso_size, $gso_segs, $gso_type, $nr_frags, $func);
+//        printf("####### dev hardware features, netdev_features: %llx\t hw_features: %llx\t wanted_features: %llx\t hwenc_features: %llx\t gso_partial_features: %llx\n", $netdev_features, $netdev_hw_features, $netdev_wanted_features, $netdev_hwenc_features, $netdev_gso_partial_features);
+//          //$udp_header = (struct udphdr *) $transport_header_offset;
+//          $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+//          $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+//          $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+//
+//          // Print the collected data
+//          printf("####### udp header info: %s:%d => %s:%d\n", $sip, $up_src, $dip, $up_dst);
+//          printf("####### MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+//             $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+//             $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+//             $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+//             $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+//        }
+//
+//        if ($ip_header->protocol == IPPROTO_TCP)
+//        {
+//          $tcp_header = (struct tcphdr *)($skb->head + $skb->transport_header);
+//          $tp_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+//          $tp_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+//
+//          // Print the collected data
+//          printf("####### tcp header info data: %s:%d => %s:%d\n", $sip, $tp_src, $dip, $tp_dst);
+//          printf("####### MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+//             $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+//             $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+//             $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+//             $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+//        }
+//
+//        printf("netdev name: %s\n, kstack: %s", $dev_name, kstack);
+//        printf("end napi_gro_receive skb probe\n\n\n\n\n");
+//    }
+//}
+
+//kprobe:tun_do_read
+//{
+//    
+//	printf("end tun_do_read probe, kstack: %s\n\n\n", kstack);
+//}
+
+//kprobe:internal_dev_xmit
+//kprobe:ip_output
+//kprobe:ovs_dp_process_packet
+//{
+//    $func = func;
+//    $skb = (struct sk_buff *) arg0;
+//    $skb_net_dev = $skb->dev;
+//    $dev_name = $skb->dev->name;
+//    $skb_netdev_features = $skb_net_dev->features;
+//    $ignore_df = $skb->ignore_df;
+//
+//    $shinfo = (struct skb_shared_info *) ($skb->head + $skb->end);
+//    $gso_size = (uint32) $shinfo->gso_size;
+//    $gso_segs = (uint32) $shinfo->gso_segs;
+//    $gso_type = (uint32) $shinfo->gso_type;
+//    $nr_frags = (uint32) $shinfo->nr_frags;
+//
+//    $nh = (uint32) $skb->network_header;
+//    $th = (uint32) $skb->transport_header;
+//    $inh = (uint32) $skb->inner_network_header;
+//    $ith = (uint32) $skb->inner_transport_header;
+//    $inner_protocol = (($skb->inner_protocol & 0xff00) >> 8) | (($skb->inner_protocol & 0x00ff) << 8);
+//    $inner_protocol_type = $skb->inner_protocol_type;
+//    $encap = (uint32) $skb->encapsulation;
+//    $len = (uint32) $skb->len;
+//
+//    $mac_header = (struct ethhdr *) $skb->data;
+//    $ip_header = (struct iphdr *)($skb->head + $skb->network_header);
+//    $sip = ntop(AF_INET, $ip_header->saddr);
+//    $dip = ntop(AF_INET, $ip_header->daddr);
+//    $ether_protocol = (($mac_header->h_proto & 0xff00) >> 8) | (($mac_header->h_proto & 0x00ff) << 8) ;
+//    //if ($ether_protocol != 0x0800) {
+//    //    //printf("ether protocol: %llx\n", $ether_protocol);
+//    //    return
+//    //}
+//    //$addr = pton(AF_INET, "0.0.0.0");
+//    //if (strcmp(str("0.0.0.0"), str($addr), 4) == 0) {
+//    //    printf("src addr 0.0.0.0\n")
+//    //    return
+//    //}
+//    if ($ip_header->protocol == IPPROTO_UDP)
+//    {
+//      //$udp_header = (struct udphdr *) $transport_header_offset;
+//      $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+//      $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+//      $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+//      if ($up_src == 67 || $up_src == 68) {
+//          return
+//      }
+//    }
+//
+//    if ($gso_type == 0 && $gso_size != 0) {
+//        printf("###### ovs_dp_process_packet unexpected gso type:0x%02x, gso size: %-4u\n", $gso_type, $gso_size);
+//    }
+//    //if ($dev_name == "eth0" || $dev_name == "vnet0") 
+//    //if ( $dev_name == "vnet0") 
+//    //{
+//        //printf("ip_output probe\n");
+//        printf("ovs_dp_process_packet probe\n");
+//        $frag_list = $shinfo->frag_list;
+//        $ip_summed = $skb->ip_summed;
+//        $cb = (struct inet_skb_parm *) $skb->cb;
+//        $netdev_features = $skb_net_dev->features;
+//        $netdev_hw_features = $skb_net_dev->hw_features;
+//        $netdev_wanted_features = $skb_net_dev->wanted_features;
+//        $netdev_hwenc_features = $skb_net_dev->hw_enc_features;
+//        $netdev_gso_partial_features = $skb_net_dev->gso_partial_features;
+//
+//        if ($ip_header->protocol == IPPROTO_UDP)
+//        {
+//          printf("####### frag_list: %d,  ip_summed: %llx\n", $frag_list, $ip_summed);
+//          printf("####### skb cb frag_max_size: %d\n", $cb->frag_max_size);
+//
+//          printf("####### skb info, dev_name: %-4s\t, skb dev features: %llx\t, ignore df: %d\t skb_len: %u,\t network_header: %u,\t transport_header: %u,\t encap: %-3u,\t inner_network_header: %u,\t inner_transport_header: %u,\t | gso_size: %-4u,\t gso_segs: %-4u,\t gso_type: 0x%02x,\t nr_frags: %u\t, func: %s\n", $dev_name, $skb_net_dev->features, $ignore_df, $len, $nh, $th, $encap, $inh, $ith, $gso_size, $gso_segs, $gso_type, $nr_frags, $func);
+//          printf("####### dev hardware features, netdev_features: %llx\t hw_features: %llx\t wanted_features: %llx\t hwenc_features: %llx\t gso_partial_features: %llx\n", $netdev_features, $netdev_hw_features, $netdev_wanted_features, $netdev_hwenc_features, $netdev_gso_partial_features);
+//          //$udp_header = (struct udphdr *) $transport_header_offset;
+//          $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+//          $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+//          $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+//
+//          // Print the collected data
+//          printf("####### udp header info: %s:%d => %s:%d\n", $sip, $up_src, $dip, $up_dst);
+//          printf("####### MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+//             $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+//             $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+//             $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+//             $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+//        }
+//
+//        if ($ip_header->protocol == IPPROTO_TCP)
+//        {
+//          printf("####### frag_list: %d,  ip_summed: %llx\n", $frag_list, $ip_summed);
+//          printf("####### skb cb frag_max_size: %d\n", $cb->frag_max_size);
+//
+//          printf("####### skb info, dev_name: %-4s\t, skb dev features: %llx\t, ignore df: %d\t skb_len: %u,\t network_header: %u,\t transport_header: %u,\t encap: %-3u,\t inner_network_header: %u,\t inner_transport_header: %u,\t | gso_size: %-4u,\t gso_segs: %-4u,\t gso_type: 0x%02x,\t nr_frags: %u\t, func: %s\n", $dev_name, $skb_net_dev->features, $ignore_df, $len, $nh, $th, $encap, $inh, $ith, $gso_size, $gso_segs, $gso_type, $nr_frags, $func);
+//          printf("####### dev hardware features, netdev_features: %llx\t hw_features: %llx\t wanted_features: %llx\t hwenc_features: %llx\t gso_partial_features: %llx\n", $netdev_features, $netdev_hw_features, $netdev_wanted_features, $netdev_hwenc_features, $netdev_gso_partial_features);
+//          $tcp_header = (struct tcphdr *)($skb->head + $skb->transport_header);
+//          $tp_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+//          $tp_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+//
+//          // Print the collected data
+//          printf("####### tcp header info data: %s:%d => %s:%d\n", $sip, $tp_src, $dip, $tp_dst);
+//          printf("####### MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+//             $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+//             $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+//             $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+//             $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+//        }
+//
+//        //printf("netdev name: %s\n, kstack: %s\n, ustack: %s", $dev_name, kstack, ustack);
+//        printf("netdev name: %s\n, kstack: %s", $dev_name, kstack);
+//        //printf("end ip_output probe\n\n\n\n\n");
+//        printf("end ovs_dp_process_packet probe\n\n\n\n\n");
+//    //}
+//}
+
+kretprobe:skb_segment
+{
+    $func = func;
+    $skb = (struct sk_buff *) retval;
+    $skb_net_dev = $skb->dev;
+    $dev_name = $skb->dev->name;
+    printf("%s probe\n", $func);
+    printf("netdev name: %s\n, kstack: %s", $dev_name, kstack);
+}
+
+kprobe:queue_gso_packets,
+kprobe:queue_userspace_packet
+{
+    $func = func;
+    $skb = (struct sk_buff *) arg1;
+    $skb_net_dev = $skb->dev;
+    $dev_name = $skb->dev->name;
+    $skb_netdev_features = $skb_net_dev->features;
+    $ignore_df = $skb->ignore_df;
+
+    $shinfo = (struct skb_shared_info *) ($skb->head + $skb->end);
+    $gso_size = (uint32) $shinfo->gso_size;
+    $gso_segs = (uint32) $shinfo->gso_segs;
+    $gso_type = (uint32) $shinfo->gso_type;
+    $nr_frags = (uint32) $shinfo->nr_frags;
+
+    $nh = (uint32) $skb->network_header;
+    $th = (uint32) $skb->transport_header;
+    $inh = (uint32) $skb->inner_network_header;
+    $ith = (uint32) $skb->inner_transport_header;
+    $inner_protocol = (($skb->inner_protocol & 0xff00) >> 8) | (($skb->inner_protocol & 0x00ff) << 8);
+    $inner_protocol_type = $skb->inner_protocol_type;
+    $encap = (uint32) $skb->encapsulation;
+    $len = (uint32) $skb->len;
+
+    $mac_header = (struct ethhdr *) $skb->data;
+    $ip_header = (struct iphdr *)($skb->head + $skb->network_header);
+    $sip = ntop(AF_INET, $ip_header->saddr);
+    $dip = ntop(AF_INET, $ip_header->daddr);
+    $ether_protocol = (($mac_header->h_proto & 0xff00) >> 8) | (($mac_header->h_proto & 0x00ff) << 8) ;
+    //if ($ether_protocol != 0x0800) {
+    //    //printf("ether protocol: %llx\n", $ether_protocol);
+    //    return
+    //}
+    //$addr = pton(AF_INET, "0.0.0.0");
+    //if (strcmp(str("0.0.0.0"), str($addr), 4) == 0) {
+    //    printf("src addr 0.0.0.0\n")
+    //    return
+    //}
+    if ($ip_header->protocol == IPPROTO_UDP)
+    {
+      //$udp_header = (struct udphdr *) $transport_header_offset;
+      $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+      $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+      $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+      if ($up_src == 67 || $up_src == 68) {
+          return
+      }
+    }
+
+    //if ($dev_name == "eth0" || $dev_name == "vnet0" || $dev_name == "port-storage") 
+    //if ( $dev_name == "vnet0" || $dev_name == "port-storage" ) 
+    //if ($dev_name == "vnet0" ) 
+    //{
+	if ($gso_type == 0 && $gso_size != 0) {
+	    printf("###### %s unexpected gso type:0x%02x, gso size: %-4u\n", $func, $gso_type, $gso_size);
+	} else {
+	    return
+	}
+
+        printf("%s probe\n", $func);
+        printf("netdev name: %s\n, kstack: %s", $dev_name, kstack);
+        $frag_list = $shinfo->frag_list;
+        $ip_summed = $skb->ip_summed;
+        $cb = (struct inet_skb_parm *) $skb->cb;
+        $netdev_features = $skb_net_dev->features;
+        $netdev_hw_features = $skb_net_dev->hw_features;
+        $netdev_wanted_features = $skb_net_dev->wanted_features;
+        $netdev_hwenc_features = $skb_net_dev->hw_enc_features;
+        $netdev_gso_partial_features = $skb_net_dev->gso_partial_features;
+
+        if ($ip_header->protocol == IPPROTO_UDP)
+        {
+          printf("####### frag_list: %d,  ip_summed: %llx\n", $frag_list, $ip_summed);
+          printf("####### skb cb frag_max_size: %d\n", $cb->frag_max_size);
+
+          printf("####### skb info, dev_name: %-4s\t, skb dev features: %llx\t, ignore df: %d\t skb_len: %u,\t network_header: %u,\t transport_header: %u,\t encap: %-3u,\t inner_network_header: %u,\t inner_transport_header: %u,\t | gso_size: %-4u,\t gso_segs: %-4u,\t gso_type: 0x%02x,\t nr_frags: %u\t, func: %s\n", $dev_name, $skb_net_dev->features, $ignore_df, $len, $nh, $th, $encap, $inh, $ith, $gso_size, $gso_segs, $gso_type, $nr_frags, $func);
+          printf("####### dev hardware features, netdev_features: %llx\t hw_features: %llx\t wanted_features: %llx\t hwenc_features: %llx\t gso_partial_features: %llx\n", $netdev_features, $netdev_hw_features, $netdev_wanted_features, $netdev_hwenc_features, $netdev_gso_partial_features);
+          //$udp_header = (struct udphdr *) $transport_header_offset;
+          $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+          $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+          $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+
+          // Print the collected data
+          printf("####### udp header info: %s:%d => %s:%d\n", $sip, $up_src, $dip, $up_dst);
+          printf("####### MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+             $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+             $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+             $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+             $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+        }
+
+        if ($ip_header->protocol == IPPROTO_TCP)
+        {
+          printf("####### frag_list: %d,  ip_summed: %llx\n", $frag_list, $ip_summed);
+          printf("####### skb cb frag_max_size: %d\n", $cb->frag_max_size);
+
+          printf("####### skb info, dev_name: %-4s\t, skb dev features: %llx\t, ignore df: %d\t skb_len: %u,\t network_header: %u,\t transport_header: %u,\t encap: %-3u,\t inner_network_header: %u,\t inner_transport_header: %u,\t | gso_size: %-4u,\t gso_segs: %-4u,\t gso_type: 0x%02x,\t nr_frags: %u\t, func: %s\n", $dev_name, $skb_net_dev->features, $ignore_df, $len, $nh, $th, $encap, $inh, $ith, $gso_size, $gso_segs, $gso_type, $nr_frags, $func);
+          printf("####### dev hardware features, netdev_features: %llx\t hw_features: %llx\t wanted_features: %llx\t hwenc_features: %llx\t gso_partial_features: %llx\n", $netdev_features, $netdev_hw_features, $netdev_wanted_features, $netdev_hwenc_features, $netdev_gso_partial_features);
+          $tcp_header = (struct tcphdr *)($skb->head + $skb->transport_header);
+          $tp_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+          $tp_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+
+          // Print the collected data
+          printf("####### tcp header info data: %s:%d => %s:%d\n", $sip, $tp_src, $dip, $tp_dst);
+          printf("####### MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+             $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+             $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+             $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+             $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+        }
+
+        //printf("netdev name: %s\n, kstack: %s\n, ustack: %s", $dev_name, kstack, ustack);
+        printf("netdev name: %s\n, kstack: %s", $dev_name, kstack);
+        printf("end %s skb probe\n\n\n\n\n", $func);
+    //}
+}
+
+kprobe:validate_xmit_skb_list,
+kprobe:validate_xmit_skb
+{
+    $func = func;
+    $skb = (struct sk_buff *) arg0;
+    $skb_net_dev = $skb->dev;
+    $dev_name = $skb->dev->name;
+    $skb_netdev_features = $skb_net_dev->features;
+    $ignore_df = $skb->ignore_df;
+
+    $shinfo = (struct skb_shared_info *) ($skb->head + $skb->end);
+    $gso_size = (uint32) $shinfo->gso_size;
+    $gso_segs = (uint32) $shinfo->gso_segs;
+    $gso_type = (uint32) $shinfo->gso_type;
+    $nr_frags = (uint32) $shinfo->nr_frags;
+
+    $nh = (uint32) $skb->network_header;
+    $th = (uint32) $skb->transport_header;
+    $inh = (uint32) $skb->inner_network_header;
+    $ith = (uint32) $skb->inner_transport_header;
+    $inner_protocol = (($skb->inner_protocol & 0xff00) >> 8) | (($skb->inner_protocol & 0x00ff) << 8);
+    $inner_protocol_type = $skb->inner_protocol_type;
+    $encap = (uint32) $skb->encapsulation;
+    $len = (uint32) $skb->len;
+
+    $mac_header = (struct ethhdr *) $skb->data;
+    $ip_header = (struct iphdr *)($skb->head + $skb->network_header);
+    $sip = ntop(AF_INET, $ip_header->saddr);
+    $dip = ntop(AF_INET, $ip_header->daddr);
+    $ether_protocol = (($mac_header->h_proto & 0xff00) >> 8) | (($mac_header->h_proto & 0x00ff) << 8) ;
+    //if ($ether_protocol != 0x0800) {
+    //    //printf("ether protocol: %llx\n", $ether_protocol);
+    //    return
+    //}
+    //$addr = pton(AF_INET, "0.0.0.0");
+    //if (strcmp(str("0.0.0.0"), str($addr), 4) == 0) {
+    //    printf("src addr 0.0.0.0\n")
+    //    return
+    //}
+    if ($ip_header->protocol == IPPROTO_UDP)
+    {
+      //$udp_header = (struct udphdr *) $transport_header_offset;
+      $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+      $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+      $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+      if ($up_src == 67 || $up_src == 68) {
+          return
+      }
+    }
+
+    //if ($dev_name == "eth0" || $dev_name == "vnet0" || $dev_name == "port-storage") 
+    if ( $dev_name == "vnet0" || $dev_name == "port-storage" ) 
+    //if ($dev_name == "vnet0" ) 
+    {
+	//if ($gso_type == 0 && $gso_size != 0) {
+	if ($gso_type != 0) {
+	    printf("###### %s unexpected gso type:0x%02x, gso size: %-4u\n", $func, $gso_type, $gso_size);
+	} else {
+	    return
+	}
+
+        printf("%s probe\n", $func);
+        $frag_list = $shinfo->frag_list;
+        $ip_summed = $skb->ip_summed;
+        $cb = (struct inet_skb_parm *) $skb->cb;
+        $netdev_features = $skb_net_dev->features;
+        $netdev_hw_features = $skb_net_dev->hw_features;
+        $netdev_wanted_features = $skb_net_dev->wanted_features;
+        $netdev_hwenc_features = $skb_net_dev->hw_enc_features;
+        $netdev_gso_partial_features = $skb_net_dev->gso_partial_features;
+
+        if ($ip_header->protocol == IPPROTO_UDP)
+        {
+          printf("####### frag_list: %d,  ip_summed: %llx\n", $frag_list, $ip_summed);
+          printf("####### skb cb frag_max_size: %d\n", $cb->frag_max_size);
+
+          printf("####### skb info, dev_name: %-4s\t, skb dev features: %llx\t, ignore df: %d\t skb_len: %u,\t network_header: %u,\t transport_header: %u,\t encap: %-3u,\t inner_network_header: %u,\t inner_transport_header: %u,\t | gso_size: %-4u,\t gso_segs: %-4u,\t gso_type: 0x%02x,\t nr_frags: %u\t, func: %s\n", $dev_name, $skb_net_dev->features, $ignore_df, $len, $nh, $th, $encap, $inh, $ith, $gso_size, $gso_segs, $gso_type, $nr_frags, $func);
+          printf("####### dev hardware features, netdev_features: %llx\t hw_features: %llx\t wanted_features: %llx\t hwenc_features: %llx\t gso_partial_features: %llx\n", $netdev_features, $netdev_hw_features, $netdev_wanted_features, $netdev_hwenc_features, $netdev_gso_partial_features);
+          //$udp_header = (struct udphdr *) $transport_header_offset;
+          $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+          $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+          $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+
+          // Print the collected data
+          printf("####### udp header info: %s:%d => %s:%d\n", $sip, $up_src, $dip, $up_dst);
+          printf("####### MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+             $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+             $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+             $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+             $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+        }
+
+        if ($ip_header->protocol == IPPROTO_TCP)
+        {
+          printf("####### frag_list: %d,  ip_summed: %llx\n", $frag_list, $ip_summed);
+          printf("####### skb cb frag_max_size: %d\n", $cb->frag_max_size);
+
+          printf("####### skb info, dev_name: %-4s\t, skb dev features: %llx\t, ignore df: %d\t skb_len: %u,\t network_header: %u,\t transport_header: %u,\t encap: %-3u,\t inner_network_header: %u,\t inner_transport_header: %u,\t | gso_size: %-4u,\t gso_segs: %-4u,\t gso_type: 0x%02x,\t nr_frags: %u\t, func: %s\n", $dev_name, $skb_net_dev->features, $ignore_df, $len, $nh, $th, $encap, $inh, $ith, $gso_size, $gso_segs, $gso_type, $nr_frags, $func);
+          printf("####### dev hardware features, netdev_features: %llx\t hw_features: %llx\t wanted_features: %llx\t hwenc_features: %llx\t gso_partial_features: %llx\n", $netdev_features, $netdev_hw_features, $netdev_wanted_features, $netdev_hwenc_features, $netdev_gso_partial_features);
+          $tcp_header = (struct tcphdr *)($skb->head + $skb->transport_header);
+          $tp_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+          $tp_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+
+          // Print the collected data
+          printf("####### tcp header info data: %s:%d => %s:%d\n", $sip, $tp_src, $dip, $tp_dst);
+          printf("####### MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+             $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+             $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+             $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+             $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+        }
+
+        //printf("netdev name: %s\n, kstack: %s\n, ustack: %s", $dev_name, kstack, ustack);
+        printf("netdev name: %s\n, kstack: %s", $dev_name, kstack);
+        printf("end %s skb probe\n\n\n\n\n", $func);
+    }
+}
+
+//kprobe:do_execute_actions
+//kprobe:do_output
+//{
+//    $func = func;
+//    $skb = (struct sk_buff *) arg1;
+//    $skb_net_dev = $skb->dev;
+//    $dev_name = $skb->dev->name;
+//    $skb_netdev_features = $skb_net_dev->features;
+//    $ignore_df = $skb->ignore_df;
+//
+//    $shinfo = (struct skb_shared_info *) ($skb->head + $skb->end);
+//    $gso_size = (uint32) $shinfo->gso_size;
+//    $gso_segs = (uint32) $shinfo->gso_segs;
+//    $gso_type = (uint32) $shinfo->gso_type;
+//    $nr_frags = (uint32) $shinfo->nr_frags;
+//
+//    $nh = (uint32) $skb->network_header;
+//    $th = (uint32) $skb->transport_header;
+//    $inh = (uint32) $skb->inner_network_header;
+//    $ith = (uint32) $skb->inner_transport_header;
+//    $inner_protocol = (($skb->inner_protocol & 0xff00) >> 8) | (($skb->inner_protocol & 0x00ff) << 8);
+//    $inner_protocol_type = $skb->inner_protocol_type;
+//    $encap = (uint32) $skb->encapsulation;
+//    $len = (uint32) $skb->len;
+//
+//    $mac_header = (struct ethhdr *) $skb->data;
+//    $ip_header = (struct iphdr *)($skb->head + $skb->network_header);
+//    $sip = ntop(AF_INET, $ip_header->saddr);
+//    $dip = ntop(AF_INET, $ip_header->daddr);
+//    $ether_protocol = (($mac_header->h_proto & 0xff00) >> 8) | (($mac_header->h_proto & 0x00ff) << 8) ;
+//    //if ($ether_protocol != 0x0800) {
+//    //    //printf("ether protocol: %llx\n", $ether_protocol);
+//    //    return
+//    //}
+//    //$addr = pton(AF_INET, "0.0.0.0");
+//    //if (strcmp(str("0.0.0.0"), str($addr), 4) == 0) {
+//    //    printf("src addr 0.0.0.0\n")
+//    //    return
+//    //}
+//    if ($ip_header->protocol == IPPROTO_UDP)
+//    {
+//      //$udp_header = (struct udphdr *) $transport_header_offset;
+//      $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+//      $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+//      $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+//      if ($up_src == 67 || $up_src == 68) {
+//          return
+//      }
+//    }
+//
+//    //if ($dev_name == "eth0" || $dev_name == "vnet0") 
+//    //if ( $dev_name == "vnet0" || $dev_name == "port-storage" ) 
+//    if ($dev_name == "vnet0" ) 
+//    {
+//        //printf("do_execute_actions probe\n");
+//        printf("do_output probe\n");
+//        if ($gso_type == 0 && $gso_size != 0) {
+//	    printf("###### ovs do_output unexpected gso type:0x%02x, gso size: %-4u\n\n\n\n", $gso_type, $gso_size);
+//        }
+//        $frag_list = $shinfo->frag_list;
+//        $ip_summed = $skb->ip_summed;
+//        $cb = (struct inet_skb_parm *) $skb->cb;
+//        $netdev_features = $skb_net_dev->features;
+//        $netdev_hw_features = $skb_net_dev->hw_features;
+//        $netdev_wanted_features = $skb_net_dev->wanted_features;
+//        $netdev_hwenc_features = $skb_net_dev->hw_enc_features;
+//        $netdev_gso_partial_features = $skb_net_dev->gso_partial_features;
+//
+//        if ($ip_header->protocol == IPPROTO_UDP)
+//        {
+//          printf("####### frag_list: %d,  ip_summed: %llx\n", $frag_list, $ip_summed);
+//          printf("####### skb cb frag_max_size: %d\n", $cb->frag_max_size);
+//
+//          printf("####### skb info, dev_name: %-4s\t, skb dev features: %llx\t, ignore df: %d\t skb_len: %u,\t network_header: %u,\t transport_header: %u,\t encap: %-3u,\t inner_network_header: %u,\t inner_transport_header: %u,\t | gso_size: %-4u,\t gso_segs: %-4u,\t gso_type: 0x%02x,\t nr_frags: %u\t, func: %s\n", $dev_name, $skb_net_dev->features, $ignore_df, $len, $nh, $th, $encap, $inh, $ith, $gso_size, $gso_segs, $gso_type, $nr_frags, $func);
+//          printf("####### dev hardware features, netdev_features: %llx\t hw_features: %llx\t wanted_features: %llx\t hwenc_features: %llx\t gso_partial_features: %llx\n", $netdev_features, $netdev_hw_features, $netdev_wanted_features, $netdev_hwenc_features, $netdev_gso_partial_features);
+//          //$udp_header = (struct udphdr *) $transport_header_offset;
+//          $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+//          $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+//          $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+//
+//          // Print the collected data
+//          printf("####### udp header info: %s:%d => %s:%d\n", $sip, $up_src, $dip, $up_dst);
+//          printf("####### MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+//             $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+//             $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+//             $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+//             $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+//        }
+//
+//        if ($ip_header->protocol == IPPROTO_TCP)
+//        {
+//          printf("####### frag_list: %d,  ip_summed: %llx\n", $frag_list, $ip_summed);
+//          printf("####### skb cb frag_max_size: %d\n", $cb->frag_max_size);
+//
+//          printf("####### skb info, dev_name: %-4s\t, skb dev features: %llx\t, ignore df: %d\t skb_len: %u,\t network_header: %u,\t transport_header: %u,\t encap: %-3u,\t inner_network_header: %u,\t inner_transport_header: %u,\t | gso_size: %-4u,\t gso_segs: %-4u,\t gso_type: 0x%02x,\t nr_frags: %u\t, func: %s\n", $dev_name, $skb_net_dev->features, $ignore_df, $len, $nh, $th, $encap, $inh, $ith, $gso_size, $gso_segs, $gso_type, $nr_frags, $func);
+//          printf("####### dev hardware features, netdev_features: %llx\t hw_features: %llx\t wanted_features: %llx\t hwenc_features: %llx\t gso_partial_features: %llx\n", $netdev_features, $netdev_hw_features, $netdev_wanted_features, $netdev_hwenc_features, $netdev_gso_partial_features);
+//          $tcp_header = (struct tcphdr *)($skb->head + $skb->transport_header);
+//          $tp_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+//          $tp_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+//
+//          // Print the collected data
+//          printf("####### tcp header info data: %s:%d => %s:%d\n", $sip, $tp_src, $dip, $tp_dst);
+//          printf("####### MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+//             $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+//             $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+//             $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+//             $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+//        }
+//
+//        printf("netdev name: %s\n, kstack: %s", $dev_name, kstack);
+//        printf("end do_execute_actions probe\n\n\n\n\n");
+//    }
+//}
+
+//
+//
+//kprobe:netif_skb_features
+//{
+//
+//    $func = func;
+//    $skb = (struct sk_buff *) arg0;
+//    $skb_net_dev = $skb->dev;
+//    $dev_name = $skb->dev->name;
+//    $skb_netdev_features = $skb_net_dev->features;
+//    $ignore_df = $skb->ignore_df;
+//
+//    $shinfo = (struct skb_shared_info *) ($skb->head + $skb->end);
+//    $gso_size = (uint32) $shinfo->gso_size;
+//    $gso_segs = (uint32) $shinfo->gso_segs;
+//    $gso_type = (uint32) $shinfo->gso_type;
+//    $nr_frags = (uint32) $shinfo->nr_frags;
+//
+//    $nh = (uint32) $skb->network_header;
+//    $th = (uint32) $skb->transport_header;
+//    $inh = (uint32) $skb->inner_network_header;
+//    $ith = (uint32) $skb->inner_transport_header;
+//    $inner_protocol = (($skb->inner_protocol & 0xff00) >> 8) | (($skb->inner_protocol & 0x00ff) << 8);
+//    $inner_protocol_type = $skb->inner_protocol_type;
+//    $encap = (uint32) $skb->encapsulation;
+//    $len = (uint32) $skb->len;
+//
+//    $mac_header = (struct ethhdr *) $skb->data;
+//    $ip_header = (struct iphdr *)($skb->head + $skb->network_header);
+//    $sip = ntop(AF_INET, $ip_header->saddr);
+//    $dip = ntop(AF_INET, $ip_header->daddr);
+// 
+//    $ether_protocol = (($mac_header->h_proto & 0xff00) >> 8) | (($mac_header->h_proto & 0x00ff) << 8) ;
+//    if ($ether_protocol != 0x0800) {
+//	      //printf("ether protocol: %llx\n", $ether_protocol);
+//	      return
+//    }
+//    if ($ip_header->protocol == IPPROTO_UDP)
+//    {
+//      //$udp_header = (struct udphdr *) $transport_header_offset;
+//      $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+//      $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+//      $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+//      if ($up_src == 67 || $up_src == 68) {
+//          return
+//      }
+//    }
+//
+//    if ($dev_name == "eth0" || $dev_name == "vnet0") 
+//    {
+//        printf("netif skb features probe\n");
+//        $frag_list = $shinfo->frag_list;
+//        $ip_summed = $skb->ip_summed;
+//        $cb = (struct inet_skb_parm *) $skb->cb;
+//        printf("####### frag_list: %d,  ip_summed: %llx\n", $frag_list, $ip_summed);
+//        printf("####### skb cb frag_max_size: %d\n", $cb->frag_max_size);
+//
+//        printf("####### skb info, dev_name: %-4s\t, skb dev features: %llx\t, ignore df: %d\t skb_len: %u,\t network_header: %u,\t transport_header: %u,\t encap: %-3u,\t inner_network_header: %u,\t inner_transport_header: %u,\t | gso_size: %-4u,\t gso_segs: %-4u,\t gso_type: 0x%02x,\t nr_frags: %u\t, func: %s\n", $dev_name, $skb_net_dev->features, $ignore_df, $len, $nh, $th, $encap, $inh, $ith, $gso_size, $gso_segs, $gso_type, $nr_frags, $func);
+//        $netdev_features = $skb_net_dev->features;
+//        $netdev_hw_features = $skb_net_dev->hw_features;
+//        $netdev_wanted_features = $skb_net_dev->wanted_features;
+//        $netdev_hwenc_features = $skb_net_dev->hw_enc_features;
+//        $netdev_gso_partial_features = $skb_net_dev->gso_partial_features;
+//        printf("####### dev hardware features, netdev_features: %llx\t hw_features: %llx\t wanted_features: %llx\t hwenc_features: %llx\t gso_partial_features: %llx\n", $netdev_features, $netdev_hw_features, $netdev_wanted_features, $netdev_hwenc_features, $netdev_gso_partial_features);
+//        if ($ip_header->protocol == IPPROTO_UDP)
+//        {
+//          //$udp_header = (struct udphdr *) $transport_header_offset;
+//          $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+//          $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+//          $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+//
+//          // Print the collected data
+//          printf("####### udp header info: %s:%d => %s:%d\n", $sip, $up_src, $dip, $up_dst);
+//          printf("####### MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+//             $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+//             $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+//             $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+//             $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+//        }
+//
+//        if ($ip_header->protocol == IPPROTO_TCP)
+//        {
+//          $tcp_header = (struct tcphdr *)($skb->head + $skb->transport_header);
+//          $tp_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+//          $tp_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+//
+//          // Print the collected data
+//          printf("####### tcp header info data: %s:%d => %s:%d\n", $sip, $tp_src, $dip, $tp_dst);
+//          printf("####### MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+//             $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+//             $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+//             $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+//             $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+//        }
+//
+//        printf("netdev name: %s\n, kstack: %s", $dev_name, kstack);
+//        printf("end netif skb feature probe\n\n\n\n\n");
+//    }
+//}

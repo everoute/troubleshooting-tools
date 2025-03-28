@@ -1,0 +1,83 @@
+#!/usr/bin/env bpftrace                                                                                                                                               
+                                                                                                                                                                      
+#include <linux/skbuff.h>                                                                                                                                             
+#include <linux/if_arp.h>                                                                                                                                             
+#include <linux/if_ether.h>                                                                                                                                           
+                                                                                                                                                                      
+kprobe:__netif_receive_skb,                                                                                                                                           
+kprobe:tun_net_xmit                                                                                                                                                   
+{                                                                                                                                                                     
+    $skb = (struct sk_buff *)arg0;                                                                                                                                    
+    $dev = $skb->dev;                                                                                                                                                 
+    $dev_name = $dev->name;                                                                                                                                           
+                                                                                                                                                                      
+    // 正确获取以太网头部
+    $mac_header_ptr = (uint64)($skb->head + $skb->mac_header);
+    $skb_protocol = (($skb->protocol & 0xff00) >> 8) | (($skb->protocol & 0xff) << 8);
+
+    if ($dev_name == "vnet42") {                                                                                                                                      
+        if ($skb_protocol == 0x0806) { // ARP 协议                                                                                                                    
+            // ARP 发送方 IP 地址获取方式
+            $arp = (struct arphdr *)($skb->head + $skb->network_header);
+            $sha_offset = sizeof(struct arphdr);
+            $spa_offset = $sha_offset + $arp->ar_hln;
+            
+            $ptr = (uint64)$arp;
+            $b1 = *((uint8*)($ptr + $spa_offset));                                                     
+            $b2 = *((uint8*)($ptr + $spa_offset + 1));                                                                                                                                    
+            $b3 = *((uint8*)($ptr + $spa_offset + 2));
+            $b4 = *((uint8*)($ptr + $spa_offset + 3));                                                 
+                                                                                   
+            // 判断 arp_spa 是否为 192.168.25.218                                                                                                                     
+            if ($b1 == 192 && $b2 == 168 && $b3 == 25 && $b4 == 218) {                                                                                              
+                printf("Packet type: %d, dev name: %s, skb protocol: %llx\n", $skb->pkt_type, $dev_name, $skb_protocol);
+                
+                // 正确计算 ARP 各字段的偏移量
+                $arp_sha = (uint64)$arp + sizeof(struct arphdr);
+                $arp_spa = $arp_sha + $arp->ar_hln;
+                $arp_tha = $arp_spa + $arp->ar_pln;
+                $arp_tpa = $arp_tha + $arp->ar_hln;
+                
+                printf("ARP fields from ARP header:\n");
+                printf("  Sender MAC (sha): %02x:%02x:%02x:%02x:%02x:%02x\n",
+                     *((uint8*)($arp_sha)), *((uint8*)($arp_sha + 1)),
+                     *((uint8*)($arp_sha + 2)), *((uint8*)($arp_sha + 3)),
+                     *((uint8*)($arp_sha + 4)), *((uint8*)($arp_sha + 5)));
+                     
+                printf("  Target MAC (tha): %02x:%02x:%02x:%02x:%02x:%02x\n",
+                     *((uint8*)($arp_tha)), *((uint8*)($arp_tha + 1)),
+                     *((uint8*)($arp_tha + 2)), *((uint8*)($arp_tha + 3)),
+                     *((uint8*)($arp_tha + 4)), *((uint8*)($arp_tha + 5)));
+                
+                printf("Ethernet header MAC addresses:\n");
+                printf("  Source MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+                     *((uint8*)($mac_header_ptr + 6)), *((uint8*)($mac_header_ptr + 7)),
+                     *((uint8*)($mac_header_ptr + 8)), *((uint8*)($mac_header_ptr + 9)),
+                     *((uint8*)($mac_header_ptr + 10)), *((uint8*)($mac_header_ptr + 11)));
+                     
+                printf("  Dest MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
+                     *((uint8*)($mac_header_ptr + 0)), *((uint8*)($mac_header_ptr + 1)),
+                     *((uint8*)($mac_header_ptr + 2)), *((uint8*)($mac_header_ptr + 3)),
+                     *((uint8*)($mac_header_ptr + 4)), *((uint8*)($mac_header_ptr + 5)));
+                
+                printf("ARP packet operation: %s\n", func);                
+                printf("  Interface: %s\n", $dev_name);
+                printf("  Process: %s (PID: %d)\n", comm, pid);                 
+                // 获取并转换 ARP 操作码
+                $arp_op_raw = $arp->ar_op;
+                $arp_op = (($arp_op_raw & 0xff00) >> 8) | (($arp_op_raw & 0xff) << 8);
+                printf("  ARP op code: %d (%s)\n", $arp_op, 
+                       $arp_op == 1 ? "Request" : ($arp_op == 2 ? "Reply" : "Other"));
+                printf("  Sender Protocol Address (spa): %u.%u.%u.%u\n", $b1, $b2, $b3, $b4);
+                printf("  Stack trace:\n%s\n", kstack);            
+            }
+        }         
+        @[comm, $dev_name] = count();    
+    }
+}
+
+END
+{
+    printf("\nDrop count by process and interface:\n");    print(@);
+    clear(@);
+}

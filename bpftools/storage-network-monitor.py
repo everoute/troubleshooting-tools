@@ -292,6 +292,7 @@ def print_kfree_drop_event(cpu, data, size):
             error_msg = "EINVAL: Invalid argument"
         elif error_code == 14:
             error_msg = "BPF_MAX_STACK_DEPTH exceeded"
+            return
         elif error_code == 16:
             error_msg = "Resource temporarily unavailable"
         elif error_code == 524:
@@ -328,3 +329,4 @@ while True:
             log_file.write("\n=== Monitoring ended at {} ===\n".format(strftime('%Y-%m-%d %H:%M:%S')))
             log_file.close()
         exit()
+

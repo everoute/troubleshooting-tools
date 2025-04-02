@@ -69,6 +69,7 @@ bpf_text = """
 #include <linux/tcp.h>
 #include <linux/udp.h>
 #include <linux/netdevice.h>
+#include <linux/if_vlan.h>
 
 BPF_HASH(ipv4_count, u32, u64);
 BPF_STACK_TRACE(stack_traces, 8192);  
@@ -85,6 +86,7 @@ struct dropped_skb_data_t {
     u32 daddr;
     u16 sport;
     u16 dport;
+    u16 vlan_id;
     u8 protocol;
     u8 icmp_type;
     u8 icmp_code;
@@ -130,6 +132,12 @@ int trace_kfree_skb(struct pt_regs *ctx)
     data.saddr = iph.saddr;
     data.daddr = iph.daddr;
     data.protocol = iph.protocol;
+    data.vlan_id = 0;
+
+    // Read vlan_tci and extract VLAN ID
+    unsigned short vlan_tci = 0;
+    vlan_tci = skb->vlan_tci;
+    data.vlan_id = vlan_tci & 0x0FFF;
 
     // Use only BPF_F_FAST_STACK_CMP to minimize stack depth issues
     // The stack will be compared by hash only, which avoids the BPF_MAX_STACK_DEPTH exceeded error
@@ -220,11 +228,13 @@ def print_kfree_drop_event(cpu, data, size):
                 
             # Now print the actual stack trace
             log_output("Time: %s  PID: %-6d  Comm: %s" % (
-                strftime("%H:%M:%S"), event.pid, event.comm.decode('utf-8')))
-            log_output("Source IP: %-15s  Destination IP: %-15s  Protocol: %s" % (
+                strftime("%Y-%m-%d %H:%M:%S"), event.pid, event.comm.decode('utf-8')))
+            log_output("Source IP: %-15s  Destination IP: %-15s  Protocol: %s%s" % (
                 inet_ntop(AF_INET, pack("I", event.saddr)),
                 inet_ntop(AF_INET, pack("I", event.daddr)),
-                protocol_str))
+                protocol_str,
+                "  VLAN: %d" % event.vlan_id 
+            ))
             
             # Protocol specific info
             if event.protocol == socket.IPPROTO_ICMP:

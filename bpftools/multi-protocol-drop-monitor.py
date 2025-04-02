@@ -88,6 +88,8 @@ struct dropped_skb_data_t {
     u8 protocol;
     u8 icmp_type;
     u8 icmp_code;
+    u16 ip_id;
+    u16 vlan_id;
     int kernel_stack_id;
     int user_stack_id;
     char ifname[IFNAMSIZ];
@@ -130,6 +132,13 @@ int trace_kfree_skb(struct pt_regs *ctx)
     data.saddr = iph.saddr;
     data.daddr = iph.daddr;
     data.protocol = iph.protocol;
+    data.ip_id = ntohs(iph.id);
+    data.vlan_id = 0;
+
+    // Read vlan_tci and extract VLAN ID
+    unsigned short vlan_tci = 0;
+    vlan_tci = skb->vlan_tci;
+    data.vlan_id = vlan_tci & 0x0FFF;
 
     // Use only BPF_F_FAST_STACK_CMP to minimize stack depth issues
     // The stack will be compared by hash only, which avoids the BPF_MAX_STACK_DEPTH exceeded error
@@ -199,10 +208,27 @@ b.attach_kprobe(event="kfree_skb", fn_name="trace_kfree_skb")
 def print_kfree_drop_event(cpu, data, size):
     event = b["kfree_drops"].event(data)
     protocol_str = {socket.IPPROTO_ICMP: "ICMP", socket.IPPROTO_TCP: "TCP", socket.IPPROTO_UDP: "UDP"}.get(event.protocol, str(event.protocol))
+                
+    # Now print the actual stack trace
+    log_output("Time: %s  PID: %-6d  Comm: %s" % (
+        strftime("%Y-%m-%d %H:%M:%S"), event.pid, event.comm.decode('utf-8')))
+    log_output("Source IP: %-15s  Destination IP: %-15s  Protocol: %s  IP ID: %d  VLAN: %d" % (
+        inet_ntop(AF_INET, pack("I", event.saddr)),
+        inet_ntop(AF_INET, pack("I", event.daddr)),
+        protocol_str,
+        event.ip_id,
+        event.vlan_id))
+    
+    # Protocol specific info
+    if event.protocol == socket.IPPROTO_ICMP:
+        log_output("ICMP Type: %-2d  Code: %-2d" % (event.icmp_type, event.icmp_code))
+    elif event.protocol in [socket.IPPROTO_TCP, socket.IPPROTO_UDP]:
+        log_output("Source Port: %-5d  Destination Port: %-5d" % (event.sport, event.dport))
+    
+    log_output("Device: %s" % event.ifname.decode('utf-8'))
     
     # Stack trace with better filtering
     stack_id = event.kernel_stack_id
-    
     if stack_id >= 0:
         stack_trace = []
         stack_syms = []
@@ -215,25 +241,6 @@ def print_kfree_drop_event(cpu, data, size):
             log_output("  Failed to retrieve stack trace (ID: %d)" % stack_id)
 
         if stack_trace:
-            if is_normal_packet_release(stack_syms, event.protocol):
-                return
-                
-            # Now print the actual stack trace
-            log_output("Time: %s  PID: %-6d  Comm: %s" % (
-                strftime("%H:%M:%S"), event.pid, event.comm.decode('utf-8')))
-            log_output("Source IP: %-15s  Destination IP: %-15s  Protocol: %s" % (
-                inet_ntop(AF_INET, pack("I", event.saddr)),
-                inet_ntop(AF_INET, pack("I", event.daddr)),
-                protocol_str))
-            
-            # Protocol specific info
-            if event.protocol == socket.IPPROTO_ICMP:
-                log_output("ICMP Type: %-2d  Code: %-2d" % (event.icmp_type, event.icmp_code))
-            elif event.protocol in [socket.IPPROTO_TCP, socket.IPPROTO_UDP]:
-                log_output("Source Port: %-5d  Destination Port: %-5d" % (event.sport, event.dport))
-            
-            log_output("Device: %s" % event.ifname.decode('utf-8'))
-    
             log_output("Stack Trace:")
             for sym in stack_syms:
                 log_output("  %s" % sym)
@@ -297,7 +304,7 @@ def print_kfree_drop_event(cpu, data, size):
         elif error_code == 524:
             error_msg = "Uprobe not found"
         
-        log_output("  Failed to capture stack trace (Error: %s, code: %d)" % 
+        log_output("  Failed to capture kernel stack trace (Error: %s, code: %d)" % 
               (error_msg, error_code))
 
 
@@ -306,16 +313,6 @@ normal_patterns = {
     'tcp_v4_rcv': ['tcp_v4_rcv'],
     'skb_release_data': ['skb_release_data', '__kfree_skb', 'tcp_recvmsg']
 }
-
-def is_normal_packet_release(stack_syms, protocol):
-    stack_str = ' '.join([sym.lower() for sym in stack_syms])
-    
-    if protocol == socket.IPPROTO_ICMP:
-        return 'icmp_rcv' in stack_str
-    if protocol == socket.IPPROTO_TCP:
-        return 'tcp_v4_rcv' in stack_str or ('skb_release_data' in stack_str and 'tcp_recvmsg' in stack_str)
-    
-    return False
 
 b["kfree_drops"].open_perf_buffer(print_kfree_drop_event)
 

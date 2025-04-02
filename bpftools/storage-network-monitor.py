@@ -87,6 +87,7 @@ struct dropped_skb_data_t {
     u16 sport;
     u16 dport;
     u16 vlan_id;
+    u16 ip_id;
     u8 protocol;
     u8 icmp_type;
     u8 icmp_code;
@@ -133,6 +134,7 @@ int trace_kfree_skb(struct pt_regs *ctx)
     data.daddr = iph.daddr;
     data.protocol = iph.protocol;
     data.vlan_id = 0;
+    data.ip_id = ntohs(iph.id);
 
     // Read vlan_tci and extract VLAN ID
     unsigned short vlan_tci = 0;
@@ -233,7 +235,8 @@ def print_kfree_drop_event(cpu, data, size):
                 inet_ntop(AF_INET, pack("I", event.saddr)),
                 inet_ntop(AF_INET, pack("I", event.daddr)),
                 protocol_str,
-                "  VLAN: %d" % event.vlan_id 
+                "  VLAN: %d" % event.vlan_id,
+                "  IP ID: %d" % event.ip_id
             ))
             
             # Protocol specific info

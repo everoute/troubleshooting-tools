@@ -1,0 +1,161 @@
+#!/usr/bin/env bpftrace
+#/* tcp drop watch for any processes by probing kfree_skb */ 
+
+// Add required kernel headers
+#include <linux/skbuff.h>
+#include <linux/ip.h>
+#include <linux/ptr_ring.h>
+#include <linux/netdevice.h>
+#include <linux/kernel.h>
+#include <net/ip.h>
+
+
+struct tun_struct {
+	struct tun_file __rcu	*tfiles[256];
+	unsigned int            numqueues;
+	unsigned int 		flags;
+	kuid_t			owner;
+	kgid_t			group;
+
+	struct net_device	*dev;
+	netdev_features_t	set_features;
+
+	int			align;
+	int			vnet_hdr_sz;
+	int			sndbuf;
+	struct sock_fprog	fprog;
+	bool			filter_attached;
+	int debug;
+	spinlock_t lock;
+	struct timer_list flow_gc_timer;
+	unsigned long ageing_time;
+	unsigned int numdisabled;
+	struct list_head disabled;
+	void *security;
+	u32 flow_count;
+	u32 rx_batched;
+	struct tun_pcpu_stats __percpu *pcpu_stats;
+	struct bpf_prog __rcu *xdp_prog;
+	struct tun_prog __rcu *steering_prog;
+	struct tun_prog __rcu *filter_prog;
+}
+
+struct tun_file {
+	struct sock sk;
+	long: 64;
+	long: 64;
+	long: 64;
+	long: 64;
+	struct socket socket;
+	struct tun_struct *tun;
+	struct fasync_struct *fasync;
+	unsigned int flags;
+	union {
+		u16 queue_index;
+		unsigned int ifindex;
+	};
+	struct napi_struct napi;
+	bool napi_enabled;
+	bool napi_frags_enabled;
+	struct mutex napi_mutex;
+	struct list_head next;
+	struct tun_struct *detached;
+	long: 64;
+	long: 64;
+	long: 64;
+	struct ptr_ring tx_ring;
+	struct xdp_rxq_info xdp_rxq;
+};
+
+
+//kprobe:dev_hard_start_xmit
+//{
+//  // Firt arg is sk_buff.
+//    $skb = (struct sk_buff *)arg0;
+//    $skb_net_dev = $skb->dev;
+//    $skb_dev_name = $skb->dev->name;
+//    $skb_dev_index = $skb_net_dev->ifindex;
+//
+//    $mac_header = (struct ethhdr *) $skb->data;
+//    $eth_proto = $mac_header->h_proto;
+//    $iph = (struct iphdr *)($skb->head + $skb->network_header);
+//    $sip = ntop(AF_INET, $iph->saddr);
+//    $dip = ntop(AF_INET, $iph->daddr);
+//    $sip_str = str($iph->saddr);
+//    $dip_str = str($iph->daddr);
+//    if ($skb_dev_name == "vnet11") {
+//      printf("dev_hard_start_xmit probe: %s (PID: %d): dev %s, kstack: %s, ustack: %s\n", comm, pid, $skb_dev_name, kstack, ustack);
+//      printf("##### end dev_hard_start_xmit probe\n\n\n");
+//    }
+//}
+
+kprobe:tun_net_xmit
+{
+  // Firt arg is sk_buff.
+    $skb = (struct sk_buff *)arg0;
+    $skb_net_dev = $skb->dev;
+    $skb_dev_name = $skb->dev->name;
+    $skb_dev_index = $skb_net_dev->ifindex;
+
+    //$dev = (struct net_device *)arg1; 
+    //$priv = (unsigned char *)$dev + ALIGN(sizeof(struct net_device), NETDEV_ALIGN);
+
+     $dev = (struct net_device *)arg1;
+    // 手动计算对齐后的大小
+    $aligned_size = (sizeof(struct net_device) + NETDEV_ALIGN - 1) & ~(NETDEV_ALIGN - 1);
+    //$priv = (unsigned char *)$dev + $aligned_size;
+    //$tun = (struct tun_struct *)$priv;
+    $tun = (struct tun_struct *)($dev + $aligned_size);
+    $tx_queue = (uint64) $skb->queue_mapping;
+    $tfile = $tun->tfiles[1];
+    $ptr_ring = $tfile->tx_ring;
+    $ptr_ring_size = $ptr_ring.size;
+    $ptr_ring_producer = $ptr_ring.producer;
+    $ptr_ring_queue = $ptr_ring.queue;
+    $ptr_ring_producer_plus_one = ($ptr_ring.producer + 1);
+    //$ptr_ring_producer_next = $ptr_ring_producer_plus_one % $ptr_ring_size;
+    $ptr_ring_producer_next = $ptr_ring_producer_plus_one; 
+    if ($ptr_ring_producer_next == $ptr_ring_size) {
+        $ptr_ring_producer_next = 0;
+    }
+    $ptr_ring_consumer_head = $ptr_ring.consumer_head;
+    $ptr_ring_consumer_tail = $ptr_ring.consumer_tail;
+    $tun_dev = $tun->dev;
+
+    $mac_header = (struct ethhdr *) $skb->data;
+    $eth_proto = $mac_header->h_proto;
+    $iph = (struct iphdr *)($skb->head + $skb->network_header);
+    $sip = ntop(AF_INET, $iph->saddr);
+    $dip = ntop(AF_INET, $iph->daddr);
+    $sip_str = str($iph->saddr);
+    $dip_str = str($iph->daddr);
+    //if ($skb_dev_name == "vnet11" && $ptr_ring_producer_next == $ptr_ring_consumer_tail) {
+    //if ($skb_dev_name == "vnet11" && $ptr_ring_producer == $ptr_ring_consumer_tail) {
+    if ($skb_dev_name == "vnet11") {
+      printf("##### tun dev name: %s, ptr_ring_size: %d, producer: %d, consumer_head: %d, consumer_tail: %d, queue: %d\n", $tun_dev->name, $ptr_ring_size, $ptr_ring_producer, $ptr_ring_consumer_head, $ptr_ring_consumer_tail, $ptr_ring_queue);
+      printf("tun_net_xmit probe: %s (PID: %d): dev %s, kstack: %s, ustack: %s\n", comm, pid, $skb_dev_name, kstack, ustack);
+      printf("##### end tun_net_xmit probe\n\n\n");
+    }
+}
+
+//kretprobe:tun_net_xmit
+//{
+//    if ( retval != 0) {
+//        printf("#### tun_net_xmit ret value : %d\n", retval); 
+//    }
+//}
+
+// ovs netdev vport netdev ops send callback, dev_queue_xmit,  dev_hard_start_xmit (maybe traverse qdisc routine), xmit_one, netdev_start_xmit, netdev ops : ndo_start_xmit(tun_net_xmit)    
+//tracepoint:net:net_dev_xmit
+//{
+//    $skb = (struct sk_buff *)args->skbaddr;
+//    $skb_net_dev = $skb->dev;
+//    $skb_dev_name = $skb->dev->name;
+//    $skb_dev_index = $skb_net_dev->ifindex;
+//
+//    //if ($skb_dev_name == "vnet11" && args->rc != 0) {
+//    if ($skb_dev_name == "vnet11") {
+//      printf("tun_net_xmit probe: %s (PID: %d): dev %s, rc=%d, kstack: %s, ustack: %s\n", comm, pid, $skb_dev_name, args->rc, kstack, ustack);
+//      printf("##### end tun_net_xmit probe\n\n\n");
+//    }
+//}

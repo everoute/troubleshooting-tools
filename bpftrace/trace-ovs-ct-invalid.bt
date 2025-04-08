@@ -1,0 +1,254 @@
+#!/usr/bin/env bpftrace
+#/* tcp drop watch for any processes by probing kfree_skb */ 
+
+// Add required kernel headers
+#include <linux/skbuff.h>
+#include <linux/ip.h>
+#include <linux/netdevice.h>
+#include <linux/netfilter/nf_conntrack_tcp.h>
+#include <net/ip.h>
+
+//kprobe:consume_skb
+//{
+//  // Firt arg is sk_buff.
+//    $skb = (struct sk_buff *)arg0;
+//    $drop_reason = arg1;
+//    $skb_net_dev = $skb->dev;
+//    $skb_dev_name = $skb->dev->name;
+//    $skb_dev_index = $skb_net_dev->ifindex;
+//
+//  // Get network header, src IP and dst IP.
+//    //$iph = (struct iphdr *)($skb->head + $skb->network_header);
+//    //$sip = ntop(AF_INET, $iph->saddr);
+//    //$dip = ntop(AF_INET, $iph->daddr);
+//
+//    if ($skb_dev_name == "_d95b2e8ad96b" || $skb_dev_name == "cnibr0") {
+//      //printf("SKB dropped on process: %s->%s, kstack: %s\n", $sip, $dip, kstack);
+//      printf("SKB dropped on process %s (PID: %d): dev %s, drop reason: %d, kstack: %s, ustack: %s\n", comm, pid, $skb_dev_name, $drop_reason, kstack, ustack);
+//      printf("##### end consume_skb probe\n\n\n")
+//    }
+//    //printf("SKB dropped on process %s (PID: %d): dev %s, kstack: %s\n", comm, pid, $skb_dev_name, kstack);
+//    //printf("SKB dropped on process %s (PID: %d): dev %d, kstack: %s\n", comm, pid, $skb_dev_index, kstack);
+//
+//}
+//
+////kprobe:__kfree_skb
+////kprobe:ovs_dp_upcall
+//kprobe:kfree_skb_reason
+//{
+//  // Firt arg is sk_buff.
+//    $skb = (struct sk_buff *)arg0;
+//    $drop_reason = arg1;
+//    $skb_net_dev = $skb->dev;
+//    $skb_dev_name = $skb->dev->name;
+//    $skb_dev_index = $skb_net_dev->ifindex;
+//
+//  // Get network header, src IP and dst IP.
+//    //$iph = (struct iphdr *)($skb->head + $skb->network_header);
+//    //$sip = ntop(AF_INET, $iph->saddr);
+//    //$dip = ntop(AF_INET, $iph->daddr);
+//
+//    if ($skb_dev_name == "_d95b2e8ad96b" || $skb_dev_name == "cnibr0") {
+//      //printf("SKB dropped on process: %s->%s, kstack: %s\n", $sip, $dip, kstack);
+//      printf("SKB dropped on process %s (PID: %d): dev %s, drop reason: %d, kstack: %s, ustack: %s\n", comm, pid, $skb_dev_name, $drop_reason, kstack, ustack);
+//      printf("##### end kfree_skb_reason probe\n\n\n")
+//    }
+//    //printf("SKB dropped on process %s (PID: %d): dev %s, kstack: %s\n", comm, pid, $skb_dev_name, kstack);
+//    //printf("SKB dropped on process %s (PID: %d): dev %d, kstack: %s\n", comm, pid, $skb_dev_index, kstack);
+//
+//}
+
+kprobe:nf_conntrack_in
+{
+    $skb = (struct sk_buff *)arg3;
+    $skb_net_dev = $skb->dev;
+    $skb_dev_name = $skb->dev->name;
+    $skb_dev_index = $skb_net_dev->ifindex;
+    $iph = (struct iphdr *)($skb->head + $skb->network_header);
+    $sip = ntop(AF_INET, $iph->saddr);
+    $dip = ntop(AF_INET, $iph->daddr);
+    $sip_str = str($iph->saddr);
+    $dip_str = str($iph->daddr);
+    $nfct = $skb->_nfct;
+
+    //if ( $sip_str == "10.60.112.186" && $dip_str == "10.60.6.91" ) {
+    //if ( $sip == ntop(AF_INET, 0x0A3C70BA) && $dip == ntop(AF_INET, 0x0A3C065B) ) {
+    //        printf("nf_conntrack_in dev_name: %s, sip: %s, dip: %s\n", $skb_dev_name, $sip, $dip);
+    //}
+
+    //if ( $skb_dev_name != "port-storage" && $skb_dev_name != "port-mgt" && $skb_dev_name != "enp59s0f1" && $skb_dev_name != "enp134s0f2" && $skb_dev_name != "enp134s0f3") {
+    if ( $skb_dev_name == "vnet9" || $skb_dev_name == "vnet10") { 
+	    printf("nf_conntrack_in dev_name: %s, sip: %s, dip: %s, nfct: %d,  kstack: %s, ustack: %s\n", $skb_dev_name, $sip, $dip, $nfct, kstack, ustack);
+    }
+    //printf("nf_conntrack_in dev_name: %s, sip: %s, dip: %s, nfct: %d,  kstack: %s, ustack: %s\n", $skb_dev_name, $sip, $dip, $nfct, kstack, ustack);
+
+}
+
+kprobe:tcp_packet
+{
+    $skb = (struct sk_buff *)arg1;
+    $skb_net_dev = $skb->dev;
+    $skb_dev_name = $skb->dev->name;
+    $skb_dev_index = $skb_net_dev->ifindex;
+    $iph = (struct iphdr *)($skb->head + $skb->network_header);
+    $sip = ntop(AF_INET, $iph->saddr);
+    $dip = ntop(AF_INET, $iph->daddr);
+    $sip_str = str($iph->saddr);
+    $dip_str = str($iph->daddr);
+    $nfct = $skb->_nfct;
+
+    //if ( $sip_str == "10.60.112.186" && $dip_str == "10.60.6.91" ) {
+    //if ( $sip == ntop(AF_INET, 0x0A3C70BA) && $dip == ntop(AF_INET, 0x0A3C065B) ) {
+    //        printf("nf_conntrack_in dev_name: %s, sip: %s, dip: %s\n", $skb_dev_name, $sip, $dip);
+    //}
+
+    //if ( $skb_dev_name != "port-storage" && $skb_dev_name != "port-mgt" && $skb_dev_name != "enp59s0f1" && $skb_dev_name != "enp134s0f2" && $skb_dev_name != "enp134s0f3") {
+    if ( $skb_dev_name == "vnet9" || $skb_dev_name == "vnet10") { 
+	    printf("tcp_packet dev_name: %s, sip: %s, dip: %s, nfct: %d,  kstack: %s, ustack: %s\n", $skb_dev_name, $sip, $dip, $nfct, kstack, ustack);
+    }
+    //printf("nf_conntrack_in dev_name: %s, sip: %s, dip: %s, nfct: %d,  kstack: %s, ustack: %s\n", $skb_dev_name, $sip, $dip, $nfct, kstack, ustack);
+}
+
+//kretprobe:tcp_packet
+//{
+//    printf("tcp_packet ret: %d\n", retval);
+//}
+
+kprobe:tcp_in_window
+{
+    $skb = (struct sk_buff *)arg4;
+    $skb_net_dev = $skb->dev;
+    $skb_dev_name = $skb->dev->name;
+    $skb_dev_index = $skb_net_dev->ifindex;
+    $iph = (struct iphdr *)($skb->head + $skb->network_header);
+    $sip = ntop(AF_INET, $iph->saddr);
+    $dip = ntop(AF_INET, $iph->daddr);
+    $sip_str = str($iph->saddr);
+    $dip_str = str($iph->daddr);
+    $nfct = $skb->_nfct;
+
+    $dir = arg2;
+    $ip_ct_tcp = (struct ip_ct_tcp *)arg1;
+    if ($dir == 0) {
+        $ip_ct_dir_sender = $ip_ct_tcp->seen[0];
+        $ip_ct_dir_reveiver = $ip_ct_tcp->seen[1];
+    } else {
+        $ip_ct_dir_sender = $ip_ct_tcp->seen[1];
+        $ip_ct_dir_reveiver = $ip_ct_tcp->seen[0];
+    }
+    $sender_td_end = $ip_ct_dir_sender.td_end; 
+    $sender_td_maxend = $ip_ct_dir_sender.td_maxend; 
+    $sender_td_maxwin = $ip_ct_dir_sender.td_maxwin;
+    $sender_td_maxack = $ip_ct_dir_sender.td_maxack;
+    $sender_flags = $ip_ct_dir_sender.flags;
+    $receiver_td_end = $ip_ct_dir_reveiver.td_end; 
+    $receiver_td_maxend = $ip_ct_dir_reveiver.td_maxend; 
+    $receiver_td_maxwin = $ip_ct_dir_reveiver.td_maxwin;
+    $receiver_td_maxack = $ip_ct_dir_reveiver.td_maxack;
+    $receiver_flags = $ip_ct_dir_reveiver.flags;
+    $ip_ct_state = $ip_ct_tcp->state;
+
+    //if ( $sip_str == "10.60.112.186" && $dip_str == "10.60.6.91" ) {
+    //if ( $sip == ntop(AF_INET, 0x0A3C70BA) && $dip == ntop(AF_INET, 0x0A3C065B) ) {
+    //        printf("nf_conntrack_in dev_name: %s, sip: %s, dip: %s\n", $skb_dev_name, $sip, $dip);
+    //}
+
+    //if ( $skb_dev_name != "port-storage" && $skb_dev_name != "port-mgt" && $skb_dev_name != "enp59s0f1" && $skb_dev_name != "enp134s0f2" && $skb_dev_name != "enp134s0f3") {
+    if ( $skb_dev_name == "vnet9" || $skb_dev_name == "vnet10") { 
+	    printf("sender td_end: %d, td_maxend: %d, td_maxwin: %d, td_maxack: %d, ip ct state: %d, dir: %d\n", $sender_td_end, $sender_td_maxend, $sender_td_maxwin, $sender_td_maxack, $ip_ct_state, $dir);
+	    printf("receiver td_end: %d, td_maxend: %d, td_maxwin: %d, td_maxack: %d, ip ct state: %d, dir: %d\n", $receiver_td_end, $receiver_td_maxend, $receiver_td_maxwin, $receiver_td_maxack, $ip_ct_state, $dir);
+	    printf("tcp_in_window dev_name: %s, sip: %s, dip: %s, nfct: %d,  kstack: %s, ustack: %s\n", $skb_dev_name, $sip, $dip, $nfct, kstack, ustack);
+    }
+}
+
+//kretprobe:tcp_in_window
+//{
+//    printf("tcp_in_window ret: %d\n", retval);
+//}
+
+kprobe:__nf_ct_refresh_acct
+{
+    $skb = (struct sk_buff *)arg2;
+    $skb_net_dev = $skb->dev;
+    $skb_dev_name = $skb->dev->name;
+    $skb_dev_index = $skb_net_dev->ifindex;
+    $iph = (struct iphdr *)($skb->head + $skb->network_header);
+    $sip = ntop(AF_INET, $iph->saddr);
+    $dip = ntop(AF_INET, $iph->daddr);
+    $sip_str = str($iph->saddr);
+    $dip_str = str($iph->daddr);
+    $nfct = $skb->_nfct;
+
+    //if ( $sip_str == "10.60.112.186" && $dip_str == "10.60.6.91" ) {
+    //if ( $sip == ntop(AF_INET, 0x0A3C70BA) && $dip == ntop(AF_INET, 0x0A3C065B) ) {
+    //        printf("nf_conntrack_in dev_name: %s, sip: %s, dip: %s\n", $skb_dev_name, $sip, $dip);
+    //}
+
+    //if ( $skb_dev_name != "port-storage" && $skb_dev_name != "port-mgt" && $skb_dev_name != "enp59s0f1" && $skb_dev_name != "enp134s0f2" && $skb_dev_name != "enp134s0f3") {
+    if ( $skb_dev_name == "vnet9" || $skb_dev_name == "vnet10") { 
+	    printf("__nf_ct_refresh_acct dev_name: %s, sip: %s, dip: %s, nfct: %d,  kstack: %s, ustack: %s\n", $skb_dev_name, $sip, $dip, $nfct, kstack, ustack);
+    }
+}
+
+kprobe:ovs_ct_update_key
+{
+    $skb = (struct sk_buff *)arg0;
+    $post_ct = arg3;
+    $skb_net_dev = $skb->dev;
+    $skb_dev_name = $skb->dev->name;
+    $skb_dev_index = $skb_net_dev->ifindex;
+    $iph = (struct iphdr *)($skb->head + $skb->network_header);
+    $sip = ntop(AF_INET, $iph->saddr);
+    $dip = ntop(AF_INET, $iph->daddr);
+    $sip_str = str($iph->saddr);
+    $dip_str = str($iph->daddr);
+    $nfct = $skb->_nfct;
+
+    //if ( $sip_str == "10.60.112.186" && $dip_str == "10.60.6.91" ) {
+    //if ( $sip == ntop(AF_INET, 0x0A3C70BA) && $dip == ntop(AF_INET, 0x0A3C065B) ) {
+    //        printf("ovs ct_update_key dev_name: %s, sip: %s, dip: %s\n", $skb_dev_name, $sip, $dip);
+    //}
+
+    //if ( $skb_dev_name != "port-storage" && $skb_dev_name != "port-mgt" && $skb_dev_name != "enp59s0f1" && $skb_dev_name != "enp134s0f2" && $skb_dev_name != "enp134s0f3") {
+    if ( $skb_dev_name == "vnet9" || $skb_dev_name == "vnet10") { 
+	    printf("ovs ct_update_key dev_name: %s, post_ct: %d, sip: %s, dip: %s, nfct: %d,  kstack: %s, ustack: %s\n", $skb_dev_name, $post_ct, $sip, $dip, $nfct, kstack, ustack);
+    }
+
+}
+
+
+kprobe:__ovs_ct_lookup
+{
+    $skb = (struct sk_buff *)arg0;
+    $skb_net_dev = $skb->dev;
+    $skb_dev_name = $skb->dev->name;
+    $skb_dev_index = $skb_net_dev->ifindex;
+    $iph = (struct iphdr *)($skb->head + $skb->network_header);
+    $sip = ntop(AF_INET, $iph->saddr);
+    $dip = ntop(AF_INET, $iph->daddr);
+    $sip_str = str($iph->saddr);
+    $dip_str = str($iph->daddr);
+    $nfct = $skb->_nfct;
+
+    //if ( $sip_str == "10.60.112.186" && $dip_str == "10.60.6.91" ) {
+    //if ( $sip == ntop(AF_INET, 0x0A3C70BA) && $dip == ntop(AF_INET, 0x0A3C065B) ) {
+    //        printf("nf_conntrack_in dev_name: %s, sip: %s, dip: %s\n", $skb_dev_name, $sip, $dip);
+    //}
+
+    //if ( $skb_dev_name != "port-storage" && $skb_dev_name != "port-mgt" && $skb_dev_name != "enp59s0f1" && $skb_dev_name != "enp134s0f2" && $skb_dev_name != "enp134s0f3") {
+    if ( $skb_dev_name == "vnet9" || $skb_dev_name == "vnet10") { 
+	    printf("__ovs_ct_lookup dev_name: %s, sip: %s, dip: %s, nfct: %d,  kstack: %s, ustack: %s\n", $skb_dev_name, $sip, $dip, $nfct, kstack, ustack);
+    }
+}
+
+//kprobe:__ovs_ct_update_key
+//{
+//    //$key = (struct sw_flow_key *)arg0;
+//    $state = arg1;
+//    $ct = arg3;
+//    //$nf_conn = (struct nf_conn *)arg3;
+//    if ( $state != 0 ) {
+//	    printf("__ovs_ct_update_key, state: %d, ct: %d\n", $state, $ct);
+//    }
+//}
+

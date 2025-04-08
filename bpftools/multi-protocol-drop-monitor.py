@@ -59,150 +59,31 @@ def log_output(message):
     else:
         print(message)
 
-bpf_text = """
-#include <uapi/linux/ptrace.h>
-#include <net/sock.h>
-#include <bcc/proto.h>
-#include <linux/skbuff.h>
-#include <linux/icmp.h>
-#include <linux/ip.h>
-#include <linux/tcp.h>
-#include <linux/udp.h>
-#include <linux/netdevice.h>
-
-BPF_HASH(ipv4_count, u32, u64);
-BPF_STACK_TRACE(stack_traces, 8192);  
-#define SRC_IP 0x%x
-#define DST_IP 0x%x
-#define SRC_PORT %d
-#define DST_PORT %d
-#define PROTOCOL %d
-
-struct dropped_skb_data_t {
-    u32 pid;
-    u64 ts;
-    u32 saddr;
-    u32 daddr;
-    u16 sport;
-    u16 dport;
-    u8 protocol;
-    u8 icmp_type;
-    u8 icmp_code;
-    u16 ip_id;
-    u16 vlan_id;
-    int kernel_stack_id;
-    int user_stack_id;
-    char ifname[IFNAMSIZ];
-    char comm[TASK_COMM_LEN];
-    u32 drop_reason;
-};
-BPF_PERF_OUTPUT(kfree_drops);
-
-int trace_kfree_skb(struct pt_regs *ctx)
-{
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
-    u32 drop_reason = (u32)PT_REGS_PARM2(ctx);
-    
-    if (skb == NULL)
-        return 0;
-
-    u16 protocol;
-    bpf_probe_read_kernel(&protocol, sizeof(protocol), &skb->protocol);
-    if (protocol != htons(ETH_P_IP))
-        return 0;
-
-    // Read head pointer
-    unsigned char *head;
-    bpf_probe_read_kernel(&head, sizeof(head), &skb->head);
-
-    // Extract IP header
-    struct iphdr iph;
-    bpf_probe_read_kernel(&iph, sizeof(iph), skb->head + skb->network_header);
-    u32 saddr = iph.saddr;
-    u32 daddr = iph.daddr;
-
-    struct net_device *dev;
-    char ifname[IFNAMSIZ] = {0};
-    bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev);
-    bpf_probe_read_kernel_str(ifname, IFNAMSIZ, dev->name);
-
-    struct dropped_skb_data_t data = {};
-    data.pid = bpf_get_current_pid_tgid();
-    data.ts = bpf_ktime_get_ns();
-    data.saddr = iph.saddr;
-    data.daddr = iph.daddr;
-    data.protocol = iph.protocol;
-    data.ip_id = ntohs(iph.id);
-    data.vlan_id = 0;
-
-    // Read vlan_tci and extract VLAN ID
-    unsigned short vlan_tci = 0;
-    vlan_tci = skb->vlan_tci;
-    data.vlan_id = vlan_tci & 0x0FFF;
-
-    // Use only BPF_F_FAST_STACK_CMP to minimize stack depth issues
-    // The stack will be compared by hash only, which avoids the BPF_MAX_STACK_DEPTH exceeded error
-    data.kernel_stack_id = stack_traces.get_stackid(ctx, BPF_F_FAST_STACK_CMP);
-    
-    // If that still fails, try with both FAST_STACK_CMP and REUSE_STACKID
-    if (data.kernel_stack_id < 0) {
-        data.kernel_stack_id = stack_traces.get_stackid(ctx, BPF_F_FAST_STACK_CMP | BPF_F_REUSE_STACKID);
-    }
-    
-    // Get user stack with the same optimizations
-    data.user_stack_id = stack_traces.get_stackid(ctx, BPF_F_FAST_STACK_CMP | BPF_F_USER_STACK);
-    if (data.user_stack_id < 0) {
-        data.user_stack_id = stack_traces.get_stackid(ctx, BPF_F_FAST_STACK_CMP | BPF_F_REUSE_STACKID | BPF_F_USER_STACK);
-    }
-
-    data.drop_reason = drop_reason;
-    bpf_probe_read_kernel_str(data.ifname, sizeof(data.ifname), ifname);
-    bpf_get_current_comm(&data.comm, sizeof(data.comm));
-
-    // Check IP addresses
-    if ((SRC_IP == 0 || saddr == SRC_IP) && (DST_IP == 0 || daddr == DST_IP)) {
-        // Check protocol
-        if (PROTOCOL == 0 || iph.protocol == PROTOCOL) {
-            if (iph.protocol == IPPROTO_ICMP) {
-                struct icmphdr icmph;
-                bpf_probe_read_kernel(&icmph, sizeof(icmph), skb->head + skb->transport_header);
-                data.icmp_type = icmph.type;
-                data.icmp_code = icmph.code;
-                kfree_drops.perf_submit(ctx, &data, sizeof(data));
-            } else if (iph.protocol == IPPROTO_TCP) {
-                struct tcphdr tcph;
-                bpf_probe_read_kernel(&tcph, sizeof(tcph), skb->head + skb->transport_header);
-                data.sport = ntohs(tcph.source);
-                data.dport = ntohs(tcph.dest);
-                if ((SRC_PORT == 0 || data.sport == SRC_PORT) && (DST_PORT == 0 || data.dport == DST_PORT)) {
-                    kfree_drops.perf_submit(ctx, &data, sizeof(data));
-                }
-            } else if (iph.protocol == IPPROTO_UDP) {
-                struct udphdr udph;
-                bpf_probe_read_kernel(&udph, sizeof(udph), skb->head + skb->transport_header);
-                data.sport = ntohs(udph.source);
-                data.dport = ntohs(udph.dest);
-                if ((SRC_PORT == 0 || data.sport == SRC_PORT) && (DST_PORT == 0 || data.dport == DST_PORT)) {
-                    kfree_drops.perf_submit(ctx, &data, sizeof(data));
-                }
-            } else {
-                // For other protocols, submit without port information
-                kfree_drops.perf_submit(ctx, &data, sizeof(data));
-            }
-        }
-    }
-
-    return 0;
-}
-"""
+# Load BPF C code from file
+bpf_c_file = os.path.join(os.path.dirname(__file__), "multi-protocol-drop-monitor.c")
+try:
+    with open(bpf_c_file, 'r') as f:
+        bpf_text_template = f.read()
+except Exception as e:
+    print("Error reading BPF C file ({}): {}".format(bpf_c_file, e))
+    exit(1)
 
 protocol_map = {'all': 0, 'icmp': socket.IPPROTO_ICMP, 'tcp': socket.IPPROTO_TCP, 'udp': socket.IPPROTO_UDP}
 protocol_num = protocol_map[args.protocol]
 
-b = BPF(text=bpf_text % (src_ip_hex, dst_ip_hex, src_port, dst_port, protocol_num))
+# Substitute placeholders in the loaded C code
+bpf_text = bpf_text_template % (src_ip_hex, dst_ip_hex, src_port, dst_port, protocol_num)
+
+# Initialize BPF
+try:
+    b = BPF(text=bpf_text)
+except Exception as e:
+    print("Error initializing BPF: {}".format(e))
+    # Optionally print the formatted BPF text for debugging
+    # print("Formatted BPF text:\n", bpf_text) 
+    exit(1)
 
 b.attach_kprobe(event="kfree_skb", fn_name="trace_kfree_skb")
-
 
 # Process events from perf buffer
 def print_kfree_drop_event(cpu, data, size):
@@ -306,13 +187,6 @@ def print_kfree_drop_event(cpu, data, size):
         
         log_output("  Failed to capture kernel stack trace (Error: %s, code: %d)" % 
               (error_msg, error_code))
-
-
-normal_patterns = {
-    'icmp_rcv': ['icmp_rcv'],
-    'tcp_v4_rcv': ['tcp_v4_rcv'],
-    'skb_release_data': ['skb_release_data', '__kfree_skb', 'tcp_recvmsg']
-}
 
 b["kfree_drops"].open_perf_buffer(print_kfree_drop_event)
 

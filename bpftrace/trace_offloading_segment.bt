@@ -1,0 +1,299 @@
+#!/usr/bin/env bpftrace
+#
+#include <linux/skbuff.h>
+#include <linux/ip.h>
+#include <linux/tcp.h>
+#include <linux/udp.h>
+#include <linux/socket.h>
+#include <linux/netdevice.h>
+#include <net/sock.h>
+
+//BEGIN
+//{
+//        printf("Tracing skb offloading ip tunnel handle offload ... Hit Ctrl-C to quit\n");
+//        printf("%-5s %-10s %-15s %-5s %-15s %-5s ", "PID", "COMM", "LADDR", "LPORT", "RADDR", "RPORT");
+//}
+
+//kprobe:iptunnel_handle_offloads
+//{
+//    printf("opening: %s, %s, %s\n", str(arg0), str(arg1), str(arg2));
+//    printf("opening: %d, %d, %d\n", sarg0, sarg1, sarg2);
+//    printf("opening: %d, %d, %d\n", arg0, arg1, arg2);
+//    $skb = (struct sk_buff *) arg0;
+//    $dev = $skb->dev;
+//    // $shinfo = (struct skb_shared_info *) (skb_end_pointer($skb) - 1);
+//    // $shinfo = skb_shinfo(skb)
+//    $shinfo = (struct skb_shared_info *)($skb->end - sizeof(struct skb_shared_info));
+//    $pkt_type = $skb->pkt_type;
+//    $ifindex = ((struct net_device *)$skb->dev)->ifindex;
+//    $inner_protocol_type = $skb->inner_protocol_type;
+//
+//    // MAC Header (assuming Ethernet)
+//    $mac_header = (struct ethhdr *) $skb->data;
+//
+//    // IP Header (assuming IPv4 following Ethernet)
+//    $ip_header_offset = $skb->data + ETH_HLEN;
+//    //$ip_header = (struct iphdr *) $ip_header_offset;
+//    $ip_header = (struct iphdr *)($skb->head + $skb->network_header);
+//    $sip = ntop(AF_INET, $ip_header->saddr);
+//    $dip = ntop(AF_INET, $ip_header->daddr);
+//
+//    // Transport Header (assuming TCP following IPv4)
+//    if ($ip_header->protocol == IPPROTO_TCP)
+//    {
+//      //$transport_header_offset = $ip_header_offset + ($ip_header->ihl * 4);
+//      //$tcp_header = (struct tcphdr *) $transport_header_offset;
+//      $tcp_header = (struct tcphdr *)($skb->head + $skb->transport_header);
+//      $tp_src = (($tcp_header->source & 0xff00) >> 8) | (($tcp_header->source & 0x00ff) << 8);
+//      $tp_dst = (($tcp_header->dest & 0xff00) >> 8) | (($tcp_header->dest & 0x00ff) << 8);
+//
+//      // Print the collected data
+//      printf("######## command: %s, func: %s\n", comm, func);
+//      printf("pkt_type:%d, ifindex: %d \n", $pkt_type, $ifindex);
+//      printf("kstack: %s", kstack);
+//      printf("vm payload without tunnel encaped: %s:%d => %s:%d\n", $sip, $tp_src, $dip, $tp_dst);
+//      printf("inner_protocol_type: %d, ", $inner_protocol_type);
+//      printf("encapsulation: %d\n", $skb->encapsulation);
+//
+//      printf("MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+//         $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+//         $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+//         $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+//         $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+//
+//      //$tcp_header = (struct tcphdr *)($skb->head + $skb->transport_header);
+//      printf("gso_size: %d, gso_type: %d\n", $shinfo->gso_size, $shinfo->gso_type);
+//      printf("Dev features: %llx\n", $dev->features);
+//      printf("end ######## \n\n\n\n"); 
+//    }
+//}
+
+kprobe:iptunnel_xmit
+{
+    //printf("opening: %s, %s, %s\n", str(arg0), str(arg1), str(arg2));
+    printf("ip tunnel xmit probe\n");
+    $skb = (struct sk_buff *) arg2;
+    $dev = $skb->dev;
+    // $shinfo = (struct skb_shared_info *) (skb_end_pointer($skb) - 1);
+    // $shinfo = skb_shinfo(skb)
+    $shinfo = (struct skb_shared_info *)($skb->end - sizeof(struct skb_shared_info));
+    $pkt_type = $skb->pkt_type;
+    $ifindex = ((struct net_device *)$skb->dev)->ifindex;
+    $inner_protocol_type = $skb->inner_protocol_type;
+
+    // MAC Header (assuming Ethernet)
+    $mac_header = (struct ethhdr *) $skb->data;
+
+    // IP Header (assuming IPv4 following Ethernet)
+    $ip_header_offset = $skb->data + ETH_HLEN;
+    //$ip_header = (struct iphdr *) $ip_header_offset;
+    $ip_header = (struct iphdr *)($skb->head + $skb->network_header);
+    $sip = ntop(AF_INET, $ip_header->saddr);
+    $dip = ntop(AF_INET, $ip_header->daddr);
+
+    // Transport Header (if UDP following IPv4)
+    if ($ip_header->protocol == IPPROTO_UDP)
+    {
+      //$transport_header_offset = $ip_header_offset + ($ip_header->ihl * 4);
+      //$udp_header = (struct udphdr *) $transport_header_offset;
+      $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+      $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+      $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+
+      if ($up_dst == 6081)
+      //if ($ip_header->saddr == 0x20000064) 
+      //if ($ifindex == 6) 
+      {
+        // Print the collected data
+        printf("********* command: %s, func: %s\n", comm, func);
+        printf("pkt_type:%d, ifindex: %d \n ", $pkt_type, $ifindex);
+        printf("kstack: %s", kstack);
+        printf("geneve tunnel encaped data: %s:%d => %s:%d\n", $sip, $up_src, $dip, $up_dst);
+        //printf("geneve tunnel encaped data: %lx:%d => %lx:%d\n", $ip_header->saddr, $up_src, $ip_header->daddr, $up_dst);
+        printf("inner_protocol_type: %d, ", $inner_protocol_type);
+        printf("encapsulation: %d\n", $skb->encapsulation);
+
+        printf("MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+           $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+           $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+           $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+           $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+
+        printf("gso_size: %d, gso_type: %d\n", $shinfo->gso_size, $shinfo->gso_type);
+        printf("Dev features: %llx\n", $dev->features);
+        printf("end ********** \n\n\n\n"); 
+      }
+    }
+
+    //// Print the collected data
+    //printf("********* command: %s, func: %s\n", comm, func);
+    //printf("pkt_type:%d, ifindex: %d \n ", $pkt_type, $ifindex);
+    //printf("kstack: %s", kstack);
+    //printf("geneve tunnel encaped data: %s:%d => %s:%d\n", $sip, $up_src, $dip, $up_dst);
+    //printf("inner_protocol_type: %d, ", $inner_protocol_type);
+    //printf("encapsulation: %d\n", $skb->encapsulation);
+
+    //printf("MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+    //   $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+    //   $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+    //   $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+    //   $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+
+    //printf("gso_size: %d, gso_type: %d\n", $shinfo->gso_size, $shinfo->gso_type);
+    //printf("Dev features: %llx\n", $dev->features);
+    //printf("end ********** \n\n\n\n"); 
+}
+
+kprobe:skb_udp_tunnel_segment
+{
+    //printf("opening: %s, %s, %s\n", str(arg0), str(arg1), str(arg2));
+    printf("udp tunnel segemtation probe\n");
+    $skb = (struct sk_buff *) arg0;
+    $dev = $skb->dev;
+    // $shinfo = (struct skb_shared_info *) (skb_end_pointer($skb) - 1);
+    // $shinfo = skb_shinfo(skb)
+    $shinfo = (struct skb_shared_info *)($skb->end - sizeof(struct skb_shared_info));
+    $pkt_type = $skb->pkt_type;
+    $ifindex = ((struct net_device *)$skb->dev)->ifindex;
+    $inner_protocol_type = $skb->inner_protocol_type;
+
+    // MAC Header (assuming Ethernet)
+    $mac_header = (struct ethhdr *) $skb->data;
+
+    // IP Header (assuming IPv4 following Ethernet)
+    $ip_header_offset = $skb->data + ETH_HLEN;
+    //$ip_header = (struct iphdr *) $ip_header_offset;
+    $ip_header = (struct iphdr *)($skb->head + $skb->network_header);
+    $sip = ntop(AF_INET, $ip_header->saddr);
+    $dip = ntop(AF_INET, $ip_header->daddr);
+
+    // Transport Header (if UDP following IPv4)
+    if ($ip_header->protocol == IPPROTO_UDP)
+    {
+      //$transport_header_offset = $ip_header_offset + ($ip_header->ihl * 4);
+      //$udp_header = (struct udphdr *) $transport_header_offset;
+      $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+      $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+      $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+
+      if ($up_dst == 6081)
+      //if ($ip_header->saddr == 0x20000064) 
+      //if ($ifindex == 6) 
+      {
+        // Print the collected data
+        printf("********* command: %s, func: %s\n", comm, func);
+        printf("pkt_type:%d, ifindex: %d \n ", $pkt_type, $ifindex);
+        printf("kstack: %s", kstack);
+        printf("geneve tunnel encaped data: %s:%d => %s:%d\n", $sip, $up_src, $dip, $up_dst);
+        //printf("geneve tunnel encaped data: %lx:%d => %lx:%d\n", $ip_header->saddr, $up_src, $ip_header->daddr, $up_dst);
+        printf("inner_protocol_type: %d, ", $inner_protocol_type);
+        printf("encapsulation: %d\n", $skb->encapsulation);
+
+        printf("MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+           $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+           $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+           $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+           $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+
+        printf("gso_size: %d, gso_type: %d\n", $shinfo->gso_size, $shinfo->gso_type);
+        printf("Dev features: %llx\n", $dev->features);
+        printf("end ********** \n\n\n\n"); 
+      }
+    }
+
+    //// Print the collected data
+    //printf("********* command: %s, func: %s\n", comm, func);
+    //printf("pkt_type:%d, ifindex: %d \n ", $pkt_type, $ifindex);
+    //printf("kstack: %s", kstack);
+    //printf("geneve tunnel encaped data: %s:%d => %s:%d\n", $sip, $up_src, $dip, $up_dst);
+    //printf("inner_protocol_type: %d, ", $inner_protocol_type);
+    //printf("encapsulation: %d\n", $skb->encapsulation);
+
+    //printf("MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+    //   $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+    //   $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+    //   $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+    //   $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+
+    //printf("gso_size: %d, gso_type: %d\n", $shinfo->gso_size, $shinfo->gso_type);
+    //printf("Dev features: %llx\n", $dev->features);
+    //printf("end ********** \n\n\n\n"); 
+}
+
+kprobe:__kfree_skb
+{
+  $skb = (struct sk_buff *) arg0;
+  $dev = $skb->dev;
+  //$shinfo = skb_shinfo(skb);
+  $shinfo = (struct skb_shared_info *)($skb->end - sizeof(struct skb_shared_info));
+  $pkt_type = $skb->pkt_type;
+  $ifindex = ((struct net_device *)$skb->dev)->ifindex;
+  $inner_protocol_type = $skb->inner_protocol_type;
+
+  // MAC Header (assuming Ethernet)
+  $mac_header = (struct ethhdr *) $skb->data;
+
+  // IP Header (assuming IPv4 following Ethernet)
+  $ip_header_offset = $skb->data + ETH_HLEN;
+  //$ip_header = (struct iphdr *) $ip_header_offset;
+  $ip_header = (struct iphdr *)($skb->head + $skb->network_header);
+  $sip = ntop(AF_INET, $ip_header->saddr);
+  $dip = ntop(AF_INET, $ip_header->daddr);
+
+  if ($ip_header->protocol == IPPROTO_UDP)
+  {
+    //$transport_header_offset = $ip_header_offset + ($ip_header->ihl * 4);
+    //$udp_header = (struct udphdr *) $transport_header_offset;
+    $udp_header = (struct udphdr *)($skb->head + $skb->transport_header);
+    $up_src = (($udp_header->source & 0xff00) >> 8) | (($udp_header->source & 0x00ff) << 8);
+    $up_dst = (($udp_header->dest & 0xff00) >> 8) | (($udp_header->dest & 0x00ff) << 8);
+
+    if ($up_dst == 6081)
+    //if ($ip_header->saddr == 0x20000064) 
+    //if ($ifindex == 6) 
+    {
+      // Print the collected data
+      printf("********* command: %s, func: %s\n", comm, func);
+      printf("pkt_type:%d, ifindex: %d \n ", $pkt_type, $ifindex);
+      printf("kstack: %s", kstack);
+      printf("geneve tunnel encaped data: %s:%d => %s:%d\n", $sip, $up_src, $dip, $up_dst);
+      printf("inner_protocol_type: %d, ", $inner_protocol_type);
+      printf("encapsulation: %d\n", $skb->encapsulation);
+
+      printf("MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+         $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+         $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+         $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+         $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+
+      printf("gso_size: %d, gso_type: %d\n", $shinfo->gso_size, $shinfo->gso_type);
+      printf("Dev features: %llx\n", $dev->features);
+      printf("end ********** \n\n\n\n"); 
+    }
+
+    //// Print the collected data
+    //printf("********* command: %s, func: %s\n", comm, func);
+    //printf("pkt_type:%d, ifindex: %d \n", $pkt_type, $ifindex);
+    //printf("kstack: %s", kstack);
+    //printf("free udp packet data: %s:%d => %s:%d\n", $sip, $up_src, $dip, $up_dst);
+    //printf("inner_protocol_type: %d,", $inner_protocol_type);
+    //printf("encapsulation: %d\n", $skb->encapsulation);
+
+    //printf("MAC src: %02x:%02x:%02x:%02x:%02x:%02x, MAC dst: %02x:%02x:%02x:%02x:%02x:%02x\n",
+    //   $mac_header->h_source[0], $mac_header->h_source[1], $mac_header->h_source[2],
+    //   $mac_header->h_source[3], $mac_header->h_source[4], $mac_header->h_source[5],
+    //   $mac_header->h_dest[0], $mac_header->h_dest[1], $mac_header->h_dest[2],
+    //   $mac_header->h_dest[3], $mac_header->h_dest[4], $mac_header->h_dest[5]);
+
+    //printf("gso_size: %d, gso_type: %d\n", $shinfo->gso_size, $shinfo->gso_type);
+    //printf("Dev features: %llx\n", $dev->features);
+    //printf("end ********** \n\n\n\n"); 
+
+  }
+}
+
+//END
+//{
+//	// clear(@birth); clear(@skpid); clear(@skcomm);
+//}
+

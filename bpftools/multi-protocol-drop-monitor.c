@@ -44,35 +44,52 @@ int trace_kfree_skb(struct pt_regs *ctx)
     if (skb == NULL)
         return 0;
 
-    u16 protocol;
-    bpf_probe_read_kernel(&protocol, sizeof(protocol), &skb->protocol);
-    
-    // Check for VLAN tag
+    u16 initial_protocol;
+    bpf_probe_read_kernel(&initial_protocol, sizeof(initial_protocol), &skb->protocol);
+
+    // Check for VLAN tag by reading vlan_tci (compatible with older kernels)
     u16 vlan_tci = 0;
     u16 vlan_id = 0;
-    if (skb->vlan_present) {
-        bpf_probe_read_kernel(&vlan_tci, sizeof(vlan_tci), &skb->vlan_tci);
-        vlan_id = vlan_tci & 0x0FFF; // VLAN ID is the lower 12 bits
-    }
+    bpf_probe_read_kernel(&vlan_tci, sizeof(vlan_tci), &skb->vlan_tci);
 
-    // Adjust network header offset if VLAN is present
-    unsigned int network_header_offset = skb->network_header;
-    if (protocol == htons(ETH_P_8021Q) || protocol == htons(ETH_P_8021AD)) {
-        network_header_offset += VLAN_HLEN; // Adjust for VLAN header
-        // After VLAN, the protocol should be IP
-        bpf_probe_read_kernel(&protocol, sizeof(protocol), skb->head + network_header_offset - sizeof(u16)); 
+    unsigned int network_header_offset;
+    bpf_probe_read_kernel(&network_header_offset, sizeof(network_header_offset), &skb->network_header);
+
+    if (vlan_tci != 0) { // vlan_tci non-zero indicates VLAN tag present
+        vlan_id = vlan_tci & 0x0FFF; // VLAN ID is the lower 12 bits
+        network_header_offset += VLAN_HLEN; // Adjust offset for VLAN header
+        // Note: skb->protocol might be ETH_P_8021Q here. We care about the inner protocol.
+        // The IP header check later handles non-IP packets after potential VLAN.
     }
     
-    if (protocol != htons(ETH_P_IP))
-        return 0;
-
+    // Check if the protocol *after* potential VLAN is IP
     // Read head pointer
     unsigned char *head;
     bpf_probe_read_kernel(&head, sizeof(head), &skb->head);
 
+    // Check the EtherType field at the L2 header end (before potential IP header)
+    u16 post_vlan_protocol = 0;
+    // Assuming ETH_HLEN includes MAC addresses + EtherType (14 bytes)
+    // If VLAN was present, the network_header_offset points *after* VLAN tag.
+    // The EtherType *before* the network header (IP) tells us the L3 protocol.
+    // Need to carefully read the EtherType *after* MAC addresses but *before* IP.
+    // Let's read the protocol field directly from the IP header later, it's safer.
+
     // Extract IP header using the potentially adjusted offset
     struct iphdr iph;
-    bpf_probe_read_kernel(&iph, sizeof(iph), head + network_header_offset);
+    // Ensure we don't read past the end of the skb data
+    // This read assumes the IP header starts exactly at network_header_offset
+    int ret = bpf_probe_read_kernel(&iph, sizeof(iph), head + network_header_offset);
+    if (ret != 0) {
+        // Failed to read IP header, maybe packet too short or offset wrong
+        return 0; 
+    }
+
+    // Check if it's actually an IPv4 packet by verifying the version field
+    if (iph.version != 4) {
+        return 0;
+    }
+
     u32 saddr = iph.saddr;
     u32 daddr = iph.daddr;
 

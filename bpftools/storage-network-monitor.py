@@ -231,12 +231,12 @@ def print_kfree_drop_event(cpu, data, size):
             # Now print the actual stack trace
             log_output("Time: %s  PID: %-6d  Comm: %s" % (
                 strftime("%Y-%m-%d %H:%M:%S"), event.pid, event.comm.decode('utf-8')))
-            log_output("Source IP: %-15s  Destination IP: %-15s  Protocol: %s%s" % (
+            log_output("Source IP: %-15s  Destination IP: %-15s  Protocol: %s  VLAN: %d  IP ID: %d" % (
                 inet_ntop(AF_INET, pack("I", event.saddr)),
                 inet_ntop(AF_INET, pack("I", event.daddr)),
                 protocol_str,
-                "  VLAN: %d" % event.vlan_id,
-                "  IP ID: %d" % event.ip_id
+                event.vlan_id,
+                event.ip_id
             ))
             
             # Protocol specific info

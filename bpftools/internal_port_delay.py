@@ -70,6 +70,8 @@
 
 
 from bcc import BPF, PerfType, PerfSWConfig
+# for oe kernel, using python3
+#from bpfcc import BPF, PerfType, PerfSWConfig
 from time import sleep, strftime, time as time_time
 import argparse
 import ctypes

@@ -221,7 +221,11 @@ static __always_inline int parse_packet_key(struct sk_buff *skb, struct packet_k
     }
 
     struct icmphdr icmph;
-    bpf_probe_read_kernel(&icmph, sizeof(icmph), skb->head + skb->transport_header);
+    bpf_probe_read_kernel(&icmph, sizeof(icmph), skb->head + transport_header);
+    __u32 word0, word1;   // 各读 4 byte
+    bpf_probe_read_kernel(&word0, 4, skb->head + transport_header);          // type~csum
+    bpf_probe_read_kernel(&word1, 4, skb->head + transport_header + 4);      // id + seq
+    bpf_trace_printk("EXTRACT_USER: ICMP hdr 0x%%x 0x%%x\\n", word0, word1);
 
     if (icmph.type != ICMP_ECHO && icmph.type != ICMP_ECHOREPLY) {
         //bpf_trace_printk("BPF DBG: parse_packet_key wrong icmp type %%u\\n", icmph.type);
@@ -277,7 +281,7 @@ static __always_inline void handle_event(struct pt_regs *ctx, struct sk_buff *sk
 }
 
 // Helper to check ifindex
-static __always_inline bool is_target_ifindex(struct sk_buff *skb) {
+static __always_inline bool is_target_ifindex(const struct sk_buff *skb) {
     struct net_device *dev = NULL;
     int ifindex = 0;
     if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) < 0 || dev == NULL) {
@@ -496,7 +500,7 @@ def format_ip(addr):
 proto_names = {socket.IPPROTO_ICMP: "ICMP"}
 
 def format_latency(ts_start, ts_end):
-    if ts_start == 0 or ts_end == 0 or ts_end < ts_start:
+    if ts_start == 0 or ts_end == 0:
         return " N/A ".rjust(7)
     delta_us = (ts_end - ts_start) / 1000.0
     return ("%.3f" % delta_us).rjust(7)

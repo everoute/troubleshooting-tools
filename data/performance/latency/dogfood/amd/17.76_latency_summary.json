@@ -1,0 +1,108 @@
+{
+  "node_pairs": [
+    {
+      "pair_name": "17.76",
+      "src_ip": "10.1.18.76",
+      "dst_ip": "10.0.18.75",
+      "direction": "10.1.18.76->10.0.18.75"
+    }
+  ],
+  "total_sessions": 477,
+  "matched_sessions": 432,
+  "outgoing_only": 34,
+  "incoming_only": 11,
+  "overall_analysis": {
+    "total_valid_sessions": 432,
+    "sessions_with_latency": 432,
+    "latency_distribution": {
+      "0-10ms": 9,
+      "100-500ms": 109,
+      "3000-60000ms": 35,
+      "1000-3000ms": 111,
+      "500-1000ms": 108,
+      "10-100ms": 53,
+      ">60000ms": 7
+    },
+    "latency_distribution_above_10ms": {
+      "100-500ms": 109,
+      "3000-60000ms": 35,
+      "1000-3000ms": 111,
+      "500-1000ms": 108,
+      "10-100ms": 53,
+      ">60000ms": 7
+    },
+    "stage_distribution": {
+      "INCOMING_Path1_5->6": 423
+    },
+    "latency_statistics": {
+      "count": 432,
+      "mean": 47167502.83095834,
+      "median": 717608.6415,
+      "min": 3981.076,
+      "max": 2846687615.714,
+      "std": 359676409.16109127,
+      "p95": 4266955.323,
+      "p99": 2846413359.549
+    },
+    "range_percentages": {
+      "0-10ms": 2.083333333333333,
+      "100-500ms": 25.23148148148148,
+      "3000-60000ms": 8.101851851851851,
+      "1000-3000ms": 25.694444444444443,
+      "500-1000ms": 25.0,
+      "10-100ms": 12.268518518518519,
+      ">60000ms": 1.6203703703703702
+    },
+    "stage_percentages": {
+      "INCOMING_Path1_5->6": 100.0
+    },
+    "range_percentages_above_10ms": {
+      "100-500ms": 25.768321513002363,
+      "3000-60000ms": 8.274231678486997,
+      "1000-3000ms": 26.24113475177305,
+      "500-1000ms": 25.53191489361702,
+      "10-100ms": 12.529550827423167,
+      ">60000ms": 1.6548463356973995
+    }
+  },
+  "dropped_sessions_analysis": {
+    "total_dropped_sessions": 0,
+    "stage_distribution": {},
+    "drop_reason_distribution": {}
+  },
+  "pair_analysis": {
+    "17.76": {
+      "total_sessions": 432,
+      "latency_distribution": {
+        "0-10ms": 9,
+        "100-500ms": 109,
+        "3000-60000ms": 35,
+        "1000-3000ms": 111,
+        "500-1000ms": 108,
+        "10-100ms": 53,
+        ">60000ms": 7
+      },
+      "latency_distribution_above_10ms": {
+        "100-500ms": 109,
+        "3000-60000ms": 35,
+        "1000-3000ms": 111,
+        "500-1000ms": 108,
+        "10-100ms": 53,
+        ">60000ms": 7
+      },
+      "stage_distribution": {
+        "INCOMING_Path1_5->6": 423
+      },
+      "latency_statistics": {
+        "count": 432,
+        "mean": 47167502.83095834,
+        "median": 717608.6415,
+        "min": 3981.076,
+        "max": 2846687615.714,
+        "std": 359676409.16109127,
+        "p95": 4266955.323,
+        "p99": 2846413359.549
+      }
+    }
+  }
+}

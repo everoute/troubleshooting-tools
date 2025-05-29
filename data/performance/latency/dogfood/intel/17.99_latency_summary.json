@@ -1,0 +1,90 @@
+{
+  "node_pairs": [
+    {
+      "pair_name": "17.99",
+      "src_ip": "10.255.0.100",
+      "dst_ip": "10.255.0.107",
+      "direction": "10.255.0.100->10.255.0.107"
+    }
+  ],
+  "total_sessions": 4444,
+  "matched_sessions": 138,
+  "outgoing_only": 2823,
+  "incoming_only": 1483,
+  "overall_analysis": {
+    "total_valid_sessions": 138,
+    "sessions_with_latency": 138,
+    "latency_distribution": {
+      "0-10ms": 131,
+      "10-100ms": 5,
+      "1000-3000ms": 1,
+      "100-500ms": 1
+    },
+    "latency_distribution_above_10ms": {
+      "10-100ms": 5,
+      "1000-3000ms": 1,
+      "100-500ms": 1
+    },
+    "stage_distribution": {
+      "INCOMING_Path1_5->6": 7
+    },
+    "latency_statistics": {
+      "count": 138,
+      "mean": 17021.30825362319,
+      "median": 5179.274,
+      "min": 1918.386,
+      "max": 1252332.264,
+      "std": 110966.03750059343,
+      "p95": 10214.072,
+      "p99": 392856.138
+    },
+    "range_percentages": {
+      "0-10ms": 94.92753623188406,
+      "10-100ms": 3.6231884057971016,
+      "1000-3000ms": 0.7246376811594203,
+      "100-500ms": 0.7246376811594203
+    },
+    "stage_percentages": {
+      "INCOMING_Path1_5->6": 100.0
+    },
+    "range_percentages_above_10ms": {
+      "10-100ms": 71.42857142857143,
+      "1000-3000ms": 14.285714285714285,
+      "100-500ms": 14.285714285714285
+    }
+  },
+  "dropped_sessions_analysis": {
+    "total_dropped_sessions": 0,
+    "stage_distribution": {},
+    "drop_reason_distribution": {}
+  },
+  "pair_analysis": {
+    "17.99": {
+      "total_sessions": 138,
+      "latency_distribution": {
+        "0-10ms": 131,
+        "10-100ms": 5,
+        "1000-3000ms": 1,
+        "100-500ms": 1
+      },
+      "latency_distribution_above_10ms": {
+        "10-100ms": 5,
+        "1000-3000ms": 1,
+        "100-500ms": 1
+      },
+      "stage_distribution": {
+        "INCOMING_Path1_5->6": 7
+      },
+      "latency_statistics": {
+        "count": 138,
+        "mean": 17021.30825362319,
+        "median": 5179.274,
+        "min": 1918.386,
+        "max": 1252332.264,
+        "std": 110966.03750059343,
+        "p95": 10214.072,
+        "p99": 392856.138
+      }
+    }
+  }
+}

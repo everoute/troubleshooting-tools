@@ -109,8 +109,8 @@ struct dropped_skb_data_t {
     u16 arp_op;        // ARP operation code
     u32 arp_sip;       // ARP source IP
     u32 arp_tip;       // ARP target IP
-    u8 arp_sha[6];     // ARP source hardware address
-    u8 arp_tha[6];     // ARP target hardware address
+    u8 eth_sha[6];     // Ethernet source hardware address
+    u8 eth_tha[6];     // Ethernet target hardware address
     // VLAN specific fields
     u16 vlan_id;       // VLAN ID (12 bits)
     u16 vlan_priority; // VLAN priority (3 bits)
@@ -121,12 +121,16 @@ BPF_PERF_OUTPUT(kfree_drops);
 struct netif_receive_data_t {
     u32 pid;
     u64 ts;
-    u16 eth_protocol;  // ETH_P_ARP, ETH_P_RARP
-    u8 arp_sha[6];     // source hardware address
-    u8 arp_tha[6];     // target hardware address
+    u16 eth_protocol;  // Original protocol (may be VLAN)
+    u8 eth_sha[6];     // source hardware address
+    u8 eth_tha[6];     // target hardware address
     u8 pfmemalloc;     // pfmemalloc parameter value
     char ifname[IFNAMSIZ];
     char comm[TASK_COMM_LEN];
+    // VLAN specific fields
+    u16 vlan_id;       // VLAN ID (12 bits)
+    u16 vlan_priority; // VLAN priority (3 bits)
+    u16 inner_protocol; // Inner protocol type for VLAN packets
 };
 BPF_PERF_OUTPUT(netif_receive_events);
 
@@ -136,28 +140,69 @@ int trace_kfree_skb(struct pt_regs *ctx)
     if (skb == NULL)
         return 0;
 
-    u16 protocol;
-    bpf_probe_read_kernel(&protocol, sizeof(protocol), &skb->protocol);
+    // Advanced SKB parsing similar to icmp_rtt_latency.py and netif_receive_skb_core
+    unsigned char *skb_head;
+    if (bpf_probe_read_kernel(&skb_head, sizeof(skb_head), &skb->head) < 0) {
+        return 0;
+    }
+    if (!skb_head) {
+        return 0;
+    }
+    
+    unsigned long skb_data_ptr_val; 
+    if (bpf_probe_read_kernel(&skb_data_ptr_val, sizeof(skb_data_ptr_val), &skb->data) < 0) {
+        return 0;
+    }
+    
+    unsigned int data_offset = (unsigned int)(skb_data_ptr_val - (unsigned long)skb_head);
+    unsigned int mac_offset = data_offset; 
+    
+    // Read ethernet header from correct offset
+    struct ethhdr eth;
+    if (bpf_probe_read_kernel(&eth, sizeof(eth), skb_head + mac_offset) < 0) {
+        return 0;
+    }
+    
+    unsigned int net_offset = mac_offset + ETH_HLEN;
+    __be16 h_proto = eth.h_proto;
+    
+    // Handle VLAN tags (single or double tagged)
+    if (h_proto == htons(ETH_P_8021Q)) {
+        net_offset += 4; // VLAN_HLEN = 4
+        if (bpf_probe_read_kernel(&h_proto, sizeof(h_proto), skb_head + mac_offset + ETH_HLEN + 2) < 0) { 
+            return 0;
+        }
+        // Check for double VLAN (QinQ)
+        if (h_proto == htons(ETH_P_8021Q)) {
+             net_offset += 4; // Another VLAN tag
+             if (bpf_probe_read_kernel(&h_proto, sizeof(h_proto), skb_head + mac_offset + ETH_HLEN + 6) < 0) {
+                 return 0;
+             }
+        }
+    }
+    
+    u16 protocol = h_proto;  // Real inner protocol after VLAN processing
     
     // Step 1: Determine the real protocol type (handle VLAN encapsulation)
-    u16 real_protocol = protocol;  // Default to skb protocol
+    u16 real_protocol = protocol;  // This is already the inner protocol
     u16 vlan_id = 0;
     u16 vlan_priority = 0;
     bool is_vlan = false;
     
-    if (protocol == htons(ETH_P_8021Q)) {
-        // This is a VLAN packet, extract the real inner protocol
+    if (eth.h_proto == htons(ETH_P_8021Q)) {
+        // This is a VLAN packet, extract VLAN info
         is_vlan = true;
         struct vlan_hdr vlan;
-        bpf_probe_read_kernel(&vlan, sizeof(vlan), skb->head + skb->mac_header + sizeof(struct ethhdr));
+        if (bpf_probe_read_kernel(&vlan, sizeof(vlan), skb_head + mac_offset + ETH_HLEN) < 0) {
+            return 0;
+        }
         
         // Extract VLAN ID and priority
         u16 tci = ntohs(vlan.h_vlan_TCI);
         vlan_id = tci & 0x0FFF;  // Lower 12 bits
         vlan_priority = (tci >> 13) & 0x07;  // Upper 3 bits
         
-        // Get the real inner protocol
-        real_protocol = vlan.h_vlan_encapsulated_proto;  // Already in network byte order
+        real_protocol = vlan.h_vlan_encapsulated_proto;  // Inner protocol
     }
     
     // Step 2: Protocol filtering based on real protocol type
@@ -197,7 +242,7 @@ int trace_kfree_skb(struct pt_regs *ctx)
     struct dropped_skb_data_t data = {};
     data.pid = bpf_get_current_pid_tgid();
     data.ts = bpf_ktime_get_ns();
-    data.eth_protocol = ntohs(protocol);  // Original protocol (may be VLAN)
+    data.eth_protocol = ntohs(eth.h_proto);  // Original ethernet protocol (may be VLAN)
     data.stack_id = stack_traces.get_stackid(ctx, 0);
     data.raw_stack_id = data.stack_id; 
     if (data.stack_id < 0) {
@@ -211,11 +256,20 @@ int trace_kfree_skb(struct pt_regs *ctx)
     data.vlan_priority = vlan_priority;
     data.inner_protocol = is_vlan ? ntohs(real_protocol) : 0;
 
+    // Copy MAC addresses from ethernet header
+    #pragma unroll
+    for (int i = 0; i < 6; i++) {
+        data.eth_sha[i] = eth.h_source[i];
+        data.eth_tha[i] = eth.h_dest[i];
+    }
+
     // Step 3: Process based on real protocol type
     if (real_protocol == htons(ETH_P_IP)) {
         // Handle IP packets (may be VLAN-encapsulated)
         struct iphdr iph;
-        bpf_probe_read_kernel(&iph, sizeof(iph), skb->head + skb->network_header);
+        if (bpf_probe_read_kernel(&iph, sizeof(iph), skb_head + net_offset) < 0) {
+            return 0;
+        }
         data.saddr = iph.saddr;
         data.daddr = iph.daddr;
         data.protocol = iph.protocol;
@@ -226,13 +280,21 @@ int trace_kfree_skb(struct pt_regs *ctx)
             if (PROTOCOL == 0 || (PROTOCOL < 256 && iph.protocol == PROTOCOL)) {
                 if (iph.protocol == IPPROTO_ICMP) {
                     struct icmphdr icmph;
-                    bpf_probe_read_kernel(&icmph, sizeof(icmph), skb->head + skb->transport_header);
+                    u8 ip_ihl = iph.ihl & 0x0F;
+                    unsigned int trans_offset = net_offset + (ip_ihl * 4);
+                    if (bpf_probe_read_kernel(&icmph, sizeof(icmph), skb_head + trans_offset) < 0) {
+                        return 0;
+                    }
                     data.icmp_type = icmph.type;
                     data.icmp_code = icmph.code;
                     kfree_drops.perf_submit(ctx, &data, sizeof(data));
                 } else if (iph.protocol == IPPROTO_TCP) {
                     struct tcphdr tcph;
-                    bpf_probe_read_kernel(&tcph, sizeof(tcph), skb->head + skb->transport_header);
+                    u8 ip_ihl = iph.ihl & 0x0F;
+                    unsigned int trans_offset = net_offset + (ip_ihl * 4);
+                    if (bpf_probe_read_kernel(&tcph, sizeof(tcph), skb_head + trans_offset) < 0) {
+                        return 0;
+                    }
                     data.sport = ntohs(tcph.source);
                     data.dport = ntohs(tcph.dest);
                     if ((SRC_PORT == 0 || data.sport == SRC_PORT) && (DST_PORT == 0 || data.dport == DST_PORT)) {
@@ -240,7 +302,11 @@ int trace_kfree_skb(struct pt_regs *ctx)
                     }
                 } else if (iph.protocol == IPPROTO_UDP) {
                     struct udphdr udph;
-                    bpf_probe_read_kernel(&udph, sizeof(udph), skb->head + skb->transport_header);
+                    u8 ip_ihl = iph.ihl & 0x0F;
+                    unsigned int trans_offset = net_offset + (ip_ihl * 4);
+                    if (bpf_probe_read_kernel(&udph, sizeof(udph), skb_head + trans_offset) < 0) {
+                        return 0;
+                    }
                     data.sport = ntohs(udph.source);
                     data.dport = ntohs(udph.dest);
                     if ((SRC_PORT == 0 || data.sport == SRC_PORT) && (DST_PORT == 0 || data.dport == DST_PORT)) {
@@ -254,15 +320,6 @@ int trace_kfree_skb(struct pt_regs *ctx)
         }
     } else if (real_protocol == htons(ETH_P_ARP) || real_protocol == htons(ETH_P_RARP)) {
         // Handle ARP/RARP packets (may be VLAN-encapsulated)
-        struct ethhdr eth;
-        bpf_probe_read_kernel(&eth, sizeof(eth), skb->head + skb->mac_header);
-        
-        // Copy source and destination MAC addresses
-        #pragma unroll
-        for (int i = 0; i < 6; i++) {
-            data.arp_sha[i] = eth.h_source[i];
-            data.arp_tha[i] = eth.h_dest[i];
-        }
         
         // Set dummy values for IP addresses
         data.saddr = 0;
@@ -274,15 +331,6 @@ int trace_kfree_skb(struct pt_regs *ctx)
         kfree_drops.perf_submit(ctx, &data, sizeof(data));
     } else {
         // Handle other protocol types
-        struct ethhdr eth;
-        bpf_probe_read_kernel(&eth, sizeof(eth), skb->head + skb->mac_header);
-        
-        // Copy source and destination MAC addresses
-        #pragma unroll
-        for (int i = 0; i < 6; i++) {
-            data.arp_sha[i] = eth.h_source[i];
-            data.arp_tha[i] = eth.h_dest[i];
-        }
         
         // Set dummy values for IP addresses
         data.saddr = 0;
@@ -306,18 +354,99 @@ int trace____netif_receive_skb_core(struct pt_regs *ctx)
     if (skb == NULL)
         return 0;
 
-    u16 protocol;
-    bpf_probe_read_kernel(&protocol, sizeof(protocol), &skb->protocol);
+    // Advanced SKB parsing similar to icmp_rtt_latency.py
+    unsigned char *skb_head;
+    if (bpf_probe_read_kernel(&skb_head, sizeof(skb_head), &skb->head) < 0) {
+        return 0;
+    }
+    if (!skb_head) {
+        return 0;
+    }
     
-    // Only handle ARP and RARP packets
-    if (protocol != htons(ETH_P_ARP) && protocol != htons(ETH_P_RARP))
+    unsigned long skb_data_ptr_val; 
+    if (bpf_probe_read_kernel(&skb_data_ptr_val, sizeof(skb_data_ptr_val), &skb->data) < 0) {
         return 0;
-
-    // Apply protocol filtering
-    if (FILTER_ARP == 1 && protocol != htons(ETH_P_ARP))
+    }
+    
+    unsigned int data_offset = (unsigned int)(skb_data_ptr_val - (unsigned long)skb_head);
+    unsigned int mac_offset = data_offset; 
+    
+    // Read ethernet header from correct offset
+    struct ethhdr eth;
+    if (bpf_probe_read_kernel(&eth, sizeof(eth), skb_head + mac_offset) < 0) {
         return 0;
-    if (FILTER_RARP == 1 && protocol != htons(ETH_P_RARP))
-        return 0;
+    }
+    
+    unsigned int net_offset = mac_offset + ETH_HLEN;
+    __be16 h_proto = eth.h_proto;
+    
+    // Handle VLAN tags (single or double tagged)
+    if (h_proto == htons(ETH_P_8021Q)) {
+        net_offset += 4; // VLAN_HLEN = 4
+        if (bpf_probe_read_kernel(&h_proto, sizeof(h_proto), skb_head + mac_offset + ETH_HLEN + 2) < 0) { 
+            return 0;
+        }
+        // Check for double VLAN (QinQ)
+        if (h_proto == htons(ETH_P_8021Q)) {
+             net_offset += 4; // Another VLAN tag
+             if (bpf_probe_read_kernel(&h_proto, sizeof(h_proto), skb_head + mac_offset + ETH_HLEN + 6) < 0) {
+                 return 0;
+             }
+        }
+    }
+    
+    u16 protocol = h_proto;  // Real inner protocol after VLAN processing
+    
+    // Step 1: Determine the real protocol type (handle VLAN encapsulation)
+    u16 real_protocol = protocol;  // This is already the inner protocol
+    u16 vlan_id = 0;
+    u16 vlan_priority = 0;
+    bool is_vlan = false;
+    
+    if (eth.h_proto == htons(ETH_P_8021Q)) {
+        // This is a VLAN packet, extract VLAN info
+        is_vlan = true;
+        struct vlan_hdr vlan;
+        if (bpf_probe_read_kernel(&vlan, sizeof(vlan), skb_head + mac_offset + ETH_HLEN) < 0) {
+            return 0;
+        }
+        
+        // Extract VLAN ID and priority
+        u16 tci = ntohs(vlan.h_vlan_TCI);
+        vlan_id = tci & 0x0FFF;  // Lower 12 bits
+        vlan_priority = (tci >> 13) & 0x07;  // Upper 3 bits
+        
+        real_protocol = vlan.h_vlan_encapsulated_proto;  // Inner protocol
+    }
+    
+    // Step 2: Protocol filtering based on real protocol type (same as kfree_skb)
+    if (FILTER_ARP == 1) {
+        // Only ARP packets
+        if (real_protocol != htons(ETH_P_ARP))
+            return 0;
+    } else if (FILTER_RARP == 1) {
+        // Only RARP packets
+        if (real_protocol != htons(ETH_P_RARP))
+            return 0;
+    } else {
+        // Protocol filtering logic
+        if (PROTOCOL != 0) {
+            // If user specified a specific protocol, only capture that
+            if (PROTOCOL == 0xFFFF) {
+                // User wants "other" protocols - capture anything that is NOT IP, ARP, or RARP
+                if (real_protocol == htons(ETH_P_IP) || real_protocol == htons(ETH_P_ARP) || real_protocol == htons(ETH_P_RARP))
+                    return 0;
+            } else if (real_protocol == htons(ETH_P_IP)) {
+                // Continue with IP processing
+            } else if (real_protocol == htons(ETH_P_ARP) || real_protocol == htons(ETH_P_RARP)) {
+                // Continue with ARP/RARP processing  
+            } else {
+                // For other protocols, only capture if user wants "other"
+                return 0;
+            }
+        }
+        // If PROTOCOL == 0 (all), we capture everything including "other" protocols
+    }
 
     struct net_device *dev;
     char ifname[IFNAMSIZ] = {0};
@@ -327,23 +456,52 @@ int trace____netif_receive_skb_core(struct pt_regs *ctx)
     struct netif_receive_data_t data = {};
     data.pid = bpf_get_current_pid_tgid();
     data.ts = bpf_ktime_get_ns();
-    data.eth_protocol = ntohs(protocol);
+    data.eth_protocol = ntohs(eth.h_proto);  // Original ethernet protocol (may be VLAN)
     data.pfmemalloc = pfmemalloc ? 1 : 0;
     bpf_probe_read_kernel_str(data.ifname, sizeof(data.ifname), ifname);
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
 
-    // Read ethernet header
-    struct ethhdr eth;
-    bpf_probe_read_kernel(&eth, sizeof(eth), skb->head + skb->mac_header);
-    
-    // Copy MAC addresses
+    // Set VLAN fields
+    data.vlan_id = vlan_id;
+    data.vlan_priority = vlan_priority;
+    data.inner_protocol = is_vlan ? ntohs(real_protocol) : 0;
+
+    // Copy MAC addresses from ethernet header
     #pragma unroll
     for (int i = 0; i < 6; i++) {
-        data.arp_sha[i] = eth.h_source[i];
-        data.arp_tha[i] = eth.h_dest[i];
+        data.eth_sha[i] = eth.h_source[i];
+        data.eth_tha[i] = eth.h_dest[i];
     }
 
-    netif_receive_events.perf_submit(ctx, &data, sizeof(data));
+    // Step 3: Process based on real protocol type (same as kfree_skb)
+    bool should_submit = false;
+    
+    if (real_protocol == htons(ETH_P_IP)) {
+        // Handle IP packets (may be VLAN-encapsulated) - need IP address filtering
+        struct iphdr iph;
+        if (bpf_probe_read_kernel(&iph, sizeof(iph), skb_head + net_offset) < 0) {
+            return 0;
+        }
+        
+        // Check IP addresses (same logic as kfree_skb)
+        if ((SRC_IP == 0 || iph.saddr == SRC_IP) && (DST_IP == 0 || iph.daddr == DST_IP)) {
+            // Check protocol (only for IP protocols, not ARP/RARP)
+            if (PROTOCOL == 0 || (PROTOCOL < 256 && iph.protocol == PROTOCOL)) {
+                should_submit = true;
+            }
+        }
+    } else if (real_protocol == htons(ETH_P_ARP) || real_protocol == htons(ETH_P_RARP)) {
+        // Handle ARP/RARP packets (may be VLAN-encapsulated) - always submit if filter matches
+        should_submit = true;
+    } else {
+        // Handle other protocol types - always submit if filter matches
+        should_submit = true;
+    }
+
+    if (should_submit) {
+        netif_receive_events.perf_submit(ctx, &data, sizeof(data));
+    }
+
     return 0;
 }
 
@@ -413,8 +571,8 @@ def print_basic_skb_data(cpu, data, size, perf_event=""):
             strftime("%H:%M:%S"), event.pid, event.comm.decode('utf-8'), vlan_prefix))
         
         # Print MAC addresses from ethernet header
-        src_mac = ":".join(["%02x" % mac_byte for mac_byte in event.arp_sha[:6]])
-        dst_mac = ":".join(["%02x" % mac_byte for mac_byte in event.arp_tha[:6]])
+        src_mac = ":".join(["%02x" % mac_byte for mac_byte in event.eth_sha[:6]])
+        dst_mac = ":".join(["%02x" % mac_byte for mac_byte in event.eth_tha[:6]])
         print("Source MAC: %-17s Destination MAC: %-17s" % (src_mac, dst_mac))
         
     elif real_protocol == 0x8035:  # ETH_P_RARP
@@ -422,8 +580,8 @@ def print_basic_skb_data(cpu, data, size, perf_event=""):
             strftime("%H:%M:%S"), event.pid, event.comm.decode('utf-8'), vlan_prefix))
         
         # Print MAC addresses from ethernet header
-        src_mac = ":".join(["%02x" % mac_byte for mac_byte in event.arp_sha[:6]])
-        dst_mac = ":".join(["%02x" % mac_byte for mac_byte in event.arp_sha[:6]])
+        src_mac = ":".join(["%02x" % mac_byte for mac_byte in event.eth_sha[:6]])
+        dst_mac = ":".join(["%02x" % mac_byte for mac_byte in event.eth_sha[:6]])
         print("Source MAC: %-17s Destination MAC: %-17s" % (src_mac, dst_mac))
     else:
         # Handle other protocol types
@@ -439,8 +597,8 @@ def print_basic_skb_data(cpu, data, size, perf_event=""):
                 strftime("%H:%M:%S"), event.pid, event.comm.decode('utf-8'), event.eth_protocol))
         
         # Print MAC addresses from ethernet header
-        src_mac = ":".join(["%02x" % mac_byte for mac_byte in event.arp_sha[:6]])
-        dst_mac = ":".join(["%02x" % mac_byte for mac_byte in event.arp_tha[:6]])
+        src_mac = ":".join(["%02x" % mac_byte for mac_byte in event.eth_sha[:6]])
+        dst_mac = ":".join(["%02x" % mac_byte for mac_byte in event.eth_tha[:6]])
         print("Source MAC: %-17s Destination MAC: %-17s" % (src_mac, dst_mac))
     
     # Add VLAN details if applicable
@@ -489,15 +647,43 @@ def print_netif_receive_event(cpu, data, size):
     global b
     event = b["netif_receive_events"].event(data)
     
-    protocol_name = "ARP" if event.eth_protocol == 0x0806 else "RARP"
-    print("%-9s %-6d %-12s %s RECEIVE (pfmemalloc=%d)" % (
-        strftime("%H:%M:%S"), event.pid, event.comm.decode('utf-8'),
-        protocol_name, event.pfmemalloc))
+    # Determine if this is a VLAN packet and get the real protocol
+    is_vlan = (event.eth_protocol == 0x8100)
+    real_protocol = event.inner_protocol if is_vlan else event.eth_protocol
+    
+    # Add VLAN prefix if applicable
+    vlan_prefix = ""
+    if is_vlan:
+        vlan_prefix = "[VLAN %d] " % event.vlan_id
+    
+    # Process based on real protocol type
+    if real_protocol == 0x0800:  # ETH_P_IP (IPv4)
+        print("%-9s %-6d %-12s %sIP RECEIVE (pfmemalloc=%d)" % (
+            strftime("%H:%M:%S"), event.pid, event.comm.decode('utf-8'), 
+            vlan_prefix, event.pfmemalloc))
+    elif real_protocol == 0x0806:  # ETH_P_ARP
+        print("%-9s %-6d %-12s %sARP RECEIVE (pfmemalloc=%d)" % (
+            strftime("%H:%M:%S"), event.pid, event.comm.decode('utf-8'), 
+            vlan_prefix, event.pfmemalloc))
+    elif real_protocol == 0x8035:  # ETH_P_RARP
+        print("%-9s %-6d %-12s %sRARP RECEIVE (pfmemalloc=%d)" % (
+            strftime("%H:%M:%S"), event.pid, event.comm.decode('utf-8'), 
+            vlan_prefix, event.pfmemalloc))
+    else:
+        # Handle other protocol types
+        print("%-9s %-6d %-12s %sOTHER RECEIVE (EtherType: 0x%04x, pfmemalloc=%d)" % (
+            strftime("%H:%M:%S"), event.pid, event.comm.decode('utf-8'), 
+            vlan_prefix, real_protocol, event.pfmemalloc))
     
     # Print MAC addresses from ethernet header
-    src_mac = ":".join(["%02x" % mac_byte for mac_byte in event.arp_sha[:6]])
-    dst_mac = ":".join(["%02x" % mac_byte for mac_byte in event.arp_tha[:6]])
+    src_mac = ":".join(["%02x" % mac_byte for mac_byte in event.eth_sha[:6]])
+    dst_mac = ":".join(["%02x" % mac_byte for mac_byte in event.eth_tha[:6]])
     print("Source MAC: %-17s Destination MAC: %-17s" % (src_mac, dst_mac))
+    
+    # Add VLAN details if applicable
+    if is_vlan:
+        print("VLAN ID: %-4d Priority: %-1d" % (event.vlan_id, event.vlan_priority))
+    
     print("Device: %-16s" % event.ifname.decode('utf-8'))
     print("")
 

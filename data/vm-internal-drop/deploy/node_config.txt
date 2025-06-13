@@ -1,0 +1,10 @@
+# RARP Consumer 部署配置文件
+
+# stage1
+service_name="rarp-consumer"
+service_file="rarp-consumer.service"
+install_script="deploy_service.sh"
+
+# stage2
+192.168.79.23,root,echken9527
+192.168.72.171,root,echken9527

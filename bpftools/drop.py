@@ -318,7 +318,7 @@ def print_kfree_drop_event(cpu, data, size):
 normal_patterns = {
     'icmp_rcv': ['icmp_rcv'],
     'tcp_v4_rcv': ['tcp_v4_rcv'],
-    'skb_release_data': ['skb_release_data', '__kfree_skb', 'tcp_recvmsg']
+    'skb_release_data': ['__kfree_skb', 'tcp_recvmsg']
 }
 
 def is_normal_packet_release(stack_syms, protocol):

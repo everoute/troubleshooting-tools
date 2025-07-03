@@ -6,4 +6,5 @@ bpftools/__pycache__/
 *.pyc
 *.pyo
 __pycache__/
-tmp
+.tmp/
+CLAUDE.md

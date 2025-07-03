@@ -7,4 +7,5 @@ bpftools/__pycache__/
 *.pyo
 __pycache__/
 .tmp/
-CLAUDE.md
+.claude/
+.doc/

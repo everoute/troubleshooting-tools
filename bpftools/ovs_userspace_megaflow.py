@@ -102,6 +102,7 @@ static __always_inline int parse_eth_header(struct sk_buff *skb, struct upcall_e
     }
     
     unsigned int data_offset = (unsigned int)(skb_data_ptr_val - (unsigned long)skb_head);
+    unsigned int ip_offset = data_offset + sizeof(struct ethhdr);
     
     struct ethhdr eth;
     if (bpf_probe_read_kernel(&eth, sizeof(eth), skb_head + data_offset) < 0) {
@@ -118,10 +119,20 @@ static __always_inline int parse_eth_header(struct sk_buff *skb, struct upcall_e
     event->dst_port = 0;
     event->ip_proto = 0;
     
+    // Handle VLAN tagged packets
+    if (event->eth_type == 0x8100 || event->eth_type == 0x88a8) {
+        struct vlan_hdr vlan;
+        if (bpf_probe_read_kernel(&vlan, sizeof(vlan), skb_head + ip_offset) == 0) {
+            // Update eth_type to the encapsulated protocol
+            event->eth_type = ntohs(vlan.h_vlan_encapsulated_proto);
+            ip_offset += sizeof(struct vlan_hdr);
+        }
+    }
+    
     // Parse IP header if present
     if (event->eth_type == 0x0800) {
         struct iphdr ip;
-        if (bpf_probe_read_kernel(&ip, sizeof(ip), skb_head + data_offset + sizeof(struct ethhdr)) == 0) {
+        if (bpf_probe_read_kernel(&ip, sizeof(ip), skb_head + ip_offset) == 0) {
             event->src_ip = ntohl(ip.saddr);
             event->dst_ip = ntohl(ip.daddr);
             event->ip_proto = ip.protocol;
@@ -129,13 +140,13 @@ static __always_inline int parse_eth_header(struct sk_buff *skb, struct upcall_e
             // Parse L4 ports if TCP or UDP
             if (ip.protocol == 6) {  // TCP
                 struct tcphdr tcp;
-                if (bpf_probe_read_kernel(&tcp, sizeof(tcp), skb_head + data_offset + sizeof(struct ethhdr) + (ip.ihl * 4)) == 0) {
+                if (bpf_probe_read_kernel(&tcp, sizeof(tcp), skb_head + ip_offset + (ip.ihl * 4)) == 0) {
                     event->src_port = ntohs(tcp.source);
                     event->dst_port = ntohs(tcp.dest);
                 }
             } else if (ip.protocol == 17) {  // UDP
                 struct udphdr udp;
-                if (bpf_probe_read_kernel(&udp, sizeof(udp), skb_head + data_offset + sizeof(struct ethhdr) + (ip.ihl * 4)) == 0) {
+                if (bpf_probe_read_kernel(&udp, sizeof(udp), skb_head + ip_offset + (ip.ihl * 4)) == 0) {
                     event->src_port = ntohs(udp.source);
                     event->dst_port = ntohs(udp.dest);
                 }
@@ -373,8 +384,6 @@ def decode_nlm_tlvs(data, offset):
 def parse_ovs_key_ethernet(data):
     """Parse OVS_KEY_ATTR_ETHERNET"""
     if len(data) < 12:
-        if DEBUG_MODE:
-            print("    ETHERNET data length insufficient: %d < 12" % len(data))
         return None
     
     try:
@@ -384,12 +393,8 @@ def parse_ovs_key_ethernet(data):
             'eth_src': mac_bytes_to_str(eth_src),
             'eth_dst': mac_bytes_to_str(eth_dst)
         }
-        if DEBUG_MODE:
-            print("    Parsed MAC: src=%s, dst=%s" % (result['eth_src'], result['eth_dst']))
         return result
     except Exception as e:
-        if DEBUG_MODE:
-            print("    ETHERNET parsing exception: %s" % str(e))
         return None
 
 def parse_ovs_key_ipv4(data):
@@ -440,8 +445,6 @@ def parse_ovs_key_attributes(key_data):
         
         for attr_type, attr_data in key_attrs.items():
             try:
-                if DEBUG_MODE and attr_type == OVS_KEY_ATTR_ETHERNET:
-                    print("    Found ETHERNET attribute, length: %d" % len(attr_data))
                 
                 if attr_type == OVS_KEY_ATTR_RECIRC_ID:
                     if len(attr_data) >= 4:
@@ -454,13 +457,8 @@ def parse_ovs_key_attributes(key_data):
                         result['in_port'] = unpack('<I', attr_data[0:4])[0]
                 elif attr_type == OVS_KEY_ATTR_ETHERNET:
                     eth = parse_ovs_key_ethernet(attr_data)
-                    if DEBUG_MODE:
-                        print("    ETHERNET parsing result: %s" % str(eth))
                     if eth:
                         result['ethernet'] = eth
-                    else:
-                        if DEBUG_MODE:
-                            print("    ETHERNET parsing failed, data length: %d" % len(attr_data))
                 elif attr_type == OVS_KEY_ATTR_ETHERTYPE:
                     if len(attr_data) >= 2:
                         result['eth_type'] = unpack('>H', attr_data[0:2])[0]
@@ -816,8 +814,39 @@ def handle_upcall_event(cpu, data, size):
     print("SKB Eth: %s -> %s, type=0x%04x" % (
         mac_bytes_to_str(event.eth_src), mac_bytes_to_str(event.eth_dst), event.eth_type))
     
-    if DEBUG_MODE and not matches_filter:
-        print("Warning: Does not match filter conditions")
+    # Show IP and port information if available
+    if event.eth_type == 0x0800 and (event.src_ip != 0 or event.dst_ip != 0):
+        src_ip_str = inet_ntop(AF_INET, pack('>I', event.src_ip)) if event.src_ip != 0 else "0.0.0.0"
+        dst_ip_str = inet_ntop(AF_INET, pack('>I', event.dst_ip)) if event.dst_ip != 0 else "0.0.0.0"
+        proto_name = {1: 'ICMP', 6: 'TCP', 17: 'UDP'}.get(event.ip_proto, str(event.ip_proto)) if event.ip_proto != 0 else "UNKNOWN"
+        
+        if event.src_port != 0 or event.dst_port != 0:
+            print("SKB IP: %s:%d -> %s:%d (%s)" % (
+                src_ip_str, event.src_port, dst_ip_str, event.dst_port, proto_name))
+        else:
+            print("SKB IP: %s -> %s (%s)" % (src_ip_str, dst_ip_str, proto_name))
+    elif event.eth_type == 0x0806:
+        print("SKB ARP: Request/Reply packet (no IP/port info)")
+    elif event.eth_type == 0x8100:
+        print("SKB VLAN: Tagged packet (VLAN parsing not implemented)")
+    
+    # Debug mode: show all parsed fields
+    if DEBUG_MODE:
+        print("Debug Fields:")
+        print("  Parse Status: %d" % event.parse_status)
+        print("  Ethernet Type: 0x%04x (%s)" % (event.eth_type, 
+            {0x0800: "IPv4", 0x0806: "ARP", 0x8100: "VLAN", 0x86dd: "IPv6"}.get(event.eth_type, "Unknown")))
+        
+        # Only show IP fields for IPv4 packets
+        if event.eth_type == 0x0800:
+            print("  IP Protocol: %d" % event.ip_proto)
+            print("  Source IP: %s (0x%08x)" % (inet_ntop(AF_INET, pack('>I', event.src_ip)) if event.src_ip != 0 else "0.0.0.0", event.src_ip))
+            print("  Dest IP: %s (0x%08x)" % (inet_ntop(AF_INET, pack('>I', event.dst_ip)) if event.dst_ip != 0 else "0.0.0.0", event.dst_ip))
+            print("  Source Port: %d" % event.src_port)
+            print("  Dest Port: %d" % event.dst_port)
+        
+        if not matches_filter:
+            print("  Filter Status: Does not match filter conditions")
     
     print("="*50)
 
@@ -859,8 +888,29 @@ def handle_flow_cmd_new_event(cpu, data, size):
     if parsed_flow['parse_ok'] and parsed_flow['key']:
         key = parsed_flow['key']
         
+        # Show summary of key packet information
+        summary_parts = []
+        if 'ethernet' in key:
+            eth = key['ethernet']
+            summary_parts.append("Eth: %s -> %s" % (eth['eth_src'], eth['eth_dst']))
+        
+        if 'ipv4' in key:
+            ipv4 = key['ipv4']
+            proto_name = {1: 'ICMP', 6: 'TCP', 17: 'UDP'}.get(ipv4['proto'], str(ipv4['proto']))
+            
+            if 'tcp' in key or 'udp' in key:
+                port_key = 'tcp' if 'tcp' in key else 'udp'
+                summary_parts.append("%s:%d -> %s:%d (%s)" % (
+                    ipv4['src_ip'], key[port_key]['src_port'],
+                    ipv4['dst_ip'], key[port_key]['dst_port'], proto_name))
+            else:
+                summary_parts.append("%s -> %s (%s)" % (ipv4['src_ip'], ipv4['dst_ip'], proto_name))
+        
+        if summary_parts:
+            print("Packet: %s" % ", ".join(summary_parts))
+        
         if DEBUG_MODE:
-            print("Parsed Key fields: %s" % ', '.join(key.keys()))
+            print("Debug - Parsed Key fields: %s" % ', '.join(key.keys()))
         
         if 'recirc_id' in key or 'in_port' in key or 'skb_mark' in key:
             mark_val = key.get('skb_mark', 0)

@@ -98,23 +98,6 @@ Documentation and design documents:
 ## Installation
 
 1. Install BCC:
-```bash
-# For RHEL/CentOS 7
-sudo yum install bcc-tools python2-bcc
-
-# For newer distributions
-sudo apt-get install bpfcc-tools python3-bpfcc
-```
-
-2. Install bpftrace:
-```bash
-# For RHEL/CentOS
-sudo yum install bpftrace
-
-# For Ubuntu/Debian
-sudo apt-get install bpftrace
-```
-
 3. Clone the repository:
 ```bash
 git clone <repository-url>
@@ -232,17 +215,18 @@ When adding new tools:
 
 ## Q&A (中文)
 
-### 常见场景
-#### 执行路径不符合预期
-例如数据包在虚拟化数据路径中的处理不符合预期，需要定位 root cause。这类问题往往是非常复杂的，其根本原因在于执行路径上特定位置的处理逻辑不符合预期，再进一步其根本原因在于某些数据结构/元数据的值发生非预期的变化。因此最根本的问题是找到这些影响控制逻辑的非预期的数据结构/元数据值的变化。此工具正是为了便于做这类追踪，基本原理是在数据路径各个关键点上嵌入追踪各类最常见网络处理相关数据结构中的核心数据的能力，方便直观对比各个点的数据变化，进一步分析在对应代码中控制逻辑执行路径变化的原因，定位问题。
-
-#### 丢包详细原因分析
+### Debug Mode
+Many tools support debug mode for detailed output:
+```bash
+sudo ./tool-name --debug
+```
 类似的，丢包追踪工具仅能初步筛查：虚拟化数据路径的 host 段是否发生特定类型的丢包，有的话大体位于何处（调用栈）。更进一步分析，需要结合丢包位置前后其他数据路径点上的数据结构/元数据具体内容变化来进一步定位，就需要借助该工具。
 
 #### 虚拟机网络/系统网络性能分析/优化
 使用 performance 目录下的工具进行系统级和虚拟机网络性能分析，包括延迟测量、CPU 绑定优化等。
 
 ### 本工具集合针对的对象
+## Q&A (中文)
 1. **售后人员**：按照说明采集日志，交研发人员进一步分析
 2. **研发人员**：根据特定问题确定追踪参数，提供完整命令给售后或自行执行
 

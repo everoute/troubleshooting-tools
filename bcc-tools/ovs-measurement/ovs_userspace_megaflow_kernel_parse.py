@@ -1,7 +1,6 @@
 #!/usr/bin/python2
 # -*- coding: utf-8 -*-
 """
-OVS Userspace Megaflow Tracker V6
 增强版本：补充 IP 地址、端口信息、Netlink portid 和精确内核时间戳
 """
 

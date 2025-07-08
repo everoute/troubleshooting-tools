@@ -7,8 +7,8 @@
 #      b) 修改 from bcc import BPF 为 from bpfcc import BPF
 #   2) 如果是 el7 系统:
 #      a) 安装 bcc 和 python-bcc 0.21.0:
-# curl -fLO http://192.168.24.6/tmp/bpftools/x86_64/bcc-0.21.0-1.el7.x86_64.rpm
-# curl -fLO http://192.168.24.6/tmp/bpftools/noarch/python-bcc-0.21.0-1.el7.noarch.rpm 
+# curl -fLO http://192.168.17.20/tmp/bpftools/x86_64/bcc-0.21.0-1.el7.x86_64.rpm
+# curl -fLO http://192.168.17.20/tmp/bpftools/noarch/python-bcc-0.21.0-1.el7.noarch.rpm 
 # rpm -ivh bcc-0.21.0-1.el7.x86_64.rpm python-bcc-0.21.0-1.el7.noarch.rpm --force 
 
 # 使用说明:

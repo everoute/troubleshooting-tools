@@ -1,0 +1,13 @@
+#!/usr/bin/env bpftrace
+#
+
+tracepoint:syscalls:sys_enter_futex 
+{
+    @ts[tid] = nsecs;
+}
+
+tracepoint:syscalls:sys_exit_futex 
+{
+    @lat = hist((nsecs - @ts[tid])/1000000);  
+    delete(@ts[tid]);
+}

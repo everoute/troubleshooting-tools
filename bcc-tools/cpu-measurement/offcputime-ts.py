@@ -1,19 +1,14 @@
 #!/usr/bin/env python3
-#
-# offcputime    Summarize off-CPU time by stack trace
-#               For Linux, uses BCC, eBPF.
-#
-# USAGE: offcputime [-h] [-p PID | -t TID | -u | -k] [-U | -K] [-d] [-f] [-s]
-#                   [--stack-storage-size STACK_STORAGE_SIZE]
-#                   [-m MIN_BLOCK_TIME] [-M MAX_BLOCK_TIME] [--state STATE]
-#                   [duration]
-#
-# Copyright 2016 Netflix, Inc.
-# Licensed under the Apache License, Version 2.0 (the "License")
-#
-# 13-Jan-2016	Brendan Gregg	Created this.
-# 27-Mar-2023	Rocky Xing      Added option to show symbol offsets.
-# 04-Apr-2023   Rocky Xing      Updated default stack storage size.
+# This code is modified and optimized based on 'offcputime.py' from the 'bcctools' project.
+# Original source: offcputime.py (bcctools)
+# Original author: Brendan Gregg
+# Modifications by: echkenluo
+# Date: 08-Jul-2025
+
+# Summary of modifications:
+# - Add timeseries tracing support.
+# - -I option: output every interval seconds for duration seconds total.
+# 08-Jul-2025   echkenluo      Add timeseries tracing support.
 
 from __future__ import print_function
 from bpfcc import BPF

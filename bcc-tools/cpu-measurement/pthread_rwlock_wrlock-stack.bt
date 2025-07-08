@@ -1,0 +1,12 @@
+#!/usr/bin/env bpftrace
+uprobe:/usr/lib64/libpthread-2.28.so:__pthread_rwlock_wrlock
+/ pid == $1 /
+{
+    @[comm, pid, ustack] = count();
+}
+
+END
+{
+    print(@);
+}
+

@@ -53,9 +53,6 @@ sudo bpftrace bpftrace/trace-abnormal-arp.bt
 sudo bpftrace bpftrace/trace-ovs-ct-invalid.bt
 ```
 
-### Testing
-
-Currently, there are no automated tests. Testing is done manually by running the tools with various filters and verifying output.
 
 ## Key Components
 
@@ -77,6 +74,8 @@ Currently, there are no automated tests. Testing is done manually by running the
 - VM pair latency: `vm_pair_latency/` directory tools
 - System network latency: `system_network_latency.py`
 
+
+## 使用示例
 ### 1. 多协议丢包追踪工具
 用于对满足特定条件的数据包，其在虚拟化数据路径中发生丢包的位置初步筛查。
 代码见 bpftools/multi_protocol_drop_monitor.py

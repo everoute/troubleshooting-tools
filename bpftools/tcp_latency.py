@@ -90,13 +90,13 @@ bpf_text = """
 #define TRACE_DIRECTION %d // 0 for Outgoing, 1 for Incoming
 
 // Define stages for single path (unidirectional)
-#define STAGE_0    0  // Start point: tcp_transmit_skb (TX) or __netif_receive_skb (RX)
+#define STAGE_0    0  // Start point: __tcp_transmit_skb (TX) or __netif_receive_skb (RX)
 #define STAGE_1    1  // internal_dev_xmit (TX) or netdev_frame_hook (RX)
 #define STAGE_2    2  // ovs_dp_process_packet
 #define STAGE_3    3  // ovs_dp_upcall (optional)
 #define STAGE_4    4  // ovs_flow_key_extract_userspace (optional)
 #define STAGE_5    5  // ovs_vport_send
-#define STAGE_6    6  // dev_queue_xmit (TX) or tcp_v4_rcv (RX)
+#define STAGE_6    6  // __dev_queue_xmit (TX) or tcp_v4_rcv (RX)
 
 #define MAX_STAGES               7
 #define IFNAMSIZ                 16
@@ -440,9 +440,9 @@ static __always_inline void handle_event(struct pt_regs *ctx, struct sk_buff *sk
 
 // Probe functions for TCP path
 
-// Outgoing: Start at tcp_transmit_skb
+// Outgoing: Start at __tcp_transmit_skb (with double underscore)
 // Incoming: Start at __netif_receive_skb
-int kprobe__tcp_transmit_skb(struct pt_regs *ctx, struct sock *sk, struct sk_buff *skb) {
+int kprobe____tcp_transmit_skb(struct pt_regs *ctx, struct sock *sk, struct sk_buff *skb) {
     if (TRACE_DIRECTION != 0) { // Only for outgoing
         return 0;
     }
@@ -553,8 +553,8 @@ int kprobe__ovs_vport_send(struct pt_regs *ctx, const void *vport, struct sk_buf
     return 0;
 }
 
-// Stage 6: dev_queue_xmit (TX) or tcp_v4_rcv (RX)
-int kprobe__dev_queue_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
+// Stage 6: __dev_queue_xmit (TX) or tcp_v4_rcv (RX)
+int kprobe____dev_queue_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
     if (TRACE_DIRECTION != 0) { // Only for outgoing
         return 0;
     }
@@ -678,9 +678,9 @@ def get_detailed_stage_name(stage_id, direction):
     """Returns a detailed stage name including the BPF probe point based on direction."""
     
     probe_map_outgoing = {
-        0: "tcp_transmit_skb",  1: "internal_dev_xmit",  2: "ovs_dp_process_packet",
+        0: "__tcp_transmit_skb",  1: "internal_dev_xmit",  2: "ovs_dp_process_packet",
         3: "ovs_dp_upcall",     4: "ovs_flow_key_extract_userspace", 5: "ovs_vport_send",
-        6: "dev_queue_xmit"
+        6: "__dev_queue_xmit"
     }
     
     probe_map_incoming = {

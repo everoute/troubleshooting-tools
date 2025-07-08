@@ -1,0 +1,13 @@
+#!/usr/bin/env bpftrace
+uprobe:/usr/lib64/libpthread-2.28.so:__pthread_rwlock_wrlock
+{
+    @begin[tid] = nsecs;
+}
+uretprobe:/usr/lib64/libpthread-2.28.so:__pthread_rwlock_wrlock
+/@begin[tid]/
+{
+    @lat = hist((nsecs-@begin[tid])/1000);   // us 级直方图
+    delete(@begin[tid]);
+}
+END { print(@lat); }
+

@@ -1,6 +1,9 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository. 
+this is main claude file, you must read other claude memory from spec as below：
+1. claude_local_coding.md for coding task;
+2. claude_local_test.md for test task;
 
 ## Project Overview
 
@@ -172,14 +175,3 @@ Tools support systematic performance analysis:
 - Follow documented procedures to collect logs
 - Deploy tools according to provided instructions
 - Forward collected data to development team for analysis
-
-## Test Environment
-
-BCC tools requiring testing should be deployed to: `smartx@192.168.70.33:/home/smartx/lcc/`
-- Create test subdirectories named after the tool's purpose for each testing session
-- Use `ssh mcpserver` or direct `scp` for deployment
-- Execute tests using `ssh mcpserver` or direct `ssh` connections
-
-## Test 
-- 测试环境如果是 python3-bcc 包，测试前修改使用的 python版本为 python3。
-- 测试环境操作系统（uname -a) 如果是 oe ，则 import bcc 需要改为 import bpfcc

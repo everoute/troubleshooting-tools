@@ -1,32 +1,55 @@
-#!/usr/bin/python2
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from bcc import BPF
-#from bpfcc import BPF
+from __future__ import print_function
+import sys
+
+# BCC module import with fallback
+try:
+    from bcc import BPF
+except ImportError:
+    try:
+        from bpfcc import BPF
+    except ImportError:
+        print("Error: Neither 'bcc' nor 'bpfcc' module found!")
+        if sys.version_info[0] == 3:
+            print("Please install: python3-bcc or python3-bpfcc")
+        else:
+            print("Please install: python-bcc or python2-bcc")
+        sys.exit(1)
+
 from socket import inet_ntop, AF_INET, inet_aton, htonl
 from struct import pack, unpack
 from time import strftime
 import socket
 import argparse
+import ctypes as ct
+
+# Devname structure for device filtering (same as tun_ring_monitor.py)
+class Devname(ct.Structure):
+    _fields_=[("name", ct.c_char*16)]
 
 normal_patterns = {
     'icmp_rcv': ['icmp_rcv'],
     'tcp_v4_rcv': ['tcp_v4_rcv'],
-    'skb_release_data': ['skb_release_data', '__kfree_skb', 'tcp_recvmsg']
+    'skb_release_data': ['skb_release_data', '__kfree_skb', 'tcp_recvmsg'],
 }
 
 def is_normal_kfree_pattern(stack_trace):
     if not stack_trace or len(stack_trace) < 2:
         return False
     
-    last_func = stack_trace[-1]
-    if 'kfree_skb' not in last_func:
+    # Stack trace is ordered from innermost (0) to outermost (-1)
+    # Check if the first function is kfree_skb
+    first_func = stack_trace[0]
+    if 'kfree_skb' not in first_func:
         return False
     
+    # Check if the second function matches any normal pattern
     if len(stack_trace) >= 2:
-        second_last_func = stack_trace[-2]
+        second_func = stack_trace[1]
         for pattern_name, pattern_funcs in normal_patterns.items():
-            if any(func in second_last_func for func in pattern_funcs):
+            if any(func in second_func for func in pattern_funcs):
                 return True
     
     return False
@@ -40,6 +63,11 @@ parser.add_argument('--dst', type=str, help='Destination IP address to tracing (
 parser.add_argument('--protocol', type=str, choices=['all', 'icmp', 'tcp', 'udp', 'arp', 'rarp', 'other'], default='all', help='Protocol to tracing')
 parser.add_argument('--src-port', type=int, help='Source port to tracing (for TCP/UDP)')
 parser.add_argument('--dst-port', type=int, help='Destination port to tracing (for TCP/UDP)')
+parser.add_argument('--dev', type=str, help='Device name to filter (e.g., eth0, vnet12)')
+parser.add_argument('--enable-receive', action='store_true', default=False, 
+                    help='Enable tracing of __netif_receive_skb_core (default: disabled)')
+parser.add_argument('--disable-normal-filter', action='store_true', default=False,
+                    help='Disable filtering of normal kfree patterns (default: filter enabled)')
 args = parser.parse_args()
 
 src_ip = args.src if args.src else "0.0.0.0"
@@ -53,6 +81,12 @@ print("Protocol: {}".format(args.protocol))
 if args.protocol in ['tcp', 'udp']:
     print("Source port: {}".format(src_port))
     print("Destination port: {}".format(dst_port))
+if args.dev:
+    print("Device filter: {}".format(args.dev))
+else:
+    print("Device filter: All devices")
+print("Receive tracing: {}".format("Enabled" if args.enable_receive else "Disabled"))
+print("Normal kfree filter: {}".format("Disabled" if args.disable_normal_filter else "Enabled"))
 
 src_ip_hex = ip_to_hex(src_ip)
 dst_ip_hex = ip_to_hex(dst_ip)
@@ -70,6 +104,15 @@ bpf_text = """
 #define IFNAMSIZ 16
 #define TASK_COMM_LEN 16
 
+// Device name union for efficient comparison (from tun_ring_monitor.py)
+union name_buf {
+    char name[IFNAMSIZ];
+    struct {
+        u64 hi;
+        u64 lo;
+    } name_int;
+};
+
 #ifndef ETH_P_8021Q
 #define ETH_P_8021Q 0x8100   // 802.1Q VLAN protocol
 #endif
@@ -82,6 +125,7 @@ struct vlan_hdr {
 
 BPF_HASH(ipv4_count, u32, u64);
 BPF_STACK_TRACE(stack_traces, 8192);  
+BPF_ARRAY(name_map, union name_buf, 1);  // Device filter
 #define SRC_IP 0x%x
 #define DST_IP 0x%x
 #define SRC_PORT %d
@@ -89,6 +133,26 @@ BPF_STACK_TRACE(stack_traces, 8192);
 #define PROTOCOL %d
 #define FILTER_ARP %d
 #define FILTER_RARP %d
+
+// Device filter logic (from tun_ring_monitor.py)
+static inline int name_filter(struct net_device *dev){
+    union name_buf real_devname;
+    bpf_probe_read_kernel_str(real_devname.name, IFNAMSIZ, dev->name);
+
+    int key=0;
+    union name_buf *leaf = name_map.lookup(&key);
+    if(!leaf){
+        return 1;  // No filter set - accept all devices
+    }
+    if(leaf->name_int.hi == 0 && leaf->name_int.lo == 0){
+        return 1;  // Empty filter - accept all devices
+    }
+    if(leaf->name_int.hi != real_devname.name_int.hi || leaf->name_int.lo != real_devname.name_int.lo){
+        return 0;  // Device name doesn't match
+    }
+
+    return 1;  // Device name matches
+}
 
 struct dropped_skb_data_t {
     u32 pid;
@@ -139,6 +203,13 @@ int trace_kfree_skb(struct pt_regs *ctx)
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
     if (skb == NULL)
         return 0;
+
+    // Get device and apply device filter first
+    struct net_device *dev;
+    bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev);
+    if (!name_filter(dev)) {
+        return 0;  // Device doesn't match filter, skip
+    }
 
     // Advanced SKB parsing similar to icmp_rtt_latency.py and netif_receive_skb_core
     unsigned char *skb_head;
@@ -234,9 +305,7 @@ int trace_kfree_skb(struct pt_regs *ctx)
         // If PROTOCOL == 0 (all), we capture everything including "other" protocols
     }
 
-    struct net_device *dev;
     char ifname[IFNAMSIZ] = {0};
-    bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev);
     bpf_probe_read_kernel_str(ifname, IFNAMSIZ, dev->name);
 
     struct dropped_skb_data_t data = {};
@@ -354,6 +423,13 @@ int trace____netif_receive_skb_core(struct pt_regs *ctx)
     if (skb == NULL)
         return 0;
 
+    // Get device and apply device filter first
+    struct net_device *dev;
+    bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev);
+    if (!name_filter(dev)) {
+        return 0;  // Device doesn't match filter, skip
+    }
+
     // Advanced SKB parsing similar to icmp_rtt_latency.py
     unsigned char *skb_head;
     if (bpf_probe_read_kernel(&skb_head, sizeof(skb_head), &skb->head) < 0) {
@@ -448,9 +524,7 @@ int trace____netif_receive_skb_core(struct pt_regs *ctx)
         // If PROTOCOL == 0 (all), we capture everything including "other" protocols
     }
 
-    struct net_device *dev;
     char ifname[IFNAMSIZ] = {0};
-    bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev);
     bpf_probe_read_kernel_str(ifname, IFNAMSIZ, dev->name);
 
     struct netif_receive_data_t data = {};
@@ -537,7 +611,19 @@ b = BPF(text=bpf_text % (src_ip_hex, dst_ip_hex, src_port, dst_port, protocol_nu
 #b = BPF(src_file = EBPF_FILE)
 
 b.attach_kprobe(event="kfree_skb", fn_name="trace_kfree_skb")
-b.attach_kprobe(event="__netif_receive_skb_core", fn_name="trace____netif_receive_skb_core")
+if args.enable_receive:
+    b.attach_kprobe(event="__netif_receive_skb_core", fn_name="trace____netif_receive_skb_core")
+
+# Set device filter (from tun_ring_monitor.py approach)
+devname_map = b["name_map"]
+_name = Devname()
+if args.dev:
+    _name.name = args.dev.encode()
+    devname_map[0] = _name
+else:
+    # Set empty filter to accept all devices
+    _name.name = b""
+    devname_map[0] = _name
 
 def print_basic_skb_data(cpu, data, size, perf_event=""):
     global b
@@ -636,7 +722,7 @@ def print_kfree_drop_event(cpu, data, size):
                 sym = b.ksym(addr, show_offset=True)
                 stack_trace.append(sym)
             
-            if is_normal_kfree_pattern(stack_trace):
+            if not args.disable_normal_filter and is_normal_kfree_pattern(stack_trace):
                 return
         except KeyError:
             pass

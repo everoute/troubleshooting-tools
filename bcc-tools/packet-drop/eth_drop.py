@@ -1,8 +1,23 @@
-#!/usr/bin/python2
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from bcc import BPF
-#from bpfcc import BPF
+from __future__ import print_function
+import sys
+
+# BCC module import with fallback
+try:
+    from bcc import BPF
+except ImportError:
+    try:
+        from bpfcc import BPF
+    except ImportError:
+        print("Error: Neither 'bcc' nor 'bpfcc' module found!")
+        if sys.version_info[0] == 3:
+            print("Please install: python3-bcc or python3-bpfcc")
+        else:
+            print("Please install: python-bcc or python2-bcc")
+        sys.exit(1)
+
 from socket import inet_ntop, AF_INET, inet_aton, htonl
 from struct import pack, unpack
 from time import strftime
@@ -17,21 +32,24 @@ class Devname(ct.Structure):
 normal_patterns = {
     'icmp_rcv': ['icmp_rcv'],
     'tcp_v4_rcv': ['tcp_v4_rcv'],
-    'skb_release_data': ['skb_release_data', '__kfree_skb', 'tcp_recvmsg']
+    'skb_release_data': ['skb_release_data', '__kfree_skb', 'tcp_recvmsg'],
 }
 
 def is_normal_kfree_pattern(stack_trace):
     if not stack_trace or len(stack_trace) < 2:
         return False
     
-    last_func = stack_trace[-1]
-    if 'kfree_skb' not in last_func:
+    # Stack trace is ordered from innermost (0) to outermost (-1)
+    # Check if the first function is kfree_skb
+    first_func = stack_trace[0]
+    if 'kfree_skb' not in first_func:
         return False
     
+    # Check if the second function matches any normal pattern
     if len(stack_trace) >= 2:
-        second_last_func = stack_trace[-2]
+        second_func = stack_trace[1]
         for pattern_name, pattern_funcs in normal_patterns.items():
-            if any(func in second_last_func for func in pattern_funcs):
+            if any(func in second_func for func in pattern_funcs):
                 return True
     
     return False
@@ -46,6 +64,10 @@ parser.add_argument('--protocol', type=str, choices=['all', 'icmp', 'tcp', 'udp'
 parser.add_argument('--src-port', type=int, help='Source port to tracing (for TCP/UDP)')
 parser.add_argument('--dst-port', type=int, help='Destination port to tracing (for TCP/UDP)')
 parser.add_argument('--dev', type=str, help='Device name to filter (e.g., eth0, vnet12)')
+parser.add_argument('--enable-receive', action='store_true', default=False, 
+                    help='Enable tracing of __netif_receive_skb_core (default: disabled)')
+parser.add_argument('--disable-normal-filter', action='store_true', default=False,
+                    help='Disable filtering of normal kfree patterns (default: filter enabled)')
 args = parser.parse_args()
 
 src_ip = args.src if args.src else "0.0.0.0"
@@ -63,6 +85,8 @@ if args.dev:
     print("Device filter: {}".format(args.dev))
 else:
     print("Device filter: All devices")
+print("Receive tracing: {}".format("Enabled" if args.enable_receive else "Disabled"))
+print("Normal kfree filter: {}".format("Disabled" if args.disable_normal_filter else "Enabled"))
 
 src_ip_hex = ip_to_hex(src_ip)
 dst_ip_hex = ip_to_hex(dst_ip)
@@ -587,7 +611,8 @@ b = BPF(text=bpf_text % (src_ip_hex, dst_ip_hex, src_port, dst_port, protocol_nu
 #b = BPF(src_file = EBPF_FILE)
 
 b.attach_kprobe(event="kfree_skb", fn_name="trace_kfree_skb")
-b.attach_kprobe(event="__netif_receive_skb_core", fn_name="trace____netif_receive_skb_core")
+if args.enable_receive:
+    b.attach_kprobe(event="__netif_receive_skb_core", fn_name="trace____netif_receive_skb_core")
 
 # Set device filter (from tun_ring_monitor.py approach)
 devname_map = b["name_map"]
@@ -697,7 +722,7 @@ def print_kfree_drop_event(cpu, data, size):
                 sym = b.ksym(addr, show_offset=True)
                 stack_trace.append(sym)
             
-            if is_normal_kfree_pattern(stack_trace):
+            if not args.disable_normal_filter and is_normal_kfree_pattern(stack_trace):
                 return
         except KeyError:
             pass

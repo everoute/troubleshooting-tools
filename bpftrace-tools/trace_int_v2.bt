@@ -1,0 +1,248 @@
+#!/usr/bin/bpftrace
+
+#include <linux/virtio.h>
+#include <linux/virtio_net.h>
+#include <linux/netdevice.h>
+#include <linux/workqueue.h>
+#include <linux/types.h>
+#include <linux/irq.h>
+#include <linux/irqdesc.h>
+#include <linux/module.h>
+#include <linux/interrupt.h>
+#include <net/net_failover.h>
+
+struct ewma_pkt_len {
+	unsigned long internal;
+};	
+
+struct virtnet_stat_desc {
+	char desc[ETH_GSTRING_LEN];
+	size_t offset;
+};
+
+struct virtnet_sq_stats {
+	struct u64_stats_sync syncp;
+	u64 packets;
+	u64 bytes;
+	u64 xdp_tx;
+	u64 xdp_tx_drops;
+	u64 kicks;
+};
+
+struct virtnet_rq_stats {
+	struct u64_stats_sync syncp;
+	u64 packets;
+	u64 bytes;
+	u64 drops;
+	u64 xdp_packets;
+	u64 xdp_tx;
+	u64 xdp_redirects;
+	u64 xdp_drops;
+	u64 kicks;
+};
+
+/* Internal representation of a send virtqueue */
+struct send_queue {
+	/* Virtqueue associated with this send _queue */
+	struct virtqueue *vq;
+
+	/* TX: fragments + linear part + virtio header */
+	struct scatterlist sg[MAX_SKB_FRAGS + 2];
+
+	/* Name of the send queue: output.$index */
+	char name[40];
+
+	struct virtnet_sq_stats stats;
+
+	struct napi_struct napi;
+};
+
+/* Internal representation of a receive virtqueue */
+struct receive_queue {
+	/* Virtqueue associated with this receive_queue */
+	struct virtqueue *vq;
+
+	struct napi_struct napi;
+
+	struct bpf_prog __rcu *xdp_prog;
+
+	struct virtnet_rq_stats stats;
+
+	/* Chain pages by the private ptr. */
+	struct page *pages;
+
+	/* Average packet length for mergeable receive buffers. */
+	struct ewma_pkt_len mrg_avg_pkt_len;
+
+	/* Page frag for packet buffer allocation. */
+	struct page_frag alloc_frag;
+
+	/* RX: fragments + linear part + virtio header */
+	struct scatterlist sg[MAX_SKB_FRAGS + 2];
+
+	/* Min single buffer size for mergeable buffers case. */
+	unsigned int min_buf_len;
+
+	/* Name of this receive queue: input.$index */
+	char name[40];
+
+	struct xdp_rxq_info xdp_rxq;
+};
+
+/* Control VQ buffers: protected by the rtnl lock */
+struct control_buf {
+	struct virtio_net_ctrl_hdr hdr;
+	virtio_net_ctrl_ack status;
+	struct virtio_net_ctrl_mq mq;
+	u8 promisc;
+	u8 allmulti;
+	__virtio16 vid;
+	__virtio64 offloads;
+};
+
+struct virtnet_info {
+	struct virtio_device *vdev;
+	struct virtqueue *cvq;
+	struct net_device *dev;
+	struct send_queue *sq;
+	struct receive_queue *rq;
+	unsigned int status;
+
+	/* Max # of queue pairs supported by the device */
+	u16 max_queue_pairs;
+
+	/* # of queue pairs currently used by the driver */
+	u16 curr_queue_pairs;
+
+	/* # of XDP queue pairs currently used by the driver */
+	u16 xdp_queue_pairs;
+
+	/* I like... big packets and I cannot lie! */
+	bool big_packets;
+
+	/* Host will merge rx buffers for big packets (shake it! shake it!) */
+	bool mergeable_rx_bufs;
+
+	/* Has control virtqueue */
+	bool has_cvq;
+
+	/* Host can handle any s/g split between our header and packet data */
+	bool any_header_sg;
+
+	/* Packet virtio header size */
+	u8 hdr_len;
+
+	/* Work struct for refilling if we run low on memory. */
+	struct delayed_work refill;
+
+	/* Work struct for config space updates */
+	struct work_struct config_work;
+
+	/* Does the affinity hint is set for virtqueues? */
+	bool affinity_hint_set;
+
+	/* CPU hotplug instances for online & dead */
+	struct hlist_node node;
+	struct hlist_node node_dead;
+
+	struct control_buf *ctrl;
+
+	/* Ethtool settings */
+	u8 duplex;
+	u32 speed;
+
+	unsigned long guest_offloads;
+
+	/* failover when STANDBY feature enabled */
+	struct failover *failover;
+};
+
+struct vring_desc_state {
+	void *data;			/* Data for callback. */
+	struct vring_desc *indir_desc;	/* Indirect descriptor, if any. */
+};
+
+struct vring_virtqueue {
+	struct virtqueue vq;
+
+	/* Actual memory layout for this queue */
+	struct vring vring;
+
+	/* Can we use weak barriers? */
+	bool weak_barriers;
+
+	/* Other side has made a mess, don't try any more. */
+	bool broken;
+
+	/* Host supports indirect buffers */
+	bool indirect;
+
+	/* Host publishes avail event idx */
+	bool event;
+
+	/* Head of free buffer list. */
+	unsigned int free_head;
+	/* Number we've added since last sync. */
+	unsigned int num_added;
+
+	/* Last used index we've seen. */
+	u16 last_used_idx;
+
+	/* Last written value to avail->flags */
+	u16 avail_flags_shadow;
+
+	/* Last written value to avail->idx in guest byte order */
+	u16 avail_idx_shadow;
+
+	/* How to notify other side. FIXME: commonalize hcalls! */
+	bool (*notify)(struct virtqueue *vq);
+
+	/* DMA, allocation, and size information */
+	bool we_own_ring;
+	size_t queue_size_in_bytes;
+	dma_addr_t queue_dma_addr;
+
+	/* Per-descriptor state. */
+	struct vring_desc_state desc_state[];
+};
+
+#define IRQ1 69
+#define IRQ2 71
+#define IRQ3 73
+#define IRQ4 75
+
+kprobe:__handle_irq_event_percpu {
+	$desc = (struct irq_desc *)arg0;
+	$owner = (struct module *)$desc->owner;
+	$action = (struct irqaction *)$desc->action;
+	
+	if($action->irq == IRQ1 || $action->irq == IRQ2 || $action->irq == IRQ3 || $action->irq == IRQ4) {
+		@__handle_irq_cnt[str($action->name),$action->irq,ksym($action->dev_id)] = count();
+		//printf("cpu:%d action_name:%s\n", cpu, str($action->name));
+	}	
+}
+
+kprobe:vring_interrupt {
+	$irq = arg0;
+	if ($irq == IRQ1 || $irq == IRQ2 || $irq == IRQ3 || $irq == IRQ4) {
+		@vring_int_cnt[$irq,ksym(arg1)] = count();
+		@tmp_flag[cpu] = $irq;
+	}
+}
+
+kretprobe:vring_interrupt {
+	if (@tmp_flag[cpu]) {
+		@vring_int_ret_cnt[@tmp_flag[cpu],retval] = count();
+		@tmp_flag[cpu] = 0;
+	}
+}
+
+interval:s:5 {
+	time("%H:%M:%S \n");
+	print(@__handle_irq_cnt);
+	print(@vring_int_cnt);
+	print(@vring_int_ret_cnt);
+	clear(@__handle_irq_cnt);
+	clear(@vring_int_cnt);
+	clear(@vring_int_ret_cnt);
+}

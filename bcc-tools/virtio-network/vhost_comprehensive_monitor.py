@@ -402,6 +402,16 @@ struct vhost_ultra_event {
         u32 desc_1_len;                // Second descriptor length
         u16 desc_1_flags;              // Second descriptor flags
         u16 desc_1_next;               // Second descriptor next
+        
+        // VRING CONSUMPTION ANALYSIS - Additional parameters for consumption tracking
+        u16 vring_avail_consumed;      // Available entries consumed this batch
+        u16 vring_used_produced;       // Used entries produced this batch
+        u16 vring_pending_count;       // Pending descriptors (avail_idx - last_avail_idx)
+        u16 vring_completion_gap;      // Gap between used and signalled (last_used_idx - signalled_used)
+        u8 vring_wrap_around;          // Whether indices wrapped around
+        u8 vring_notification_suppressed; // Whether notifications are suppressed
+        u32 vring_total_bytes_consumed; // Total bytes in consumed descriptors
+        u8 vring_batch_efficiency;     // Efficiency: batch_size / pending_count (percentage)
     } ring_details;
     
     // === PERFORMANCE COUNTERS ===
@@ -438,7 +448,8 @@ BPF_PERF_OUTPUT(events);
 struct filter_config {
     char device[IFNAMSIZ];
     u32 queue;
-    u8 enabled;
+    u8 device_filter_enabled;
+    u8 queue_filter_enabled;
 };
 BPF_ARRAY(filter_settings, struct filter_config, 1);
 
@@ -600,8 +611,8 @@ static inline void extract_memory_state(struct vhost_virtqueue *vq, struct vhost
     }
 }
 
-// Extract ring buffer details (userspace rings)
-static inline void extract_ring_details(struct vhost_virtqueue *vq, struct vhost_ultra_event *event) {
+// Extract ring buffer details (userspace rings) with vring consumption analysis
+static inline void extract_ring_details(struct vhost_virtqueue *vq, struct vhost_ultra_event *event, unsigned count) {
     if (!vq) return;
     
     // Get ring pointers
@@ -610,14 +621,40 @@ static inline void extract_ring_details(struct vhost_virtqueue *vq, struct vhost
     SAFE_READ(used_ring, vq, used);
     SAFE_READ(desc_ring, vq, desc);
     
+    // Get key indices for consumption analysis
+    u16 last_avail_idx = 0, avail_idx = 0, last_used_idx = 0, signalled_used = 0;
+    SAFE_READ(last_avail_idx, vq, last_avail_idx);
+    SAFE_READ(avail_idx, vq, avail_idx);
+    SAFE_READ(last_used_idx, vq, last_used_idx);
+    SAFE_READ(signalled_used, vq, signalled_used);
+    
+    // Calculate vring consumption metrics
+    event->ring_details.vring_pending_count = avail_idx - last_avail_idx;
+    event->ring_details.vring_completion_gap = last_used_idx - signalled_used;
+    event->ring_details.vring_avail_consumed = count;  // This batch size
+    event->ring_details.vring_used_produced = count;   // Same as consumed in normal cases
+    
+    // Check for wrap-around (simplified check)
+    event->ring_details.vring_wrap_around = (avail_idx < last_avail_idx || last_used_idx < signalled_used) ? 1 : 0;
+    
+    // Calculate batch efficiency (avoid division by zero)
+    if (event->ring_details.vring_pending_count > 0) {
+        u32 efficiency = (count * 100) / event->ring_details.vring_pending_count;
+        event->ring_details.vring_batch_efficiency = efficiency > 100 ? 100 : efficiency;
+    } else {
+        event->ring_details.vring_batch_efficiency = 100;
+    }
+    
     // Try to read available ring (userspace memory - might fail)
     if (avail_ring) {
-        u16 avail_flags = 0, avail_idx = 0;
+        u16 avail_flags = 0, avail_idx_actual = 0;
         if (bpf_probe_read_user(&avail_flags, sizeof(avail_flags), avail_ring) == 0) {
             event->ring_details.avail_flags = avail_flags;
+            // Check if notifications are suppressed (VRING_AVAIL_F_NO_INTERRUPT = 1)
+            event->ring_details.vring_notification_suppressed = (avail_flags & 1) ? 1 : 0;
         }
-        if (bpf_probe_read_user(&avail_idx, sizeof(avail_idx), (char*)avail_ring + 2) == 0) {
-            event->ring_details.avail_idx_actual = avail_idx;
+        if (bpf_probe_read_user(&avail_idx_actual, sizeof(avail_idx_actual), (char*)avail_ring + 2) == 0) {
+            event->ring_details.avail_idx_actual = avail_idx_actual;
         }
         
         // Try to read first two available entries
@@ -647,12 +684,16 @@ static inline void extract_ring_details(struct vhost_virtqueue *vq, struct vhost
         }
         if (bpf_probe_read_user(&used_0_len, sizeof(used_0_len), (char*)used_ring + 8) == 0) {
             event->ring_details.used_ring_0_len = used_0_len;
+            // Add to total bytes consumed
+            event->ring_details.vring_total_bytes_consumed += used_0_len;
         }
         if (bpf_probe_read_user(&used_1_id, sizeof(used_1_id), (char*)used_ring + 12) == 0) {
             event->ring_details.used_ring_1_id = used_1_id;
         }
         if (bpf_probe_read_user(&used_1_len, sizeof(used_1_len), (char*)used_ring + 16) == 0) {
             event->ring_details.used_ring_1_len = used_1_len;
+            // Add to total bytes consumed
+            event->ring_details.vring_total_bytes_consumed += used_1_len;
         }
     }
     
@@ -750,9 +791,32 @@ int trace_vhost_add_used_and_signal_n(struct pt_regs *ctx) {
     
     if (!dev || !vq) return 0;
     
+    // Try to determine queue index first for filtering
+    u32 queue_index = 255; // Unknown by default
+    struct vhost_virtqueue **vqs = NULL;
+    SAFE_READ(vqs, dev, vqs);
+    if (vqs) {
+        // Check first two queues (RX=0, TX=1 for vhost-net)
+        struct vhost_virtqueue *vq0 = NULL, *vq1 = NULL;
+        if (bpf_probe_read_kernel(&vq0, sizeof(vq0), &vqs[0]) == 0 && vq0 == vq) {
+            queue_index = 0;
+        } else if (bpf_probe_read_kernel(&vq1, sizeof(vq1), &vqs[1]) == 0 && vq1 == vq) {
+            queue_index = 1;
+        }
+    }
+    
     // Check filter
     int key = 0;
     struct filter_config *filter = filter_settings.lookup(&key);
+    if (filter) {
+        // Apply queue filter if enabled
+        if (filter->queue_filter_enabled && filter->queue != queue_index) {
+            return 0; // Skip this event
+        }
+        
+        // Device filtering would require device name lookup, skip for now
+        // as it's complex to implement in BPF
+    }
     
     // Create comprehensive event
     struct vhost_ultra_event event = {};
@@ -765,21 +829,7 @@ int trace_vhost_add_used_and_signal_n(struct pt_regs *ctx) {
     event.dev_ptr = (u64)dev;
     event.vq_ptr = (u64)vq;
     event.heads_count = count;
-    
-    // Try to determine queue index by reading from dev->vqs array
-    struct vhost_virtqueue **vqs = NULL;
-    SAFE_READ(vqs, dev, vqs);
-    if (vqs) {
-        // Check first two queues (RX=0, TX=1 for vhost-net)
-        struct vhost_virtqueue *vq0 = NULL, *vq1 = NULL;
-        if (bpf_probe_read_kernel(&vq0, sizeof(vq0), &vqs[0]) == 0 && vq0 == vq) {
-            event.queue_index = 0;
-        } else if (bpf_probe_read_kernel(&vq1, sizeof(vq1), &vqs[1]) == 0 && vq1 == vq) {
-            event.queue_index = 1;
-        } else {
-            event.queue_index = 255; // Unknown
-        }
-    }
+    event.queue_index = queue_index;
     
     __builtin_memcpy(event.dev_name, "vhost", 6);
     
@@ -787,7 +837,7 @@ int trace_vhost_add_used_and_signal_n(struct pt_regs *ctx) {
     extract_vhost_dev_state(dev, &event);
     extract_vhost_vq_state(vq, &event);
     extract_memory_state(vq, &event);
-    extract_ring_details(vq, &event);
+    extract_ring_details(vq, &event, count);  // Pass count for consumption analysis
     extract_worker_state(dev, &event);
     extract_net_vq_state(vq, &event);
     
@@ -1092,6 +1142,20 @@ Examples:
         # Attach probe
         b.attach_kprobe(event="vhost_add_used_and_signal_n", fn_name="trace_vhost_add_used_and_signal_n")
         
+        # Set filter configuration
+        if args.device or args.queue is not None:
+            filter_map = b["filter_settings"]
+            filter_config = filter_map[0]
+            
+            if args.device:
+                device_bytes = args.device.encode('utf-8')[:15]  # Max 15 chars + null terminator
+                ct.memmove(filter_config.device, device_bytes, len(device_bytes))
+                filter_config.device_filter_enabled = 1
+            
+            if args.queue is not None:
+                filter_config.queue = args.queue
+                filter_config.queue_filter_enabled = 1
+        
         if args.verbose:
             print("✅ Probe attached successfully")
         
@@ -1100,7 +1164,11 @@ Examples:
         return
     
     print("🔍 Comprehensive VHOST Monitor Started")
-    print("📊 Monitoring vhost_add_used_and_signal_n with ultra-detailed analysis")
+    print("📊 Monitoring vhost_add_used_and_signal_n with ultra-detailed vring consumption analysis")
+    if args.device:
+        print("🎯 Device Filter: {}".format(args.device))
+    if args.queue is not None:
+        print("🎯 Queue Filter: {}".format(args.queue))
     print("⏳ Waiting for events... Press Ctrl+C to stop\n")
     
     try:

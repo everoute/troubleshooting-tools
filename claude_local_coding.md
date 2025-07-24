@@ -15,7 +15,7 @@
 
 
 ### bcc python 部分
-1. bcc 代码 python 版本导入以及导入 package 方式如下，保证使用不同 python version && bcc package 的环境均可兼容。
+1. bcc 代码 python 版本导入以及导入 package 方式如下，保证使用不同的 bcc 包版本都能正常导入（python-bcc/python3-bpfcc）。
 ```
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-

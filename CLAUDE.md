@@ -1,9 +1,11 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository. 
-this is main claude file, you must read other claude memory from spec as below：
-1. claude_local_coding.md for coding task;
-2. claude_local_test.md for test task;
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Memory File Structure
+This is the main Claude configuration file. Additional context-specific memory files:
+- `claude_local_coding.md` - BPF/BCC coding guidelines and conventions
+- `claude_local_test.md` - Testing procedures and environment setup
 
 ## Project Overview
 
@@ -175,3 +177,23 @@ Tools support systematic performance analysis:
 - Follow documented procedures to collect logs
 - Deploy tools according to provided instructions
 - Forward collected data to development team for analysis
+
+## Safety Guidelines and Important Reminders
+
+### System Safety
+- **CRITICAL**: All BPF tools require root/sudo access and can impact system performance
+- **ALWAYS** test tools in development environment before production deployment
+- **NEVER** run untested BPF programs on critical production systems
+- **MONITOR** system resources when running continuous tracing tools
+
+### Development Guidelines
+- Do what has been asked; nothing more, nothing less
+- NEVER create files unless absolutely necessary
+- ALWAYS prefer editing existing files over creating new ones
+- NEVER proactively create documentation files unless explicitly requested
+
+### Common Pitfalls to Avoid
+1. **Stack Overflow**: BPF stack is limited to 512 bytes - use maps for large data structures
+2. **Verifier Errors**: Complex loops may fail BPF verification - keep logic simple
+3. **Performance Impact**: High-frequency kprobes can significantly impact system performance
+4. **Symbol Resolution**: Ensure kernel debug symbols are available for stack traces

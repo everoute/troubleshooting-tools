@@ -279,9 +279,14 @@ def print_histogram_stats(b):
     
     duration = current_time - start_time
     
+    # Get current timestamp
+    import datetime
+    current_timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+    
     print("\n" + "="*100)
     print("VM Interrupt Statistics Summary (Histogram Version)")
     print("="*100)
+    print("Timestamp: {}".format(current_timestamp))
     print("Statistics Duration: {:.2f} seconds (Current Interval: {:.2f} seconds)".format(duration, interval))
     
     # 收集和组织统计数据

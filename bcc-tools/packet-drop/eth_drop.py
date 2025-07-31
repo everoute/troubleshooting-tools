@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 from __future__ import print_function
@@ -134,6 +134,7 @@ if interface_filter:
     print("Interface filter: {}".format(interface_filter))
 print("Verbose mode: {}".format('ON' if args.verbose else 'OFF'))
 print("Stack trace: {}".format('OFF' if args.no_stack_trace else 'ON'))
+print("Normal pattern filter: {}".format('OFF' if args.disable_normal_filter else 'ON'))
 print("-" * 80)
 
 src_ip_hex = ip_to_hex(src_ip)
@@ -186,7 +187,7 @@ struct arphdr_custom {
     __u8 ar_tip[4];
 };
 
-BPF_STACK_TRACE(stack_traces, 8192);
+BPF_STACK_TRACE(stack_traces, 10240);
 
 // Interface name filtering structure
 union name_buf {
@@ -328,7 +329,7 @@ int trace_kfree_skb(struct pt_regs *ctx) {
     struct packet_data_t data = {};
     data.timestamp = bpf_ktime_get_ns();
     data.pid = bpf_get_current_pid_tgid();
-    data.stack_id = stack_traces.get_stackid(ctx, 0);
+    data.stack_id = stack_traces.get_stackid(ctx, BPF_F_REUSE_STACKID);
     
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
     
@@ -568,23 +569,28 @@ if interface_filter:
     
     interface_map = b.get_table("interface_map")
     target_name = InterfaceName()
-    # Python 2 compatible string encoding
-    try:
-        # Python 2 has unicode type
-        if isinstance(interface_filter, unicode):
-            target_name.name = interface_filter.encode('utf-8')
-        else:
+    # Python 2/3 compatible string encoding
+    if sys.version_info[0] == 2:
+        # Python 2
+        try:
+            if isinstance(interface_filter, unicode):
+                target_name.name = interface_filter.encode('utf-8')
+            else:
+                target_name.name = str(interface_filter)
+        except NameError:
             target_name.name = str(interface_filter)
-    except NameError:
-        # Python 3 doesn't have unicode type
+    else:
+        # Python 3
         if isinstance(interface_filter, str):
             target_name.name = interface_filter.encode('utf-8')
         else:
-            target_name.name = str(interface_filter)
+            target_name.name = str(interface_filter).encode('utf-8')
     interface_map[0] = target_name
 
 # Attach the kprobe
 b.attach_kprobe(event="kfree_skb", fn_name="trace_kfree_skb")
+
+# No debug code needed
 
 # Define ctypes structure for packet data
 class PacketData(ct.Structure):
@@ -593,7 +599,7 @@ class PacketData(ct.Structure):
         ("pid", ct.c_uint32),
         ("comm", ct.c_char * 16),
         ("ifname", ct.c_char * 16),
-        ("stack_id", ct.c_uint32),
+        ("stack_id", ct.c_int32),
         
         # Ethernet fields
         ("eth_src", ct.c_uint8 * 6),
@@ -669,15 +675,19 @@ def print_packet_event(cpu, data, size):
     if not args.disable_normal_filter and event.stack_id > 0:
         try:
             stack_trace = []
-            for addr in b.get_table("stack_traces").walk(event.stack_id):
+            stack_table = b.get_table("stack_traces")
+            resolved_addrs = False
+            for addr in stack_table.walk(event.stack_id):
                 sym = b.ksym(addr, show_offset=True)
                 # Convert to string safely for ARM compatibility
                 stack_trace.append(safe_str(sym))
+                resolved_addrs = True
             
-            if is_normal_kfree_pattern(stack_trace):
+            if resolved_addrs and is_normal_kfree_pattern(stack_trace):
                 return
-        except (KeyError, TypeError) as e:
+        except (KeyError, TypeError):
             # Handle both missing stack traces and type conversion errors
+            # Don't skip the event if we can't check the pattern
             pass
     
     # Print timestamp and basic info
@@ -765,14 +775,33 @@ def print_packet_event(cpu, data, size):
     print("Interface: {}".format(safe_str(event.ifname)))
     
     # Print stack trace if enabled
-    if not args.no_stack_trace and event.stack_id > 0:
-        print("Stack trace:")
-        try:
-            for addr in b.get_table("stack_traces").walk(event.stack_id):
-                sym = b.ksym(addr, show_offset=True)
-                print("  {}".format(safe_str(sym)))
-        except (KeyError, TypeError) as e:
-            print("  Failed to retrieve stack trace (ID: {})".format(event.stack_id))
+    if not args.no_stack_trace:
+        if event.stack_id <= 0:
+            # Negative or zero stack_id means error or no stack trace
+            print("Stack trace:")
+            if event.stack_id == 0:
+                print("  <No stack trace available>")
+            elif event.stack_id == -14:
+                print("  <Stack trace unavailable in current context (EFAULT)>")
+            else:
+                print("  <BPF get_stackid failed with error code: {}>".format(event.stack_id))
+        else:
+            print("Stack trace:")
+            try:
+                stack_table = b.get_table("stack_traces")
+                resolved_symbols = False
+                for addr in stack_table.walk(event.stack_id):
+                    sym = b.ksym(addr, show_offset=True)
+                    print("  {}".format(safe_str(sym)))
+                    resolved_symbols = True
+                
+                if not resolved_symbols:
+                    print("  <Stack trace walk for ID {} yielded no symbols>".format(event.stack_id))
+                    
+            except KeyError:
+                print("  <stack_traces table not found>")
+            except Exception as e:
+                print("  <Error retrieving stack trace: {}>".format(e))
     
     print("-" * 80)
 

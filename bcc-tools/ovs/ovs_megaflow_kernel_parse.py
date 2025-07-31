@@ -1,7 +1,6 @@
 #!/usr/bin/python2
 # -*- coding: utf-8 -*-
 """
-增强版本：补充 IP 地址、端口信息、Netlink portid 和精确内核时间戳
 """
 
 from bcc import BPF
@@ -37,17 +36,14 @@ bpf_text = """
 #define ETH_ALEN 6
 #endif
 
-// sw_flow_key 结构体定义 (简化版本，只包含我们需要的字段)
 struct sw_flow_key {
     u32 phy_data;           // +0
     u32 tun_opts_len;       // +4
     u32 recirc_id;          // +8
     u32 skb_mark;           // +12
     u16 in_port;            // +16
-    // ... 其他字段我们不需要
 };
 
-// OVS Netlink 属性定义
 enum ovs_flow_attr {
     OVS_FLOW_ATTR_UNSPEC,
     OVS_FLOW_ATTR_KEY,        /* Sequence of OVS_KEY_ATTR_* attributes. */
@@ -64,7 +60,6 @@ enum ovs_flow_attr {
     __OVS_FLOW_ATTR_MAX
 };
 
-// OVS key 属性定义
 enum ovs_key_attr {
     OVS_KEY_ATTR_UNSPEC,
     OVS_KEY_ATTR_ENCAP,       /* Nested set of encapsulated attributes. */
@@ -102,7 +97,6 @@ enum ovs_key_attr {
     __OVS_KEY_ATTR_MAX
 };
 
-// OVS key 结构体定义 (注意字段顺序)
 struct ovs_key_ethernet {
     __u8 eth_src[ETH_ALEN];
     __u8 eth_dst[ETH_ALEN];
@@ -128,12 +122,11 @@ struct ovs_key_udp {
 };
 
 struct upcall_event_t {
-    u64 kernel_timestamp;  // 内核时间戳
+    u64 kernel_timestamp;
     u32 pid;
     u32 portid;
     char comm[16];
     
-    // 从 SKB 直接解析的字段 (用于过滤和显示)
     u8 skb_eth_dst[6];
     u8 skb_eth_src[6];
     u16 skb_eth_type;
@@ -142,19 +135,18 @@ struct upcall_event_t {
     u16 skb_src_port;
     u16 skb_dst_port;
     u8 skb_ip_proto;
-    u32 skb_mark;          // 从 SKB 直接读取的 mark
+    u32 skb_mark;
     
     char dev_name[16];
-    u32 parse_status; // 0=成功, 1=SKB解析失败, 2=非IPv4, 3=其他错误
+    u32 parse_status;
 };
 
 struct flow_cmd_new_event_t {
-    u64 kernel_timestamp;  // 内核时间戳
+    u64 kernel_timestamp;
     u32 pid;
     char comm[16];
-    u32 netlink_portid;    // Netlink 端口 ID
+    u32 netlink_portid;
     
-    // 从 Netlink 消息解析的字段
     u32 dp_ifindex;
     u32 recirc_id;
     u32 skb_mark;
@@ -162,22 +154,19 @@ struct flow_cmd_new_event_t {
     u8 eth_dst[6];
     u8 eth_src[6];
     u16 eth_type;
-    u32 src_ip;            // IPv4 源地址
-    u32 dst_ip;            // IPv4 目标地址
-    u16 src_port;          // 源端口
-    u16 dst_port;          // 目标端口
-    u8 ip_proto;           // IP 协议
+    u32 src_ip;
+    u32 dst_ip;
+    u16 src_port;
+    u16 dst_port;
+    u8 ip_proto;
     
-    // 解析状态
     u32 has_key;
     u32 has_mask;
-    u32 parse_status; // 0=成功, 非0=失败
+    u32 parse_status;
     
-    // Mask 中的以太网地址
     u8 mask_eth_dst[6];
     u8 mask_eth_src[6];
     
-    // 调试信息
     u64 key_attr_ptr;
     u32 key_attr_len;
 };
@@ -185,7 +174,6 @@ struct flow_cmd_new_event_t {
 BPF_PERF_OUTPUT(upcall_events);
 BPF_PERF_OUTPUT(flow_cmd_new_events);
 
-// 直接解析 SKB 以太网头部 (参考 icmp_rtt_latency.py)
 static __always_inline int parse_skb_headers(struct sk_buff *skb, 
                                             u8 eth_dst[6], u8 eth_src[6], u16 *eth_type,
                                             u32 *src_ip, u32 *dst_ip, 
@@ -206,26 +194,22 @@ static __always_inline int parse_skb_headers(struct sk_buff *skb,
     unsigned int data_offset = (unsigned int)(skb_data_ptr_val - (unsigned long)skb_head);
     unsigned int mac_offset = data_offset; 
     
-    // 读取以太网头部
     struct ethhdr eth;
     if (bpf_probe_read_kernel(&eth, sizeof(eth), skb_head + mac_offset) < 0) {
         return 1;
     }
     
-    // 复制 MAC 地址
     bpf_probe_read_kernel(eth_dst, 6, eth.h_dest);
     bpf_probe_read_kernel(eth_src, 6, eth.h_source);
     
     unsigned int net_offset = mac_offset + ETH_HLEN;
     __be16 h_proto = eth.h_proto;
     
-    // 处理 VLAN 标签
     if (h_proto == htons(ETH_P_8021Q) || h_proto == htons(ETH_P_8021AD)) {
         net_offset += VLAN_HLEN; 
         if (bpf_probe_read_kernel(&h_proto, sizeof(h_proto), skb_head + mac_offset + ETH_HLEN + 2) < 0) { 
             return 1;
         }
-        // 处理双层 VLAN
         if (h_proto == htons(ETH_P_8021Q) || h_proto == htons(ETH_P_8021AD)) {
              net_offset += VLAN_HLEN;
              if (bpf_probe_read_kernel(&h_proto, sizeof(h_proto), skb_head + mac_offset + (2 * VLAN_HLEN) + 2) < 0) {
@@ -234,24 +218,21 @@ static __always_inline int parse_skb_headers(struct sk_buff *skb,
         }
     }
     
-    *eth_type = ntohs(h_proto);  // 转换为主机字节序
+    *eth_type = ntohs(h_proto);
     
-    // 如果不是 IPv4，返回 2
     if (h_proto != htons(ETH_P_IP)) {
         return 2;
     }
     
-    // 解析 IP 头部
     struct iphdr ip;
     if (bpf_probe_read_kernel(&ip, sizeof(ip), skb_head + net_offset) < 0) {
         return 1;
     }
     
-    *src_ip = ip.saddr;  // 保持网络字节序
+    *src_ip = ip.saddr;
     *dst_ip = ip.daddr;
     *ip_proto = ip.protocol;
     
-    // 解析传输层端口 (TCP/UDP)
     if (ip.protocol == IPPROTO_TCP || ip.protocol == IPPROTO_UDP) {
         u8 ip_ihl = ip.ihl & 0x0F;  
         if (ip_ihl >= 5) {
@@ -264,20 +245,18 @@ static __always_inline int parse_skb_headers(struct sk_buff *skb,
         }
     }
     
-    return 0; // 成功
+    return 0;
 }
 
-// 简化的 nlattr 解析 - 只解析关键字段
 static __always_inline void parse_nlattr_simple(void *attr_ptr, struct flow_cmd_new_event_t *event) {
     struct nlattr nla;
     if (bpf_probe_read_kernel(&nla, sizeof(nla), attr_ptr) < 0) {
         return;
     }
     
-    u16 type = nla.nla_type & ~(1 << 15);  // 去掉 nested 标志
+    u16 type = nla.nla_type & ~(1 << 15);
     void *data_ptr = attr_ptr + sizeof(struct nlattr);
     
-    // 只解析最关键的字段
     if (type == OVS_KEY_ATTR_RECIRC_ID) {
         bpf_probe_read_kernel(&event->recirc_id, sizeof(u32), data_ptr);
     } else if (type == OVS_KEY_ATTR_SKB_MARK) {
@@ -297,21 +276,18 @@ static __always_inline void parse_nlattr_simple(void *attr_ptr, struct flow_cmd_
             event->eth_type = ntohs(eth_type);
         }
     }
-    // 简化版本暂时不解析 IP 和端口，减少指令数量
 }
 
-// 简化的 flow key 解析
 static __always_inline void parse_flow_key_simple(void *key_attr, u32 key_len, struct flow_cmd_new_event_t *event) {
     if (!key_attr || key_len < sizeof(struct nlattr)) {
         return;
     }
     
-    // 简化遍历 - 只解析前15个属性
     void *pos = key_attr;
     void *end = key_attr + key_len;
     
     #pragma unroll
-    for (int i = 0; i < 15; i++) {  // 减少到15个属性
+    for (int i = 0; i < 15; i++) {
         if (pos + sizeof(struct nlattr) > end) {
             break;
         }
@@ -327,12 +303,10 @@ static __always_inline void parse_flow_key_simple(void *key_attr, u32 key_len, s
         
         parse_nlattr_simple(pos, event);
         
-        // 移动到下一个属性 (4字节对齐)
         pos += ((nla.nla_len + 3) & ~3);
     }
 }
 
-// 解析 mask 属性中的以太网地址
 static __always_inline void parse_mask_key_simple(void *mask_attr, u32 mask_len, struct flow_cmd_new_event_t *event) {
     if (!mask_attr || mask_len < sizeof(struct nlattr)) {
         return;
@@ -342,7 +316,7 @@ static __always_inline void parse_mask_key_simple(void *mask_attr, u32 mask_len,
     void *end = mask_attr + mask_len;
     
     #pragma unroll
-    for (int i = 0; i < 15; i++) {  // 增加到15个属性
+    for (int i = 0; i < 15; i++) {
         if (pos + sizeof(struct nlattr) > end) {
             break;
         }
@@ -359,16 +333,13 @@ static __always_inline void parse_mask_key_simple(void *mask_attr, u32 mask_len,
         u16 type = nla.nla_type & ~(1 << 15);
         void *data_ptr = pos + sizeof(struct nlattr);
         
-        // 解析 ETHERNET 类型
         if (type == OVS_KEY_ATTR_ETHERNET) {
-            // 直接读取 12 字节：前 6 字节是 src，后 6 字节是 dst
             if (bpf_probe_read_kernel(event->mask_eth_src, ETH_ALEN, data_ptr) == 0) {
                 bpf_probe_read_kernel(event->mask_eth_dst, ETH_ALEN, data_ptr + ETH_ALEN);
             }
-            break;  // 找到就退出
+            break;
         }
         
-        // 移动到下一个属性
         pos += ((nla.nla_len + 3) & ~3);
     }
 }
@@ -377,7 +348,7 @@ int trace_ovs_dp_upcall(struct pt_regs *ctx)
 {
     struct datapath *dp = (struct datapath *)PT_REGS_PARM1(ctx);
     struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM2(ctx);
-    void *key_ptr = (void *)PT_REGS_PARM3(ctx);  // 第三个参数才是 sw_flow_key
+    void *key_ptr = (void *)PT_REGS_PARM3(ctx);
     void *upcall_info = (void *)PT_REGS_PARM4(ctx);
     
     if (!key_ptr || !skb) {
@@ -385,17 +356,15 @@ int trace_ovs_dp_upcall(struct pt_regs *ctx)
     }
     
     struct upcall_event_t event = {};
-    event.kernel_timestamp = bpf_ktime_get_ns();  // 内核时间戳
+    event.kernel_timestamp = bpf_ktime_get_ns();
     event.pid = bpf_get_current_pid_tgid() >> 32;
     
-    // 修复: upcall_info 是一个结构体，portid 通常在第一个字段
     if (upcall_info) {
         bpf_probe_read_kernel(&event.portid, sizeof(u32), upcall_info);
     }
     
     bpf_get_current_comm(&event.comm, sizeof(event.comm));
     
-    // 直接从 SKB 解析包头信息
     int parse_result = parse_skb_headers(skb,
         event.skb_eth_dst, event.skb_eth_src, &event.skb_eth_type,
         &event.skb_src_ip, &event.skb_dst_ip,
@@ -403,10 +372,8 @@ int trace_ovs_dp_upcall(struct pt_regs *ctx)
     
     event.parse_status = parse_result;
     
-    // 从 SKB 直接读取 mark
     bpf_probe_read_kernel(&event.skb_mark, sizeof(u32), &skb->mark);
     
-    // 获取设备名称
     struct net_device *dev = NULL;
     bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev);
     if (dev) {
@@ -427,20 +394,17 @@ int trace_ovs_flow_cmd_new(struct pt_regs *ctx)
     }
     
     struct flow_cmd_new_event_t event = {};
-    event.kernel_timestamp = bpf_ktime_get_ns();  // 内核时间戳
+    event.kernel_timestamp = bpf_ktime_get_ns();
     event.pid = bpf_get_current_pid_tgid() >> 32;
     bpf_get_current_comm(&event.comm, sizeof(event.comm));
     
-    // 初始化 mask 字段为 0xFF 来测试是否被正确写入
     __builtin_memset(event.mask_eth_src, 0xFF, ETH_ALEN);
     __builtin_memset(event.mask_eth_dst, 0xFF, ETH_ALEN);
     
-    // 读取 netlink portid
     if (bpf_probe_read_kernel(&event.netlink_portid, sizeof(event.netlink_portid), &info->snd_portid) < 0) {
         event.netlink_portid = 0;
     }
     
-    // 读取 dp_ifindex
     struct ovs_header {
         int dp_ifindex;
     } ovs_hdr;
@@ -452,7 +416,6 @@ int trace_ovs_flow_cmd_new(struct pt_regs *ctx)
         }
     }
     
-    // 读取 attrs 数组
     void *attrs;
     if (bpf_probe_read_kernel(&attrs, sizeof(attrs), &info->attrs) < 0) {
         event.parse_status = 1;
@@ -460,30 +423,25 @@ int trace_ovs_flow_cmd_new(struct pt_regs *ctx)
         return 0;
     }
     
-    // 读取 OVS_FLOW_ATTR_KEY
     void *key_attr = NULL;
     if (bpf_probe_read_kernel(&key_attr, sizeof(key_attr), attrs + (OVS_FLOW_ATTR_KEY * sizeof(void*))) == 0 && key_attr) {
         event.has_key = 1;
         event.key_attr_ptr = (u64)key_attr;
         
-        // 读取属性长度
         struct nlattr key_nla;
         if (bpf_probe_read_kernel(&key_nla, sizeof(key_nla), key_attr) == 0) {
             event.key_attr_len = key_nla.nla_len;
             
-            // 解析 key 内容 (简化版)
             void *key_data = key_attr + sizeof(struct nlattr);
             u32 key_data_len = key_nla.nla_len - sizeof(struct nlattr);
             parse_flow_key_simple(key_data, key_data_len, &event);
         }
     }
     
-    // 检查是否有 mask 并解析
     void *mask_attr = NULL;
     if (bpf_probe_read_kernel(&mask_attr, sizeof(mask_attr), attrs + (OVS_FLOW_ATTR_MASK * sizeof(void*))) == 0 && mask_attr) {
         event.has_mask = 1;
         
-        // 解析 mask 内容
         struct nlattr mask_nla;
         if (bpf_probe_read_kernel(&mask_nla, sizeof(mask_nla), mask_attr) == 0) {
             void *mask_data = mask_attr + sizeof(struct nlattr);
@@ -552,12 +510,12 @@ def ip_to_str(ip):
     return inet_ntop(AF_INET, pack('I', ip))
 
 def format_kernel_timestamp(ns_timestamp):
-    """直接显示原始内核时间戳（纳秒）"""
+    """（）"""
     return str(ns_timestamp)
 
 def matches_target_filter_upcall(event):
-    """检查 upcall 事件是否匹配目标过滤条件"""
-    if event.parse_status != 0:  # SKB 解析失败
+    """ upcall """
+    if event.parse_status != 0:
         return False
         
     target_mac = mac_bytes_to_str(TARGET_MAC_BYTES)
@@ -569,7 +527,7 @@ def matches_target_filter_upcall(event):
     return mac_match and type_match
 
 def matches_target_filter_flow(event):
-    """检查 flow 事件是否匹配目标过滤条件"""
+    """ flow """
     if event.parse_status != 0 or not event.has_key:
         return False
         
@@ -591,7 +549,7 @@ def handle_upcall_event(cpu, data, size):
     
     stats['filtered_upcalls'] += 1
     
-    print("\n=== UPCALL EVENT (过滤后) ===")
+    print("\n=== UPCALL EVENT () ===")
     print("Time: %s (kernel: %s)" % (strftime('%H:%M:%S'), format_kernel_timestamp(event.kernel_timestamp)))
     print("Process: %s (PID: %d)" % (event.comm.decode('utf-8', 'replace'), event.pid))
     print("PortID: %u, Device: %s" % (event.portid, event.dev_name.decode('utf-8', 'replace')))
@@ -617,7 +575,7 @@ def handle_flow_cmd_new_event(cpu, data, size):
     
     stats['filtered_flows'] += 1
     
-    print("\n=== FLOW CMD NEW EVENT (过滤后) ===")
+    print("\n=== FLOW CMD NEW EVENT () ===")
     print("Time: %s (kernel: %s)" % (strftime('%H:%M:%S'), format_kernel_timestamp(event.kernel_timestamp)))
     print("Process: %s (PID: %d)" % (event.comm.decode('utf-8', 'replace'), event.pid))
     print("DP: ifindex=%d, Netlink PortID: %u" % (event.dp_ifindex, event.netlink_portid))
@@ -625,7 +583,6 @@ def handle_flow_cmd_new_event(cpu, data, size):
     print("Eth: %s -> %s, type=0x%04x" % (
         mac_bytes_to_str(event.eth_src), mac_bytes_to_str(event.eth_dst), event.eth_type))
     
-    # 注意: 简化版本暂未解析 IP 和端口信息以减少 BPF 程序大小
     # if event.src_ip:
     #     proto_name = {1: 'ICMP', 6: 'TCP', 17: 'UDP'}.get(event.ip_proto, str(event.ip_proto))
     #     print("Flow IP: %s:%d -> %s:%d (%s)" % (
@@ -633,74 +590,72 @@ def handle_flow_cmd_new_event(cpu, data, size):
     #         ip_to_str(event.dst_ip), event.dst_port, proto_name))
     
     print("Netlink: has_key=%s, has_mask=%s" % (
-        "是" if event.has_key else "否",
-        "是" if event.has_mask else "否"))
+        "" if event.has_key else "",
+        "" if event.has_mask else ""))
     
-    # 显示 mask 中的以太网地址
     if event.has_mask:
         mask_src_str = mac_bytes_to_str(event.mask_eth_src)
         mask_dst_str = mac_bytes_to_str(event.mask_eth_dst)
         print("Mask Eth: %s -> %s" % (mask_src_str, mask_dst_str))
         
-        # 调试：检查是否都是零
         if mask_src_str == "00:00:00:00:00:00" and mask_dst_str == "00:00:00:00:00:00":
-            print("⚠️  Mask 解析可能有问题 - 所有字段都是 0")
+            print("  Mask  -  0")
     
     print("="*50)
 
 def print_debug_summary():
-    """打印调试汇总信息"""
+    """"""
     print("\n" + "="*60)
-    print("=== 统计汇总 ===")
+    print("===  ===")
     
-    print("\n统计信息:")
-    print("   总 upcall: %d" % stats['upcalls'])
-    print("   过滤后 upcall: %d" % stats['filtered_upcalls'])
-    print("   总 flow: %d" % stats['flows'])
-    print("   过滤后 flow: %d" % stats['filtered_flows'])
+    print("\n:")
+    print("    upcall: %d" % stats['upcalls'])
+    print("    upcall: %d" % stats['filtered_upcalls'])
+    print("    flow: %d" % stats['flows'])
+    print("    flow: %d" % stats['filtered_flows'])
     
     if stats['upcalls'] > 0:
         upcall_filter_rate = (stats['filtered_upcalls'] * 100.0) / stats['upcalls']
-        print("   Upcall 过滤率: %.2f%%" % upcall_filter_rate)
+        print("   Upcall : %.2f%%" % upcall_filter_rate)
     
     if stats['flows'] > 0:
         flow_filter_rate = (stats['filtered_flows'] * 100.0) / stats['flows']
-        print("   Flow 过滤率: %.2f%%" % flow_filter_rate)
+        print("   Flow : %.2f%%" % flow_filter_rate)
     
     print("="*60)
 
 def main():
-    print("OVS Megaflow Tracker V6 - 简化版")
-    print("目标: eth.src=%s, eth.type=0x%04x" % (TARGET_ETH_SRC, TARGET_ETH_TYPE))
-    print("功能: 独立输出 Upcall 和 Flow 事件 (不进行事件关联)\n")
+    print("OVS Megaflow Tracker V6 - ")
+    print(": eth.src=%s, eth.type=0x%04x" % (TARGET_ETH_SRC, TARGET_ETH_TYPE))
+    print(":  Upcall  Flow  ()\n")
     
     b = BPF(text=bpf_text)
     
     try:
         b.attach_kprobe(event="ovs_dp_upcall", fn_name="trace_ovs_dp_upcall")
-        print("✅ 附加到 ovs_dp_upcall")
+        print(" ovs_dp_upcall")
         
         try:
             b.attach_kprobe(event="ovs_flow_cmd_new", fn_name="trace_ovs_flow_cmd_new")
-            print("✅ 附加到 ovs_flow_cmd_new")
+            print(" ovs_flow_cmd_new")
         except Exception as e:
-            print("⚠️  无法附加到 ovs_flow_cmd_new: %s" % str(e))
+            print("  ovs_flow_cmd_new: %s" % str(e))
             
     except Exception as e:
-        print("错误: %s" % str(e))
+        print(": %s" % str(e))
         sys.exit(1)
     
     b["upcall_events"].open_perf_buffer(handle_upcall_event)
     b["flow_cmd_new_events"].open_perf_buffer(handle_flow_cmd_new_event)
     
-    print("\n🔍 开始监控...\n")
+    print("\n ...\n")
     
     try:
         while True:
             b.perf_buffer_poll()
                 
     except KeyboardInterrupt:
-        print("\n用户中断...")
+        print("\n...")
     finally:
         print_debug_summary()
 

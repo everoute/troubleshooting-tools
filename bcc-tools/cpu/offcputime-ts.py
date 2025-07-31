@@ -235,7 +235,6 @@ else:
 bpf_text = bpf_text.replace('THREAD_FILTER', thread_filter)
 bpf_text = bpf_text.replace('STATE_FILTER', state_filter)
 
-# Check for __state field support (compatible with older BCC versions)
 try:
     if hasattr(BPF, 'kernel_struct_has_field') and BPF.kernel_struct_has_field(b'task_struct', b'__state') == 1:
         bpf_text = bpf_text.replace('STATE_FIELD', '__state')
@@ -316,7 +315,6 @@ def print_warn_event(cpu, data, size):
           file=stderr)
 
 def print_stats_and_clear():
-    # Add timestamp and separator for interval mode
     if args.interval:
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print("\n" + "="*80)
@@ -400,7 +398,6 @@ def print_stats_and_clear():
             (missing_stacks, enomem_str),
             file=stderr)
     
-    # Add end timestamp and separator for interval mode
     if args.interval:
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         print("="*80)
@@ -423,14 +420,12 @@ try:
             current_time_ms = int(BPF.monotonic_time() / 1000000)
             elapsed_ms = current_time_ms - start_time_ms
             
-            # Check if total duration has elapsed
             if elapsed_ms >= duration_ms:
                 # Print final stats if there's any data since last output
                 if current_time_ms - last_output_ms > 0:
                     print_stats_and_clear()
                 break
             
-            # Check if interval has elapsed
             if current_time_ms - last_output_ms >= interval_ms:
                 print_stats_and_clear()
                 last_output_ms = current_time_ms

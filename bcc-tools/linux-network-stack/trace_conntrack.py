@@ -59,16 +59,12 @@ parser.add_argument('--filters-file', type=str, help='JSON file containing multi
 parser.add_argument('--stack', type=lambda x: (str(x).lower() == 'true'), default=True, help='Display kernel stack traces (true/false, default: true)')
 args = parser.parse_args()
 
-# 定义过滤器规则列表
 filter_rules = []
-
-# 如果指定了过滤器配置文件，则加载它
 if args.filters_file:
     try:
         with open(args.filters_file, 'r') as f:
             filter_data = json.load(f)
             
-            # 处理过滤器规则
             if isinstance(filter_data, list):
                 for rule in filter_data:
                     filter_rule = {
@@ -80,7 +76,6 @@ if args.filters_file:
                     }
                     filter_rules.append(filter_rule)
                     
-                    # 打印规则信息
                     print("Added filter rule: %s" % rule)
     except Exception as e:
         print >> sys.stderr, "ERROR: Failed to load filter rules from %s: %s" % (args.filters_file, e)
@@ -89,14 +84,12 @@ if args.filters_file:
     if not filter_rules:
         print >> sys.stderr, "WARNING: No filter rules found in %s" % args.filters_file
 else:
-    # 使用命令行参数作为单个过滤器
     src_ip_filter = ip_to_int(args.src_ip)
     dst_ip_filter = ip_to_int(args.dst_ip)
     proto_filter = PROTO_MAP[args.protocol]
     src_port_filter = args.src_port
     dst_port_filter = args.dst_port
     
-    # 将命令行参数添加为单个过滤器规则
     if src_ip_filter != 0 or dst_ip_filter != 0 or proto_filter != 0 or src_port_filter != 0 or dst_port_filter != 0:
         filter_rules.append({
             'src_ip': src_ip_filter,
@@ -137,28 +130,22 @@ print('''
 print("And use it with: --filters-file /path/to/filters.json")
 print("---------------")
 
-# 最多支持10个过滤器规则
 MAX_FILTER_RULES = 10
 
-# 填充过滤器规则数组 - 只使用第一个规则
 filter_array = []
 if len(filter_rules) > 0:
     rule = filter_rules[0]
     filter_array.append((rule['src_ip'], rule['dst_ip'], rule['proto'], rule['src_port'], rule['dst_port']))
-    # 如果有多个规则，提示用户只有第一个会被使用
     if len(filter_rules) > 1:
         print("WARNING: Only the first filter rule will be used in this version")
 else:
-    filter_array.append((0, 0, 0, 0, 0))  # 空规则
+    filter_array.append((0, 0, 0, 0, 0))
 
-# 填充剩余的数组位置（保持兼容性）
 for i in range(MAX_FILTER_RULES - len(filter_array)):
-    filter_array.append((0, 0, 0, 0, 0))  # 空规则
+    filter_array.append((0, 0, 0, 0, 0))
 
-# 计算实际规则数 - 0 或 1
 num_filters = 1 if len(filter_rules) > 0 else 0
 
-# 提取单个过滤规则
 if len(filter_rules) > 0:
     rule = filter_rules[0]
     src_ip = rule['src_ip']
@@ -167,7 +154,6 @@ if len(filter_rules) > 0:
     src_port = rule['src_port']
     dst_port = rule['dst_port']
     has_filter = 1
-    # 如果有多个规则，提示用户只有第一个会被使用
     if len(filter_rules) > 1:
         print("WARNING: Only the first filter rule will be used in this version")
 else:
@@ -178,7 +164,6 @@ else:
     dst_port = 0
     has_filter = 0
 
-# 修改BPF代码模板，使用单一过滤规则
 bpf_text = """
 #include <uapi/linux/ptrace.h>
 #include <linux/skbuff.h>
@@ -197,62 +182,53 @@ bpf_text = """
 #include <linux/types.h>
 #include <net/sock.h>
 
-// 单一过滤规则支持
 #define HAS_FILTER %d
-
-// 单个全局过滤条件
 #define FILTER_SRC_IP %sU
 #define FILTER_DST_IP %sU
 #define FILTER_PROTO %d
 #define FILTER_SRC_PORT %d
 #define FILTER_DST_PORT %d
 
-// SKB连接跟踪信息结构体
 struct skb_ct_info {
-    u64 nfct_ptr;         // skb->_nfct 的值
-    u32 ctinfo;           // skb->_nfct 中的连接状态信息
-    u64 ct_status;        // 连接状态标志
-    u64 ct_label[2];      // 连接标签 (128 bits / 16 bytes)
-    u16 zone_id;          // skb->_nfct 中的zone ID
-    u8  zone_dir;         // skb->_nfct 中的zone方向
+    u64 nfct_ptr;
+    u32 ctinfo;
+    u64 ct_status;
+    u64 ct_label[2];
+    u16 zone_id;
+    u8  zone_dir;
 };
 
-// OVS连接跟踪信息结构体
 struct ovs_ct_info {
-    u8  commit_flag;      // OVS commit标志
-    u16 zone_id;          // OVS zone ID
-    u8  zone_dir;         // OVS zone方向
-    u64 nfct_ptr;         // OVS info中的nf_conn指针
+    u8  commit_flag;
+    u16 zone_id;
+    u8  zone_dir;
+    u64 nfct_ptr;
 };
 
 struct data_t {
-    u64 timestamp_ns;     // 时间戳
-    int stack_id;         // 内核栈ID
-    u32 probe_id;         // 探针ID
-    char comm[TASK_COMM_LEN]; // 进程名
+    u64 timestamp_ns;
+    int stack_id;
+    u32 probe_id;
+    char comm[TASK_COMM_LEN];
     
-    // 网络包信息
-    u32 saddr;            // 源IP
-    u32 daddr;            // 目标IP
-    u8 ip_proto;          // IP协议
-    u16 sport;            // 源端口
-    u16 dport;            // 目标端口
-    u16 ip_id;            // IP包标识
-    u32 tcp_seq;          // TCP序列号
-    u32 tcp_ack;          // TCP确认号
-    u8  tcp_state;        // TCP连接状态
-    u8  tcp_flags;        // TCP标志
+    u32 saddr;
+    u32 daddr;
+    u8 ip_proto;
+    u16 sport;
+    u16 dport;
+    u16 ip_id;
+    u32 tcp_seq;
+    u32 tcp_ack;
+    u8  tcp_state;
+    u8  tcp_flags;
     
-    // 接口信息
-    u32 ifindex;          // 网络接口索引
-    char devname[16];     // 网络接口名称
+    u32 ifindex;
+    char devname[16];
     
-    // 返回值
-    s64 retval;           // 函数返回值
+    s64 retval;
     
-    // 连接跟踪信息
-    struct skb_ct_info skb_ct;  // 从SKB解析的连接跟踪信息
-    struct ovs_ct_info ovs_ct;  // 从OVS解析的连接跟踪信息
+    struct skb_ct_info skb_ct;
+    struct ovs_ct_info ovs_ct;
 };
 
 BPF_PERF_OUTPUT(events);
@@ -311,7 +287,7 @@ static __always_inline int parse_skb_fields(struct sk_buff *skb, struct data_t *
     data->daddr = iph.daddr;
     data->ip_proto = iph.protocol;
     data->tcp_state = 0xFF;
-    data->tcp_flags = 0; // 初始化TCP flags
+    data->tcp_flags = 0;
     
     // Extract IP ID
     data->ip_id = bpf_ntohs(iph.id);
@@ -343,23 +319,16 @@ static __always_inline int parse_skb_fields(struct sk_buff *skb, struct data_t *
             data->tcp_seq = bpf_ntohl(tcph.seq);
             data->tcp_ack = bpf_ntohl(tcph.ack_seq);
             
-            // Extract TCP flags (截取tcph中的相关字段组成flags)
             data->tcp_flags = 0;
-            // 读取完整的字段而不是直接访问位域
             __u16 tcp_flags_field = 0;
-            // 读取第三个2字节字段 (offset = 12, 源端口4字节 + 目标端口4字节 + SEQ 4字节 + ACK_SEQ 4字节后的2字节)
             bpf_probe_read_kernel(&tcp_flags_field, sizeof(tcp_flags_field), ((char *)&tcph) + 12);
             
-            // 根据不同字节序提取标志位
 #if defined(__LITTLE_ENDIAN_BITFIELD)
-            // 小端字节序
-            data->tcp_flags |= ((tcp_flags_field >> 8) & 0xFF);  // 高8位包含所有TCP标志
+            data->tcp_flags |= ((tcp_flags_field >> 8) & 0xFF);
 #elif defined(__BIG_ENDIAN_BITFIELD)
-            // 大端字节序
-            data->tcp_flags |= (tcp_flags_field & 0xFF);  // 低8位包含所有TCP标志
+            data->tcp_flags |= (tcp_flags_field & 0xFF);
 #else
-            // 未知字节序，尝试提取可能的标志位置
-            data->tcp_flags |= ((tcp_flags_field >> 8) & 0xFF);  // 假设小端
+            data->tcp_flags |= ((tcp_flags_field >> 8) & 0xFF);
 #endif
             
             struct sock *sk = NULL;
@@ -517,7 +486,6 @@ static inline void parse_nf_conn_fields(struct nf_conn *ct, struct data_t *data)
         data->skb_ct.zone_dir = (u8)-3;
 #endif
     } else {
-        // 如果读取失败，设置为无效值
         data->skb_ct.zone_id = (u16)-2;
         data->skb_ct.zone_dir = (u8)-2;
     }
@@ -837,7 +805,7 @@ class Data(ct.Structure):
 
 bpf_text_final = bpf_text % (has_filter, hex(src_ip), hex(dst_ip), proto, src_port, dst_port)
 
-cflags = []        # 不能用 v3/v4
+cflags = []
 try:
     # Pass cflags during BPF object initialization
     b = BPF(text=bpf_text_final, cflags=cflags)
@@ -886,9 +854,7 @@ def format_ip(addr):
         print >> sys.stderr, "Error formatting IP 0x%x: %s" % (addr, e)
         return "Format Error"
 
-# 格式化函数
 def format_timestamp(event, rel_time=False):
-    """格式化时间戳"""
     global start_ts
     if start_ts == 0:
         start_ts = event.timestamp_ns
@@ -902,13 +868,11 @@ def format_timestamp(event, rel_time=False):
         return "DATETIME: %s" % time_str
 
 def format_basic_info(event):
-    """格式化基本信息（进程名、探针名称和设备信息）"""
     comm = event.comm.decode('utf-8', 'replace')
     probe_name = probe_names.get(event.probe_id, "Unknown Probe (%d)" % event.probe_id)
     
-    # 添加设备信息到基本信息中
     dev_info = ""
-    if event.retval == -999 and event.ifindex != 0:  # 不是返回探针且有设备信息
+    if event.retval == -999 and event.ifindex != 0:
         dev_name = event.devname.decode('utf-8', 'replace').strip('\x00')
         if dev_name:
             dev_info = "DEV: %s[%d]" % (dev_name, event.ifindex)
@@ -921,21 +885,17 @@ def format_basic_info(event):
         return "COMM: %-16s FUNC: %-25s" % (comm, probe_name)
 
 def format_packet_info(event):
-    """格式化网络包信息"""
-    if event.retval != -999 or event.saddr == 0:  # 返回探针或无效数据
+    if event.retval != -999 or event.saddr == 0:
         return "PKTINFO: (Pkt N/A)"
     
     saddr_str = format_ip(event.saddr)
     daddr_str = format_ip(event.daddr)
     proto_str = {socket.IPPROTO_ICMP: "ICMP", socket.IPPROTO_TCP: "TCP", socket.IPPROTO_UDP: "UDP"}.get(event.ip_proto, str(event.ip_proto))
     
-    # 添加IP ID到每个包
     pkt_id_info = "IP_ID:0x%x" % event.ip_id
     
-    # 添加TCP flags信息
     flags_str = ""
     if event.ip_proto == socket.IPPROTO_TCP:
-        # 解析TCP flags
         flags = []
         if event.tcp_flags & 0x01: flags.append("FIN")
         if event.tcp_flags & 0x02: flags.append("SYN")
@@ -951,10 +911,8 @@ def format_packet_info(event):
         else:
             flags_str = " FLAGS:[]"
 
-    # 添加TCP flags信息
     flags_str = ""
     if event.ip_proto == socket.IPPROTO_TCP:
-        # 在小端系统中，标志位顺序是: FIN,SYN,RST,PSH,ACK,URG,ECE,CWR
         tcp_flags = event.tcp_flags
         flags = []
         if tcp_flags & 0x01: flags.append("FIN")
@@ -971,7 +929,6 @@ def format_packet_info(event):
         else:
             flags_str = " FLAGS:[]"
     
-    # TCP状态信息
     tcp_state_str = ""
     if event.ip_proto == socket.IPPROTO_TCP:
         tcp_state_map = {
@@ -990,7 +947,6 @@ def format_packet_info(event):
         }
         tcp_state_str = tcp_state_map.get(event.tcp_state, "UNKNOWN_STATE(%d)" % event.tcp_state)
         
-        # 添加TCP序列号和确认号
         pkt_id_info += " SEQ:%u ACK:%u" % (event.tcp_seq, event.tcp_ack)
     
     if event.ip_proto in [socket.IPPROTO_TCP, socket.IPPROTO_UDP] and event.sport != 0:
@@ -1007,13 +963,11 @@ def format_packet_info(event):
     return pkt_info
 
 def format_return_info(event):
-    """格式化返回值信息"""
-    if event.retval != -999:  # 是返回探针
+    if event.retval != -999:
         return "RET: %d" % event.retval
     return ""
 
 def format_ct_status_info(event):
-    """格式化CT状态信息"""
     IPS_TEMPLATE_BIT = 11
     status_val = event.skb_ct.ct_status
 
@@ -1034,7 +988,6 @@ def format_ct_status_info(event):
         return status_info
 
 def format_ctinfo(event):
-    """格式化CTINFO信息"""
     ctinfo_val = event.skb_ct.ctinfo
 
     ctinfo_map = {
@@ -1053,22 +1006,18 @@ def format_ctinfo(event):
         return "CTINFO: %d (%s)" % (ctinfo_val, state_str)
 
 def format_ovs_ct_info(event):
-    """格式化OVS连接跟踪信息"""
-    # OVS NFCT 指针
     ovs_nfct_str = "OvsConInfoNFCT:0x%x" % event.ovs_ct.nfct_ptr
     if event.ovs_ct.nfct_ptr == (ct.c_ulonglong(-1).value):
         ovs_nfct_str = "OvsConInfoNFCT:N/A(Init)"
     elif event.ovs_ct.nfct_ptr == (ct.c_ulonglong(-2).value):
         ovs_nfct_str = "OvsConInfoNFCT:N/A(ReadFail)"
 
-    # OVS commit 标志
     ovs_commit_str = "OvsCommit:%d" % event.ovs_ct.commit_flag
     if event.ovs_ct.commit_flag == (ct.c_uint8(-1).value):
         ovs_commit_str = "OvsCommit:N/A(Init)"
     elif event.ovs_ct.commit_flag == (ct.c_uint8(-2).value):
         ovs_commit_str = "OvsCommit:N/A(ReadFail)"
 
-    # OVS zone ID
     ovs_zone_id_str = "OvsZoneID:%d" % event.ovs_ct.zone_id
     if event.ovs_ct.zone_id == (ct.c_uint16(-1).value):
         ovs_zone_id_str = "OvsZoneID:N/A(Init)"
@@ -1077,7 +1026,6 @@ def format_ovs_ct_info(event):
     else:
         ovs_zone_id_str = "OvsZoneID:%d" % event.ovs_ct.zone_id
 
-    # OVS zone 方向
     if event.ovs_ct.zone_dir == 0:
         ovs_zone_dir_str = "OvsZoneDir:0(OrigDst)"
     elif event.ovs_ct.zone_dir == 1:
@@ -1094,10 +1042,8 @@ def format_ovs_ct_info(event):
     return "OVS_CT_INFO: " + " ".join([ovs_nfct_str, ovs_commit_str, ovs_zone_id_str, ovs_zone_dir_str])
 
 def format_skb_ct_info(event):
-    """格式化SKB连接跟踪信息，整合ct_status、ctinfo和label信息"""
     parts = []
     
-    # CT状态信息
     IPS_TEMPLATE_BIT = 11
     status_val = event.skb_ct.ct_status
 
@@ -1118,7 +1064,6 @@ def format_skb_ct_info(event):
     
     parts.append(status_info)
     
-    # CTINFO信息
     ctinfo_val = event.skb_ct.ctinfo
     ctinfo_map = {
         0: "IP_CT_ESTABLISHED",
@@ -1137,14 +1082,12 @@ def format_skb_ct_info(event):
     
     parts.append(ctinfo_str)
     
-    # SKB NFCT 指针
     skb_nfct_str = "NFCT_PTR:0x%x" % event.skb_ct.nfct_ptr
     if event.skb_ct.nfct_ptr == 0:
         skb_nfct_str = "NFCT_PTR:NULL"
     
     parts.append(skb_nfct_str)
 
-    # SKB zone ID - 特别标明kernel zone通常为0
     if event.skb_ct.zone_id == 0:
         skb_zone_id_str = "SKBZoneID:0(KernelDefaultZone)"
     elif event.skb_ct.zone_id == (ct.c_uint16(-1).value):
@@ -1156,7 +1099,6 @@ def format_skb_ct_info(event):
     
     parts.append(skb_zone_id_str)
 
-    # SKB zone 方向
     if event.skb_ct.zone_dir == 0:
         skb_zone_dir_str = "SKBZoneDir:0(OrigDst)"
     elif event.skb_ct.zone_dir == 1:
@@ -1172,7 +1114,6 @@ def format_skb_ct_info(event):
     
     parts.append(skb_zone_dir_str)
     
-    # CT标签信息
     label_val0 = event.skb_ct.ct_label[0]
     label_val1 = event.skb_ct.ct_label[1]
     if label_val0 == 0xFFFFFFFFFFFFFFFF and label_val1 == 0xFFFFFFFFFFFFFFFF:
@@ -1185,7 +1126,6 @@ def format_skb_ct_info(event):
     return "SKB_CT_INFO: " + " ".join(parts)
 
 def format_ct_info(event):
-    """整合所有CT信息"""
     ovs_ct_info = format_ovs_ct_info(event)
     skb_ct_info = format_skb_ct_info(event)
     
@@ -1193,8 +1133,7 @@ def format_ct_info(event):
     return ct_info
 
 def format_device_info(event):
-    """格式化设备信息（现在在format_basic_info中使用，此函数仅保留兼容性）"""
-    if event.retval != -999:  # 返回探针
+    if event.retval != -999:
         return "DEV: N/A"
     
     if event.ifindex == 0:
@@ -1207,7 +1146,6 @@ def format_device_info(event):
         return "DEV: ifidx=%d" % event.ifindex
 
 def format_label_info(event):
-    """格式化标签信息"""
     label_val0 = event.skb_ct.ct_label[0]
     label_val1 = event.skb_ct.ct_label[1]
     if label_val0 == 0xFFFFFFFFFFFFFFFF and label_val1 == 0xFFFFFFFFFFFFFFFF:
@@ -1216,7 +1154,6 @@ def format_label_info(event):
         return "CT_LABEL: 0x%016x%016x" % (label_val1, label_val0)
 
 def format_stack_trace(event):
-    """格式化堆栈信息"""
     if not args.stack or event.stack_id < 0:
         if args.stack:
             return ["[Kernel Stack Trace Error: %d]" % event.stack_id]
@@ -1231,10 +1168,7 @@ def format_stack_trace(event):
         return ["[WARN: Error walking/resolving stack trace for stack_id %d: %s]" % (event.stack_id, e)]
 
 def print_event(cpu, data, size):
-    """处理并打印BPF事件"""
     event = ct.cast(data, ct.POINTER(Data)).contents
-    
-    # 格式化各部分信息
     timestamp_info = format_timestamp(event, args.rel_time)
     basic_info = format_basic_info(event)
     packet_info = format_packet_info(event)
@@ -1242,13 +1176,11 @@ def print_event(cpu, data, size):
     ovs_ct_info = format_ovs_ct_info(event)
     skb_ct_info = format_skb_ct_info(event)
     
-    # 合并并打印主要信息 - device_info已移到basic_info中
     basic_info_parts = [
         timestamp_info,
         basic_info,
     ]
     
-    # 打印信息
     print(" ".join(basic_info_parts))
     print(packet_info)
     
@@ -1258,7 +1190,6 @@ def print_event(cpu, data, size):
     print(ovs_ct_info)
     print(skb_ct_info)
     
-    # 打印堆栈信息（如果启用）
     stack_lines = format_stack_trace(event)
     for line in stack_lines:
         print("  %s" % line)

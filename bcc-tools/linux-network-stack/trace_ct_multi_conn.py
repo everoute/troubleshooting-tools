@@ -58,16 +58,12 @@ parser.add_argument('--rel-time', action='store_true', help='Display relative se
 parser.add_argument('--filters-file', type=str, help='JSON file containing multiple filter rules')
 args = parser.parse_args()
 
-# 定义过滤器规则列表
 filter_rules = []
-
-# 如果指定了过滤器配置文件，则加载它
 if args.filters_file:
     try:
         with open(args.filters_file, 'r') as f:
             filter_data = json.load(f)
             
-            # 处理过滤器规则
             if isinstance(filter_data, list):
                 for rule in filter_data:
                     filter_rule = {
@@ -79,7 +75,6 @@ if args.filters_file:
                     }
                     filter_rules.append(filter_rule)
                     
-                    # 打印规则信息
                     print("Added filter rule: %s" % rule)
     except Exception as e:
         print >> sys.stderr, "ERROR: Failed to load filter rules from %s: %s" % (args.filters_file, e)
@@ -88,14 +83,12 @@ if args.filters_file:
     if not filter_rules:
         print >> sys.stderr, "WARNING: No filter rules found in %s" % args.filters_file
 else:
-    # 使用命令行参数作为单个过滤器
     src_ip_filter = ip_to_int(args.src_ip)
     dst_ip_filter = ip_to_int(args.dst_ip)
     proto_filter = PROTO_MAP[args.protocol]
     src_port_filter = args.src_port
     dst_port_filter = args.dst_port
     
-    # 将命令行参数添加为单个过滤器规则
     if src_ip_filter != 0 or dst_ip_filter != 0 or proto_filter != 0 or src_port_filter != 0 or dst_port_filter != 0:
         filter_rules.append({
             'src_ip': src_ip_filter,
@@ -136,22 +129,18 @@ print('''
 print("And use it with: --filters-file /path/to/filters.json")
 print("---------------")
 
-# 最多支持10个过滤器规则
 MAX_FILTER_RULES = 10
 
-# 填充过滤器规则数组
 filter_array = []
 for i in range(MAX_FILTER_RULES):
     if i < len(filter_rules):
         rule = filter_rules[i]
         filter_array.append((rule['src_ip'], rule['dst_ip'], rule['proto'], rule['src_port'], rule['dst_port']))
     else:
-        filter_array.append((0, 0, 0, 0, 0))  # 空规则
+        filter_array.append((0, 0, 0, 0, 0))
 
-# 计算实际规则数
 num_filters = min(len(filter_rules), MAX_FILTER_RULES)
 
-# 修改BPF代码模板，加入多过滤器支持
 bpf_text = """
 #include <uapi/linux/ptrace.h>
 #include <linux/skbuff.h>
@@ -169,7 +158,6 @@ bpf_text = """
 #include <linux/types.h>
 #include <net/sock.h>
 
-// 多过滤器规则支持
 #define MAX_FILTER_RULES %d
 #define NUM_FILTERS %d
 
@@ -181,11 +169,9 @@ struct filter_rule {
     u16 dst_port;
 };
 
-// 全局过滤器规则数组
 struct filter_rule filter_rules[MAX_FILTER_RULES] = {
 """
 
-# 添加所有过滤器规则
 #pragma unroll
 for i, (src_ip, dst_ip, proto, src_port, dst_port) in enumerate(filter_array):
     bpf_text += "    {%sU, %sU, %d, %d, %d}" % (hex(src_ip), hex(dst_ip), proto, src_port, dst_port)
@@ -752,7 +738,7 @@ class Data(ct.Structure):
 bpf_text_final = bpf_text % (MAX_FILTER_RULES, num_filters)
 
 
-cflags = []        # 不能用 v3/v4
+cflags = []
 try:
     # Pass cflags during BPF object initialization
     b = BPF(text=bpf_text_final, cflags=cflags)
@@ -819,10 +805,8 @@ def print_event(cpu, data, size):
         daddr_str = format_ip(event.daddr)
         proto_str = {socket.IPPROTO_ICMP: "ICMP", socket.IPPROTO_TCP: "TCP", socket.IPPROTO_UDP: "UDP"}.get(event.ip_proto, str(event.ip_proto))
         
-        # Add IP ID to every packet
         pkt_id_info = "IP_ID:0x%x" % event.ip_id
         
-        # TCP状态信息
         tcp_state_str = ""
         if event.ip_proto == socket.IPPROTO_TCP:
             tcp_state_map = {
@@ -841,7 +825,6 @@ def print_event(cpu, data, size):
             }
             tcp_state_str = tcp_state_map.get(event.tcp_state, "UNKNOWN_STATE(%d)" % event.tcp_state)
             
-            # Add TCP sequence/ACK for TCP packets
             pkt_id_info += " SEQ:%u ACK:%u" % (event.tcp_seq, event.tcp_ack)
         
         if event.ip_proto in [socket.IPPROTO_TCP, socket.IPPROTO_UDP] and event.sport != 0:
@@ -851,7 +834,6 @@ def print_event(cpu, data, size):
                 proto_str,
                 pkt_id_info
             )
-            # 为TCP包添加状态信息
             if tcp_state_str:
                 pkt_info += " [%s]" % tcp_state_str
         else:
@@ -861,7 +843,6 @@ def print_event(cpu, data, size):
                 proto_str,
                 pkt_id_info
             )
-            # 为TCP包添加状态信息
             if tcp_state_str:
                 pkt_info += " [%s]" % tcp_state_str
     else:
@@ -970,7 +951,6 @@ def print_event(cpu, data, size):
         elif event.zone_dir == (ct.c_uint8(-3).value):
             zone_dir_str = "ZoneDir:N/A(NoCfg)"
             
-        # Add the zone information to the output
         if not ovs_info_str:
             # should ct info str
             ovs_info_str = "%s %s" % (zone_id_str, zone_dir_str)

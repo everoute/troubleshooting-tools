@@ -398,43 +398,40 @@ Examples:
         b.attach_kprobe(event="skb_recv_done", fn_name="trace_skb_recv_done")
         
         if args.verbose:
-            print("✅ Probes attached successfully")
+            print("Probes attached successfully")
         
     except Exception as e:
-        print("❌ Failed to load BPF program: {}".format(e))
+        print("Failed to load BPF program: {}".format(e))
         print("Make sure you're running as root and virtnet_poll function exists")
         return
     
-    # Set device filter
     filter_device = b["filter_device"]
     device_filter = DeviceFilter()
     if args.device:
         device_bytes = args.device.encode('utf-8')
         if len(device_bytes) >= 16:
-            print("❌ Device name too long (max 15 characters)")
+            print("Device name too long (max 15 characters)")
             return
-        # Set device name in structure
         device_filter.name = device_bytes
         filter_device[0] = device_filter
-        print("📡 Device filter: {}".format(args.device))
+        print("Device filter: {}".format(args.device))
     else:
         # Clear device filter (accept all)
         device_filter.name = b""
         filter_device[0] = device_filter
-        print("📡 Device filter: All devices")
+        print("Device filter: All devices")
     
-    # Set queue filter
     if args.queue is not None:
         b["filter_queue_enabled"][0] = ct.c_uint32(1)
         b["filter_queue_index"][0] = ct.c_uint32(args.queue)
-        print("🔍 Queue filter: {}".format(args.queue))
+        print("Queue filter: {}".format(args.queue))
     else:
         b["filter_queue_enabled"][0] = ct.c_uint32(0)
-        print("🔍 Queue filter: All queues")
+        print("Queue filter: All queues")
     
-    print("\n🚀 Virtio-net RX Monitor Started")
-    print("📊 Monitoring virtnet_poll and skb_recv_done events")
-    print("⏳ Waiting for events... Press Ctrl+C to stop\n")
+    print("\nVirtio-net RX Monitor Started")
+    print("Monitoring virtnet_poll and skb_recv_done events")
+    print("Waiting for events... Press Ctrl+C to stop\n")
     
     try:
         b["events"].open_perf_buffer(print_event)
@@ -446,7 +443,7 @@ Examples:
     except KeyboardInterrupt:
         pass
     
-    print("\n👋 Monitoring stopped.")
+    print("\nMonitoring stopped.")
 
 if __name__ == "__main__":
     main()

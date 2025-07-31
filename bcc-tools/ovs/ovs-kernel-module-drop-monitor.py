@@ -22,7 +22,6 @@ OVS_CS_F_TRACKED = 0x20
 OVS_CS_F_SRC_NAT = 0x40
 OVS_CS_F_DST_NAT = 0x80
 
-# Parse command line arguments
 parser = argparse.ArgumentParser(description='Monitor OpenVSwitch deferred action drops')
 parser.add_argument('--src', type=str, help='Source IP address to monitor (in dotted decimal notation)')
 parser.add_argument('--dst', type=str, help='Destination IP address to monitor (in dotted decimal notation)')
@@ -364,7 +363,6 @@ def print_ovs_drop_event(cpu, data, size):
             print("  Failed to retrieve stack trace (ID: %d)" % stack_id)
 
         if stack_trace:
-            # Check if this is the specific code path we're looking for
             # where kfree_skb is called directly from clone_execute
             found_target_path = False
             clone_execute_index = None
@@ -403,7 +401,6 @@ def print_ovs_drop_event(cpu, data, size):
                 "True" if event.last else "False",
                 "True" if event.clone_flow_key else "False"))
                 
-            # Add ct_state information - interpret the CT state bits
             ct_state = event.ct_state
             ct_state_flags = []
             
@@ -499,7 +496,6 @@ def print_ovs_drop_event(cpu, data, size):
     
     #print("===============================================")
 
-# Setup event handling
 b["ovs_drops"].open_perf_buffer(print_ovs_drop_event)
 
 # Handle Ctrl-C gracefully

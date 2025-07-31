@@ -8,3 +8,5 @@ bpftools/__pycache__/
 __pycache__/
 .tmp/
 .claude/
+claude_local*
+CLAUDE.md

@@ -341,10 +341,10 @@ BPF_ARRAY(name_map, union name_buf, 1);
 BPF_ARRAY(filter_enabled, u32, 1);
 BPF_ARRAY(filter_queue, u32, 1);
 
-// Device filter logic
+// Device filter logic - fixed to use bpf_probe_read_kernel like iface_netstat.c
 static inline int name_filter(struct net_device *dev){
-    union name_buf real_devname;
-    bpf_probe_read_kernel_str(real_devname.name, IFNAMSIZ, dev->name);
+    union name_buf real_devname = {};  // Initialize to zero
+    bpf_probe_read_kernel(&real_devname, IFNAMSIZ, dev->name);  // Read full 16 bytes
 
     int key=0;
     union name_buf *leaf = name_map.lookup(&key);
@@ -796,56 +796,56 @@ def print_event(cpu, data, size):
     }
     
     print("="*80)
-    print("🔍 Event: {} | Time: {}".format(
+    print("Event: {} | Time: {}".format(
         event_names.get(event.event_type, "unknown"), timestamp_str))
-    print("📍 Queue: {} | Device: {} | Process: {} (PID: {})".format(
+    print("Queue: {} | Device: {} | Process: {} (PID: {})".format(
         event.queue_index, event.dev_name.decode('utf-8', 'replace'),
         event.comm.decode('utf-8', 'replace'), event.pid))
-    print("🔑 Sock: 0x{:x}".format(event.sock_ptr))
+    print("Sock: 0x{:x}".format(event.sock_ptr))
     
     # Event-specific information
     if event.event_type == 1:  # tun_net_xmit
-        print("📦 SKB: 0x{:x} | TFile: 0x{:x}".format(event.skb_ptr, event.tfile_ptr))
+        print("SKB: 0x{:x} | TFile: 0x{:x}".format(event.skb_ptr, event.tfile_ptr))
         if event.saddr != 0:
-            print("🌐 Flow: {}:{} -> {}:{} ({})".format(
+            print("Flow: {}:{} -> {}:{} ({})".format(
                 ip_to_str(event.saddr), event.sport,
                 ip_to_str(event.daddr), event.dport,
                 "TCP" if event.protocol == 6 else "UDP" if event.protocol == 17 else str(event.protocol)))
         if event.rx_ring_ptr:
-            print("🔗 PTR Ring: 0x{:x}".format(event.rx_ring_ptr))
+            print("PTR Ring: 0x{:x}".format(event.rx_ring_ptr))
     elif event.event_type == 2:  # handle_rx
-        print("📥 VQ: 0x{:x}".format(event.vq_ptr))
-        print("🔄 VQ State: avail_idx={}, last_avail={}, last_used={}, used_flags=0x{:x}".format(
+        print("VQ: 0x{:x}".format(event.vq_ptr))
+        print("VQ State: avail_idx={}, last_avail={}, last_used={}, used_flags=0x{:x}".format(
             event.avail_idx, event.last_avail_idx, event.last_used_idx, event.used_flags))
-        print("🎯 Signal: signalled_used={}, valid={}, log_used={}".format(
+        print("Signal: signalled_used={}, valid={}, log_used={}".format(
             event.signalled_used, "YES" if event.signalled_used_valid else "NO", 
             "YES" if event.log_used else "NO"))
-        print("⚙️ Features: acked=0x{:x}, backend=0x{:x}".format(
+        print("Features: acked=0x{:x}, backend=0x{:x}".format(
             event.acked_features, event.acked_backend_features))
         if event.rx_ring_ptr:
-            print("🔗 RX Ring: 0x{:x}, upend_idx={}, done_idx={}".format(
+            print("RX Ring: 0x{:x}, upend_idx={}, done_idx={}".format(
                 event.rx_ring_ptr, event.upend_idx, event.done_idx))
-        print("📦 Hdr Len: vhost={}, sock={}, rxq_buf={}→{}".format(
+        print("Hdr Len: vhost={}, sock={}, rxq_buf={}{}".format(
             event.vhost_hlen, event.sock_hlen, event.rxq_head, event.rxq_tail))
     elif event.event_type == 3:  # tun_recvmsg
-        print("📨 TFile: 0x{:x}".format(event.tfile_ptr))
+        print("TFile: 0x{:x}".format(event.tfile_ptr))
         if event.rx_ring_ptr:
-            print("🔗 PTR Ring: 0x{:x}".format(event.rx_ring_ptr))
+            print("PTR Ring: 0x{:x}".format(event.rx_ring_ptr))
     elif event.event_type == 4:  # vhost_signal
-        print("🚨 VQ: 0x{:x}".format(event.vq_ptr))
-        print("🔄 VQ State: avail_idx={}, last_avail={}, last_used={}, used_flags=0x{:x}".format(
+        print("VQ: 0x{:x}".format(event.vq_ptr))
+        print("VQ State: avail_idx={}, last_avail={}, last_used={}, used_flags=0x{:x}".format(
             event.avail_idx, event.last_avail_idx, event.last_used_idx, event.used_flags))
-        print("🎯 Signal: signalled_used={}, valid={}, log_used={}".format(
+        print("Signal: signalled_used={}, valid={}, log_used={}".format(
             event.signalled_used, "YES" if event.signalled_used_valid else "NO", 
             "YES" if event.log_used else "NO"))
-        print("⚙️ Features: acked=0x{:x}, backend=0x{:x}".format(
+        print("Features: acked=0x{:x}, backend=0x{:x}".format(
             event.acked_features, event.acked_backend_features))
         if event.log_used and event.log_addr:
-            print("📋 Log: addr=0x{:x}".format(event.log_addr))
+            print("Log: addr=0x{:x}".format(event.log_addr))
     
     # Show ptr_ring state if available
     if event.ptr_ring_size > 0:
-        print("🔗 PTR Ring: size={}, producer={}, consumer_h={}, consumer_t={}, full={}".format(
+        print("PTR Ring: size={}, producer={}, consumer_h={}, consumer_t={}, full={}".format(
             event.ptr_ring_size, event.producer, 
             event.consumer_head, event.consumer_tail,
             "YES" if event.ring_full else "NO"))
@@ -897,36 +897,34 @@ Examples:
         b.attach_kprobe(event="vhost_add_used_and_signal_n", fn_name="trace_vhost_signal")
         
         if args.verbose:
-            print("✅ All probes attached successfully")
+            print("All probes attached successfully")
         
     except Exception as e:
-        print("❌ Failed to load BPF program: {}".format(e))
+        print("Failed to load BPF program: {}".format(e))
         return
     
-    # Set device filter
     devname_map = b["name_map"]
     _name = Devname()
     if args.device:
         _name.name = args.device.encode()
         devname_map[0] = _name
-        print("📡 Device filter: {}".format(args.device))
+        print("Device filter: {}".format(args.device))
     else:
         _name.name = b""
         devname_map[0] = _name
-        print("📡 Device filter: All TUN devices")
+        print("Device filter: All TUN devices")
     
-    # Set queue filter
     if args.queue is not None:
         b["filter_enabled"][0] = ct.c_uint32(1)
         b["filter_queue"][0] = ct.c_uint32(args.queue)
-        print("🔍 Queue filter: {} (enforced at tun_net_xmit)".format(args.queue))
+        print("Queue filter: {} (enforced at tun_net_xmit)".format(args.queue))
     else:
         b["filter_enabled"][0] = ct.c_uint32(0)
-        print("🔍 Queue filter: All queues")
+        print("Queue filter: All queues")
     
-    print("🚀 VHOST-NET Queue Correlation Monitor Started")
-    print("📊 Using sock pointer (0x...) to correlate events across stages")
-    print("🧹 Clearing target_queues and handle_rx_vqs maps to avoid stale entries")
+    print("VHOST-NET Queue Correlation Monitor Started")
+    print("Using sock pointer (0x...) to correlate events across stages")
+    print("Clearing target_queues and handle_rx_vqs maps to avoid stale entries")
     
     # Clear target_queues map to avoid stale entries
     target_queues_map = b["target_queues"]
@@ -936,7 +934,7 @@ Examples:
     handle_rx_vqs_map = b["handle_rx_vqs"]
     handle_rx_vqs_map.clear()
     
-    print("⏳ Waiting for events... Press Ctrl+C to stop\n")
+    print("Waiting for events... Press Ctrl+C to stop\n")
     
     try:
         b["events"].open_perf_buffer(print_event)
@@ -948,7 +946,7 @@ Examples:
     except KeyboardInterrupt:
         pass
     
-    print("\n👋 Monitoring stopped.")
+    print("\nMonitoring stopped.")
 
 if __name__ == "__main__":
     main()

@@ -364,16 +364,16 @@ def print_ultra_minimal_event(cpu, data, size):
     timestamp_str = timestamp.strftime('%H:%M:%S.%f')[:-3]
     
     print("=" * 100)
-    print("🔍 ULTRA-MINIMAL VHOST ANALYSIS | Time: {}".format(timestamp_str))
+    print("ULTRA-MINIMAL VHOST ANALYSIS | Time: {}".format(timestamp_str))
     print("=" * 100)
     
     # Basic Info
-    print("📍 Process: {} (PID: {}, TID: {})".format(event.comm.decode('utf-8', 'replace'), event.pid, event.tid))
-    print("🎯 Queue: {} | Batch Size: {} | Network: {}".format(event.queue_index, event.heads_count, format_bool(event.is_net_vq)))
-    print("🔗 Pointers: dev={} vq={}".format(format_hex_ptr(event.dev_ptr), format_hex_ptr(event.vq_ptr)))
+    print("Process: {} (PID: {}, TID: {})".format(event.comm.decode('utf-8', 'replace'), event.pid, event.tid))
+    print("Queue: {} | Batch Size: {} | Network: {}".format(event.queue_index, event.heads_count, format_bool(event.is_net_vq)))
+    print("Pointers: dev={} vq={}".format(format_hex_ptr(event.dev_ptr), format_hex_ptr(event.vq_ptr)))
     
     # === VHOST_VIRTQUEUE CORE ===
-    print("\n🔄 VHOST_VIRTQUEUE CORE:")
+    print("\nVHOST_VIRTQUEUE CORE:")
     print("   Ring: size={} desc={} avail={} used={}".format(
         event.ring_num, format_hex_ptr(event.desc_ptr), format_hex_ptr(event.avail_ptr), format_hex_ptr(event.used_ptr)))
     print("   Indices: last_avail={} avail_idx={} last_used={}".format(
@@ -384,18 +384,18 @@ def print_ultra_minimal_event(cpu, data, size):
         event.busyloop_timeout, format_hex_ptr(event.call_ctx_ptr), format_bool(event.log_used)))
     
     # === VHOST_DEV CORE ===
-    print("\n📋 VHOST_DEV CORE:")
+    print("\nVHOST_DEV CORE:")
     print("   Memory: mm={} vqs={} nvqs={}".format(format_hex_ptr(event.mm_ptr), format_hex_ptr(event.vqs_ptr), event.nvqs))
     print("   Worker: {}".format(format_hex_ptr(event.worker_ptr)))
     print("   Limits: iov={} weight={} byte_weight={}".format(event.iov_limit, event.weight, event.byte_weight))
     
     # === MEMORY MANAGEMENT ===
-    print("\n🧠 MEMORY MANAGEMENT:")
+    print("\nMEMORY MANAGEMENT:")
     print("   UMEM: {} (regions={})".format(format_hex_ptr(event.umem_ptr), event.umem_numem))
     print("   IOTLB: {} (regions={})".format(format_hex_ptr(event.iotlb_ptr), event.iotlb_numem))
     
     # === DEBUG ===
-    print("\n🐛 DEBUG:")
+    print("\nDEBUG:")
     print("   Read Failures: {} | Structure Valid: {}".format(event.read_failures, format_bool(event.structure_valid)))
     
     print("=" * 100)
@@ -429,15 +429,15 @@ Examples:
         b.attach_kprobe(event="vhost_add_used_and_signal_n", fn_name="trace_vhost_add_used_and_signal_n")
         
         if args.verbose:
-            print("✅ Probe attached successfully")
+            print("Probe attached successfully")
         
     except Exception as e:
-        print("❌ Failed to load BPF program: {}".format(e))
+        print("Failed to load BPF program: {}".format(e))
         return
     
-    print("🔍 Ultra-Minimal VHOST Monitor Started")
-    print("📊 Testing embedded vhost structures")
-    print("⏳ Waiting for events... Press Ctrl+C to stop\n")
+    print("Ultra-Minimal VHOST Monitor Started")
+    print("Testing embedded vhost structures")
+    print("Waiting for events... Press Ctrl+C to stop\n")
     
     try:
         b["events"].open_perf_buffer(print_ultra_minimal_event)
@@ -449,7 +449,7 @@ Examples:
     except KeyboardInterrupt:
         pass
     
-    print("\n👋 Ultra-minimal monitoring stopped.")
+    print("\nUltra-minimal monitoring stopped.")
 
 if __name__ == "__main__":
     main()

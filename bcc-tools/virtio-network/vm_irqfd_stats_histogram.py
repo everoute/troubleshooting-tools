@@ -25,7 +25,6 @@ import signal
 import sys
 from collections import defaultdict
 
-# BPF程序
 bpf_text = """
 #include <linux/kvm_host.h>
 #include <linux/eventfd.h>
@@ -33,7 +32,6 @@ bpf_text = """
 #include <linux/list.h>
 #include <linux/poll.h>
 
-// 完整的 kvm_kernel_irqfd 结构定义
 struct kvm_kernel_irqfd {
     /* Used for MSI fast-path */
     struct kvm *kvm;
@@ -58,7 +56,6 @@ struct kvm_kernel_irqfd {
     void *irq_bypass_producer;   // struct irq_bypass_producer *
 };
 
-// 使用 READ_FIELD 宏
 #define READ_FIELD(dst, ptr, field)                                   \\
     do {                                                              \\
         typeof(ptr->field) __tmp;                                     \\
@@ -66,21 +63,18 @@ struct kvm_kernel_irqfd {
         *(dst) = __tmp;                                               \\
     } while (0)
 
-// 直方图键：VM + 队列 + 分类信息
 typedef struct hist_key {
-    u64 kvm_ptr;           // KVM 实例指针 (VM 标识)
-    u64 irqfd_ptr;         // irqfd 结构指针 (队列标识)
-    u32 gsi;               // 全局系统中断号
+    u64 kvm_ptr;
+    u64 irqfd_ptr;
+    u32 gsi;
     u32 cpu_id;            // CPU ID
-    u32 pid;               // 进程 PID
-    char comm[16];         // 进程名
-    u64 slot;              // 直方图槽位（用于计数）
+    u32 pid;
+    char comm[16];
+    u64 slot;
 } hist_key_t;
 
-// 使用BPF_HISTOGRAM进行统计
 BPF_HISTOGRAM(irq_count_hist, hist_key_t);
 
-// 辅助信息存储 (存储GSI和EventFD等信息)
 struct irqfd_info {
     u32 gsi;
     u64 eventfd_ctx;
@@ -101,7 +95,6 @@ struct filter_params {
 BPF_ARRAY(filter_config, struct filter_params, 1);
 
 
-// 跟踪 irqfd_wakeup 事件
 int trace_vm_irqfd_stats(struct pt_regs *ctx) {
     wait_queue_entry_t *wait = (wait_queue_entry_t *)PT_REGS_PARM1(ctx);
     unsigned mode = (unsigned)PT_REGS_PARM2(ctx);
@@ -110,17 +103,14 @@ int trace_vm_irqfd_stats(struct pt_regs *ctx) {
     
     if (!wait) return 0;
     
-    // 检查 EPOLLIN 标志 (网络中断通常是输入事件)
     u64 flags = (u64)key;
     if (!(flags & 0x1)) return 0;
     
-    // 使用 container_of 获取 kvm_kernel_irqfd 结构
     struct kvm_kernel_irqfd *irqfd = (struct kvm_kernel_irqfd *)
         ((char *)wait - offsetof(struct kvm_kernel_irqfd, wait));
         
     if (!irqfd) return 0;
     
-    // 读取关键字段
     struct kvm *kvm = NULL;
     struct eventfd_ctx *eventfd = NULL;
     int gsi = 0;
@@ -129,17 +119,14 @@ int trace_vm_irqfd_stats(struct pt_regs *ctx) {
     READ_FIELD(&eventfd, irqfd, eventfd);
     READ_FIELD(&gsi, irqfd, gsi);
     
-    // 验证关键字段有效性
     if (!kvm || !eventfd || (u64)kvm < 0xffff000000000000ULL || (u64)eventfd < 0xffff000000000000ULL) {
         return 0;
     }
     
-    // 获取当前进程信息
     u32 pid = bpf_get_current_pid_tgid() >> 32;
     char comm[16] = {};
     bpf_get_current_comm(&comm, sizeof(comm));
     
-    // 获取过滤配置
     int zero = 0;
     struct filter_params *filter = filter_config.lookup(&zero);
     if (!filter) return 0;
@@ -257,7 +244,6 @@ class FilterParams(ct.Structure):
         ("filter_subcategory", ct.c_uint8),
     ]
 
-# 全局统计
 start_time = None
 last_print_time = None
 
@@ -279,7 +265,6 @@ def print_histogram_stats(b):
     
     duration = current_time - start_time
     
-    # Get current timestamp
     import datetime
     current_timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
     
@@ -289,7 +274,6 @@ def print_histogram_stats(b):
     print("Timestamp: {}".format(current_timestamp))
     print("Statistics Duration: {:.2f} seconds (Current Interval: {:.2f} seconds)".format(duration, interval))
     
-    # 收集和组织统计数据
     vm_stats = defaultdict(lambda: {
         'total_interrupts': 0,
         'queues': defaultdict(lambda: {
@@ -308,7 +292,6 @@ def print_histogram_stats(b):
     
     total_interrupts = 0
     
-    # 遍历直方图
     hist_table = b["irq_count_hist"]
     for k, v in hist_table.items():
         if v.value == 0:
@@ -323,7 +306,6 @@ def print_histogram_stats(b):
         vm_stat = vm_stats[kvm_ptr]
         vm_stat['total_interrupts'] += count
         
-        # 获取辅助信息
         irqfd_info = b["irqfd_info_map"].get(ct.c_uint64(irqfd_ptr))
         if irqfd_info:
             first_time = format_timestamp(irqfd_info.first_timestamp)
@@ -334,7 +316,6 @@ def print_histogram_stats(b):
             if vm_stat['last_time'] is None or last_time > vm_stat['last_time']:
                 vm_stat['last_time'] = last_time
         
-        # 更新队列统计
         queue_stat = vm_stat['queues'][irqfd_ptr]
         queue_stat['count'] += count
         queue_stat['gsi'] = k.gsi
@@ -348,7 +329,6 @@ def print_histogram_stats(b):
         comm_str = k.comm.decode('utf-8', 'replace')
         queue_stat['comms'].add(comm_str)
         
-        # 分类统计
         if comm_str.startswith('qemu'):
             queue_stat['control_count'] += count
         elif comm_str.startswith('vhost-'):
@@ -453,7 +433,6 @@ def main():
         print("Error: --subcategory requires --category to be specified")
         return
     
-    # Set filter parameters
     filter_params = FilterParams()
     filter_params.qemu_pid = args.qemu_pid
     filter_params.vhost_pid = args.vhost_pid if args.vhost_pid else 0
@@ -474,7 +453,6 @@ def main():
     else:
         filter_params.filter_subcategory = 0
     
-    # Update filter configuration
     b["filter_config"][ct.c_int(0)] = filter_params
     
     print("\n" + "="*80)

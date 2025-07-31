@@ -148,10 +148,10 @@ BPF_ARRAY(filter_protocol, u8, 1);
 BPF_ARRAY(name_map, union name_buf, 1);  // Device filter (from iface_netstat.c)
 BPF_ARRAY(show_all_events, u32, 1);
 
-// Device filter logic (exactly from iface_netstat.c)
+// Device filter logic - fixed to use bpf_probe_read_kernel like iface_netstat.c
 static inline int name_filter(struct net_device *dev){
-    union name_buf real_devname;
-    bpf_probe_read_kernel_str(real_devname.name, IFNAMSIZ, dev->name);
+    union name_buf real_devname = {};  // Initialize to zero
+    bpf_probe_read_kernel(&real_devname, IFNAMSIZ, dev->name);  // Read full 16 bytes
 
     int key=0;
     union name_buf *leaf = name_map.lookup(&key);
@@ -456,9 +456,9 @@ def print_event(cpu, data, size):
     
     print("="*80)
     if event.ring_full:
-        print("🚨 TUN RING FULL DETECTED! 🚨")
+        print("TUN RING FULL DETECTED!")
     else:
-        print("📊 TUN Ring Status")
+        print("TUN Ring Status")
     
     print("Time: {}".format(timestamp_str))
     print("Process: {} (PID: {})".format(event.comm.decode('utf-8', 'replace'), event.pid))
@@ -473,11 +473,11 @@ def print_event(cpu, data, size):
     print("  numqueues offset: {} bytes".format(event.numqueues_offset))
     print("  Expected tfiles size: {} bytes (256 pointers * 8)".format(256 * 8))
     if event.tfiles_size == event.numqueues_offset:
-        print("  ✅ Layout correct: tfiles takes exactly {} bytes".format(event.tfiles_size))
+        print("  Layout correct: tfiles takes exactly {} bytes".format(event.tfiles_size))
     else:
-        print("  ⚠️ Layout mismatch: tfiles size {} != numqueues offset {}".format(
+        print("  Layout mismatch: tfiles size {} != numqueues offset {}".format(
             event.tfiles_size, event.numqueues_offset))
-    print("  📍 Array access: queue_mapping={} -> tfiles[{}]".format(
+    print("  Array access: queue_mapping={} -> tfiles[{}]".format(
         event.queue_mapping, event.tfile_index))
     print()
     
@@ -496,7 +496,7 @@ def print_event(cpu, data, size):
         print("  Destination: {}:{}".format(daddr_str, event.dport))
         print("  Protocol: {}".format(protocol_str))
     else:
-        print("  📋 Packet headers not parsed (may be non-IP or parsing failed)")
+        print("  Packet headers not parsed (may be non-IP or parsing failed)")
         print("  Source: N/A:N/A")
         print("  Destination: N/A:N/A")
         print("  Protocol: N/A")
@@ -511,11 +511,11 @@ def print_event(cpu, data, size):
         print("  Queue[Producer] Ptr: 0x{:x}".format(event.queue_producer_ptr))
         
         if event.ring_full:
-            print("  Status: ⚠️ FULL (queue[producer] != NULL)")
+            print("  Status: FULL (queue[producer] != NULL)")
         else:
-            print("  Status: ✅ Available (queue[producer] == NULL), {}% used".format(utilization))
+            print("  Status: Available (queue[producer] == NULL), {}% used".format(utilization))
     else:
-        print("  Status: ❌ Not found (using default search offsets)")
+        print("  Status: Not found (using default search offsets)")
     
     print("="*80)
     print()
@@ -582,11 +582,10 @@ Examples:
         b = BPF(text=bpf_text)
         b.attach_kprobe(event="tun_net_xmit", fn_name="probe_tun_net_xmit")
     except Exception as e:
-        print("❌ Failed to load BPF program: {}".format(e))
+        print("Failed to load BPF program: {}".format(e))
         print("Make sure you have proper permissions and BCC is installed.")
         return
     
-    # Set filter values using BPF Maps
     b["filter_enabled"][0] = ct.c_uint32(filter_enabled)
     b["filter_saddr"][0] = ct.c_uint32(filter_saddr)
     b["filter_daddr"][0] = ct.c_uint32(filter_daddr)
@@ -594,29 +593,26 @@ Examples:
     b["filter_dport"][0] = ct.c_uint16(filter_dport)
     b["filter_protocol"][0] = ct.c_uint8(filter_protocol)
     
-    # Set device filter using verified iface_netstat.py approach
     devname_map = b["name_map"]
     _name = Devname()
     if args.device:
         _name.name = args.device.encode()
         devname_map[0] = _name
-        print("📡 Device filter: {} (using verified logic)".format(args.device))
+        print("Device filter: {} (using verified logic)".format(args.device))
     else:
-        # Set empty filter to accept all devices
         _name.name = b""
         devname_map[0] = _name
-        print("📡 Device filter: All TUN devices")
+        print("Device filter: All TUN devices")
     
-    # Set whether to show all events
     if args.all:
         b["show_all_events"][0] = ct.c_uint32(1)
     
     # Print startup info
-    print("🔍 TUN Ring Monitor Started with BPF Maps Filters...")
+    print("TUN Ring Monitor Started with BPF Maps Filters...")
     if args.all:
-        print("📈 Mode: Monitoring ALL TUN transmit events")
+        print("Mode: Monitoring ALL TUN transmit events")
     else:
-        print("⚠️ Mode: Monitoring ptr_ring FULL conditions only")
+        print("Mode: Monitoring ptr_ring FULL conditions only")
     
     filters = []
     if args.src_ip: filters.append("src-ip={}".format(args.src_ip))
@@ -626,7 +622,7 @@ Examples:
     if args.protocol: filters.append("protocol={}".format(args.protocol.upper()))
     
     if filters:
-        print("🔍 5-tuple filters: {}".format(', '.join(filters)))
+        print("5-tuple filters: {}".format(', '.join(filters)))
     
     print(" New feature: Analyzing tun_struct memory layout")
     print("   - tfiles array size calculation")
@@ -645,7 +641,7 @@ Examples:
     except KeyboardInterrupt:
         pass
     
-    print("\n👋 Monitoring stopped.")
+    print("\nMonitoring stopped.")
 
 if __name__ == "__main__":
     main() 

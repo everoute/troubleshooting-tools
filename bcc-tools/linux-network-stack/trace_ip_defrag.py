@@ -16,7 +16,6 @@ import argparse
 import signal
 import traceback
 
-# Parse command line arguments
 parser = argparse.ArgumentParser(description='Trace IP defragmentation events, focusing on duplicates.')
 parser.add_argument('--src', type=str, help='Source IP address to monitor (e.g., 192.168.1.1)')
 parser.add_argument('--dst', type=str, help='Destination IP address to monitor (e.g., 10.0.0.2)')
@@ -410,7 +409,6 @@ class SkbInfo(ct.Structure):
         ("dport", ct.c_ushort), # Network byte order
         ("protocol", ct.c_ubyte),
         ("l4_hdr_set", ct.c_ubyte),
-        # Add MAC addresses here if enabled in C code
     ]
 
 class IpDefragData(ct.Structure):
@@ -467,7 +465,6 @@ def format_skb_info(skb_info):
             l4_info = "{}:{} -> {}:{} Proto={}".format(src_ip, sport, dst_ip, dport, proto)
         elif proto == socket.IPPROTO_ICMP:
              l4_info = "{} -> {} Proto=ICMP".format(src_ip, dst_ip)
-        # Add other protocols if needed
     else:
         l4_info = "{} -> {} Proto={} (L4 hdr?)".format(src_ip, dst_ip, proto)
 
@@ -496,7 +493,6 @@ def print_kfree_event(cpu, data, size):
     event = ct.cast(data, ct.POINTER(KfreeSkbData)).contents
     stack_id = event.stack_id
 
-    # Initialize empty stack trace info
     found_relevant_frame = True
     relevant_frames = []
     stack_trace_str = "[Stack Trace Unavailable (ID: {})]".format(stack_id)
@@ -504,7 +500,6 @@ def print_kfree_event(cpu, data, size):
     # Try to get stack trace only if stack_id looks valid (non-negative)
     if stack_id >= 0:
         try:
-            # Check stack trace for relevant functions
             stack_trace = list(b.get_table("stack_traces").walk(stack_id))
             stack_trace_str = "" # Clear the unavailable message
             for addr in stack_trace:
@@ -512,7 +507,6 @@ def print_kfree_event(cpu, data, size):
                 sym_decoded = sym.decode('utf-8', 'replace')
                 # Store the full trace line for potential printing later
                 stack_trace_str += "    - {}\n".format(sym_decoded)
-                # Check for functions involved in fragmentation causing the free
                 # if not found_relevant_frame and \
                 #    ("inet_frag_queue_insert" in sym_decoded or \
                 #     "ip_frag_queue" in sym_decoded or \

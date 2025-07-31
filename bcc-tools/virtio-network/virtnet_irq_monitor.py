@@ -219,7 +219,7 @@ except Exception as e:
 
 # Kprobe attachment removed for compatibility
 
-print("✓ Tracepoints attached successfully")
+print(" Tracepoints attached successfully")
 print("-" * 80)
 
 # Simplified tracking without perf events
@@ -231,7 +231,6 @@ def print_statistics():
     print("IRQ Statistics Report - {}".format(strftime('%H:%M:%S')))
     print("{}".format("="*80))
     
-    # Get all statistics
     call_counts = {}
     handler_names = {}
     irq_details = {}
@@ -293,7 +292,6 @@ def print_statistics():
         if call_count > 0:
             avg_durations[irq] = float(duration_sum) / call_count
     
-    # Get max durations
     for k, v in b["irq_duration_max"].items():
         irq = k.value
         max_durations[irq] = v.value
@@ -339,7 +337,7 @@ def print_statistics():
                         if retval == IRQ_NONE:
                             if percentage > 1.0:
                                 total_issues += 1
-                                ret_summary.append("IRQ_NONE: {} ({:.1f}%) ⚠️".format(count, percentage))
+                                ret_summary.append("IRQ_NONE: {} ({:.1f}%)".format(count, percentage))
                             else:
                                 ret_summary.append("IRQ_NONE: {} ({:.1f}%)".format(count, percentage))
                         elif retval == IRQ_HANDLED:
@@ -361,9 +359,9 @@ def print_statistics():
     
     # Summary
     if total_issues > 0:
-        print("\n⚠️  ISSUES DETECTED: {} IRQ(s) with high IRQ_NONE ratio".format(total_issues))
+        print("\nISSUES DETECTED: {} IRQ(s) with high IRQ_NONE ratio".format(total_issues))
     else:
-        print("\n✅ No issues detected (IRQ_NONE < 1.0%, latency normal)")
+        print("\nNo issues detected (IRQ_NONE < 1.0%, latency normal)")
     
     print("{}".format("="*80))
     

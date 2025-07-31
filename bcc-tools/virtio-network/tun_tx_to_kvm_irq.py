@@ -325,10 +325,10 @@ BPF_ARRAY(filter_queue, u32, 1);
 // Event output
 BPF_PERF_OUTPUT(interrupt_events);
 
-// Device filter logic from vhost_queue_correlation_monitor.py
+// Device filter logic - fixed to use bpf_probe_read_kernel like iface_netstat.c
 static inline int name_filter(struct net_device *dev){
-    union name_buf real_devname;
-    bpf_probe_read_kernel_str(real_devname.name, IFNAMSIZ, dev->name);
+    union name_buf real_devname = {};  // Initialize to zero
+    bpf_probe_read_kernel(&real_devname, IFNAMSIZ, dev->name);  // Read full 16 bytes
 
     int key=0;
     union name_buf *leaf = name_map.lookup(&key);
@@ -675,7 +675,6 @@ def process_interrupt_event(cpu, data, size):
     
     interrupt_traces.append(event_data)
     
-    # Update chain statistics
     if queue_key not in chain_stats:
         chain_stats[queue_key] = {}
     stage = event.stage
@@ -747,18 +746,18 @@ def analyze_interrupt_chains():
             
             # Expected chain: Stage 1 -> Stage 2 -> Stage 3
             if 1 in stages and 2 in stages and 3 in stages:
-                print("  ✅ COMPLETE CHAIN: tun_net_xmit -> vhost_signal -> irqfd_wakeup")
+                print("  COMPLETE CHAIN: tun_net_xmit -> vhost_signal -> irqfd_wakeup")
             elif 1 in stages and 2 in stages:
-                print("  ⚠️  PARTIAL CHAIN: tun_net_xmit -> vhost_signal (missing irqfd_wakeup)")
+                print("  PARTIAL CHAIN: tun_net_xmit -> vhost_signal (missing irqfd_wakeup)")
             elif 1 in stages:
-                print("  ⚠️  INCOMPLETE: only tun_net_xmit detected")
+                print("  INCOMPLETE: only tun_net_xmit detected")
             elif 2 in stages:
-                print("  ⚠️  INCOMPLETE: only vhost_signal detected (missing tun_net_xmit)")
+                print("  INCOMPLETE: only vhost_signal detected (missing tun_net_xmit)")
             else:
-                print("  ❌ NO PROPER CHAIN DETECTED")
+                print("  NO PROPER CHAIN DETECTED")
     
     if sequence_errors > 0:
-        print("\n⚠️  SEQUENCE ERRORS: {} out-of-order events detected".format(sequence_errors))
+        print("\nSEQUENCE ERRORS: {} out-of-order events detected".format(sequence_errors))
 
 def print_statistics_summary():
     """Print comprehensive statistics"""
@@ -866,27 +865,26 @@ Examples:
         
         # Attach proven probe points
         b.attach_kprobe(event="tun_net_xmit", fn_name="trace_tun_net_xmit")
-        print("✅ Successfully attached to tun_net_xmit")
+        print("Successfully attached to tun_net_xmit")
         
         b.attach_kprobe(event="vhost_add_used_and_signal_n", fn_name="trace_vhost_signal")
-        print("✅ Successfully attached to vhost_add_used_and_signal_n")
+        print("Successfully attached to vhost_add_used_and_signal_n")
         
         # Attach irqfd_wakeup probe (verified as the correct probe point)
         try:
             b.attach_kprobe(event="irqfd_wakeup", fn_name="trace_irqfd_wakeup")
-            print("✅ Successfully attached to irqfd_wakeup (verified offsets: eventfd_ctx +32, gsi +48)")
+            print("Successfully attached to irqfd_wakeup (verified offsets: eventfd_ctx +32, gsi +48)")
         except Exception as e:
-            print("⚠️  Failed to attach irqfd_wakeup: {}".format(e))
+            print("Failed to attach irqfd_wakeup: {}".format(e))
             print("   Chain will be incomplete (only tun_net_xmit -> vhost_signal)")
         
     except Exception as e:
-        print("❌ Failed to load BPF program: {}".format(e))
+        print("Failed to load BPF program: {}".format(e))
         if args.debug:
             print("BPF program source:")
             print(bpf_text)
         return
     
-    # Set device filter
     devname_map = b["name_map"]
     _name = Devname()
     if args.device:
@@ -898,7 +896,6 @@ Examples:
         devname_map[0] = _name
         print("Device filter: All TUN devices")
     
-    # Set queue filter
     if args.queue is not None:
         b["filter_enabled"][0] = ct.c_uint32(1)
         b["filter_queue"][0] = ct.c_uint32(args.queue)

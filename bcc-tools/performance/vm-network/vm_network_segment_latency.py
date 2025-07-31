@@ -2,11 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-VM Network Segment Latency - 正确的数据流实现
-按照设计文档实现正确的TX和RX路径追踪
 
-TX路径: tun_get_user -> internal_dev_xmit -> ovs_dp_process_packet -> ovs_vport_send -> __dev_queue_xmit
-RX路径: __netif_receive_skb -> netdev_frame_hook -> ovs_dp_process_packet -> ovs_vport_send -> tun_net_xmit
 """
 
 from __future__ import print_function
@@ -28,7 +24,6 @@ bpf_text = """
 
 #define MAX_STAGES 7
 
-// 五元组流标识
 struct flow_key_t {
     __be32 src_ip;
     __be32 dst_ip;
@@ -37,28 +32,25 @@ struct flow_key_t {
     u8 protocol;
 };
 
-// 流追踪数据
 struct flow_data_t {
-    u64 ts[MAX_STAGES];           // 各阶段时间戳
-    u64 skb_ptr[MAX_STAGES];      // SKB指针
-    u32 pid;                      // 进程ID
-    char comm[16];                // 进程名
-    char vm_ifname[16];           // VM接口名
-    char phy_ifname[16];          // 物理接口名
+    u64 ts[MAX_STAGES];
+    u64 skb_ptr[MAX_STAGES];
+    u32 pid;
+    char comm[16];
+    char vm_ifname[16];
+    char phy_ifname[16];
     u8 direction;                 // 0=TX, 1=RX
-    u8 stages_hit;                // 命中的阶段位掩码
-    u8 saw_start:1;               // 标记开始
-    u8 saw_end:1;                 // 标记结束
+    u8 stages_hit;
+    u8 saw_start:1;
+    u8 saw_end:1;
 };
 
-// 延迟事件
 struct latency_event_t {
     struct flow_key_t key;
     struct flow_data_t data;
     u64 timestamp;
 };
 
-// 过滤参数
 struct filter_t {
     u32 src_ip;
     u32 dst_ip;
@@ -72,20 +64,17 @@ BPF_HASH(flow_tracker, struct flow_key_t, struct flow_data_t, 10240);
 BPF_PERF_OUTPUT(latency_events);
 BPF_ARRAY(filter_config, struct filter_t, 1);
 
-// 解析数据包获取五元组
 static __always_inline int parse_packet_key(struct sk_buff *skb, struct flow_key_t *key) {
     if (!skb) return 0;
     
     unsigned char *head;
     u16 network_header_offset;
     
-    // 读取SKB header信息
     if (bpf_probe_read_kernel(&head, sizeof(head), &skb->head) < 0) return 0;
     if (bpf_probe_read_kernel(&network_header_offset, sizeof(network_header_offset), &skb->network_header) < 0) return 0;
     
     if (network_header_offset == (u16)~0U || network_header_offset > 2048) return 0;
     
-    // 读取IP头
     struct iphdr ip;
     if (bpf_probe_read_kernel(&ip, sizeof(ip), head + network_header_offset) < 0) return 0;
     
@@ -95,11 +84,9 @@ static __always_inline int parse_packet_key(struct sk_buff *skb, struct flow_key
     key->dst_ip = ip.daddr;
     key->protocol = ip.protocol;
     
-    // 计算传输层偏移 - 使用IP头长度字段
     u8 ip_header_len = (ip.ihl & 0x0F) * 4;
     if (ip_header_len < 20) return 0;
     
-    // 读取端口信息
     if (ip.protocol == IPPROTO_TCP) {
         struct tcphdr tcp;
         if (bpf_probe_read_kernel(&tcp, sizeof(tcp), head + network_header_offset + ip_header_len) < 0) return 0;
@@ -115,7 +102,6 @@ static __always_inline int parse_packet_key(struct sk_buff *skb, struct flow_key
     return 1;
 }
 
-// 应用过滤条件
 static __always_inline int apply_filter(struct flow_key_t *key, u8 direction) {
     int zero = 0;
     struct filter_t *filter = filter_config.lookup(&zero);
@@ -131,7 +117,6 @@ static __always_inline int apply_filter(struct flow_key_t *key, u8 direction) {
     return 1;
 }
 
-// 检查是否是vnet接口
 static __always_inline int is_vnet_interface(struct sk_buff *skb) {
     struct net_device *dev = NULL;
     if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) < 0 || !dev) return 0;
@@ -142,7 +127,6 @@ static __always_inline int is_vnet_interface(struct sk_buff *skb) {
     return (ifname[0] == 'v' && ifname[1] == 'n' && ifname[2] == 'e' && ifname[3] == 't');
 }
 
-// 更新流状态 
 static __always_inline void update_flow_stage(struct pt_regs *ctx, struct flow_key_t *key, 
                                               int stage, struct sk_buff *skb, u8 direction) {
     struct flow_data_t *flow = flow_tracker.lookup(key);
@@ -156,26 +140,21 @@ static __always_inline void update_flow_stage(struct pt_regs *ctx, struct flow_k
         if (!flow) return;
     }
     
-    // 只处理相同方向的流
     if (flow->direction != direction) return;
     
     flow->ts[stage] = bpf_ktime_get_ns();
     flow->skb_ptr[stage] = (u64)skb;
     flow->stages_hit |= (1 << stage);
     
-    // 标记开始和结束
     if (stage == 0) flow->saw_start = 1;
     if ((direction == 0 && stage == 6) || (direction == 1 && stage == 6)) flow->saw_end = 1;
     
-    // 记录接口名
     if (skb) {
         struct net_device *dev = NULL;
         if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) >= 0 && dev) {
             char ifname[16] = {};
             bpf_probe_read_kernel_str(ifname, sizeof(ifname), dev->name);
             
-            // TX方向：stage 0记录VM接口，stage 6记录物理接口
-            // RX方向：stage 0记录物理接口，stage 6记录VM接口  
             if ((direction == 0 && stage == 0) || (direction == 1 && stage == 6)) {
                 __builtin_memcpy(flow->vm_ifname, ifname, sizeof(flow->vm_ifname));
             } else if ((direction == 0 && stage == 6) || (direction == 1 && stage == 0)) {
@@ -184,7 +163,6 @@ static __always_inline void update_flow_stage(struct pt_regs *ctx, struct flow_k
         }
     }
     
-    // 检查是否完成追踪（到达终点）
     if (flow->saw_end) {
         struct latency_event_t event = {};
         event.key = *key;
@@ -195,33 +173,25 @@ static __always_inline void update_flow_stage(struct pt_regs *ctx, struct flow_k
     }
 }
 
-// TX路径探测点
-// Stage 0: tun_get_user - TX起点（VM发送数据包）
-// 注意：这个函数的参数不同，需要特殊处理
 int kprobe__tun_get_user(struct pt_regs *ctx, struct tun_struct *tun, struct tun_file *tfile, 
                          void *msg_control, struct iov_iter *from, int noblock, bool more) {
-    // TODO: 需要从iov_iter中构造临时skb进行解析
-    // 这里先简化处理，等后续完善
     return 0;  
 }
 
-// Stage 1: internal_dev_xmit - OVS内部设备处理
 int kprobe__internal_dev_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
     struct flow_key_t key = {};
     if (!parse_packet_key(skb, &key)) return 0;
-    if (!apply_filter(&key, 0)) return 0;  // TX方向
+    if (!apply_filter(&key, 0)) return 0;
     
     update_flow_stage(ctx, &key, 1, skb, 0);
     return 0;
 }
 
-// Stage 2: ovs_dp_process_packet - OVS数据路径处理
 int kprobe__ovs_dp_process_packet(struct pt_regs *ctx, const struct sk_buff *skb_const) {
     struct sk_buff *skb = (struct sk_buff *)skb_const;
     struct flow_key_t key = {};
     if (!parse_packet_key(skb, &key)) return 0;
     
-    // 检查是否已有流在追踪（TX或RX）
     struct flow_data_t *flow = flow_tracker.lookup(&key);
     if (flow) {
         update_flow_stage(ctx, &key, 2, skb, flow->direction);
@@ -229,7 +199,6 @@ int kprobe__ovs_dp_process_packet(struct pt_regs *ctx, const struct sk_buff *skb
     return 0;
 }
 
-// Stage 5: ovs_vport_send - OVS虚拟端口发送  
 int kprobe__ovs_vport_send(struct pt_regs *ctx, const void *vport, struct sk_buff *skb) {
     struct flow_key_t key = {};
     if (!parse_packet_key(skb, &key)) return 0;
@@ -241,42 +210,37 @@ int kprobe__ovs_vport_send(struct pt_regs *ctx, const void *vport, struct sk_buf
     return 0;
 }
 
-// Stage 6: __dev_queue_xmit - TX终点（物理设备发送）
 int kprobe____dev_queue_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
     struct flow_key_t key = {};  
     if (!parse_packet_key(skb, &key)) return 0;
     
     struct flow_data_t *flow = flow_tracker.lookup(&key);
-    if (flow && flow->direction == 0) {  // TX方向
+    if (flow && flow->direction == 0) {
         update_flow_stage(ctx, &key, 6, skb, 0);
     }
     return 0;
 }
 
-// RX路径探测点
-// Stage 0: __netif_receive_skb - RX起点（物理网卡接收）
 int kprobe____netif_receive_skb(struct pt_regs *ctx, struct sk_buff *skb) {
     struct flow_key_t key = {};
     if (!parse_packet_key(skb, &key)) return 0;
-    if (!apply_filter(&key, 1)) return 0;  // RX方向
+    if (!apply_filter(&key, 1)) return 0;
     
     update_flow_stage(ctx, &key, 0, skb, 1);
     return 0;
 }
 
-// Stage 1: netdev_frame_hook - 网络设备帧处理钩子
 int kprobe__netdev_frame_hook(struct pt_regs *ctx, struct sk_buff *skb) {
     struct flow_key_t key = {};
     if (!parse_packet_key(skb, &key)) return 0;
     
     struct flow_data_t *flow = flow_tracker.lookup(&key);
-    if (flow && flow->direction == 1) {  // RX方向
+    if (flow && flow->direction == 1) {
         update_flow_stage(ctx, &key, 1, skb, 1);
     }
     return 0;
 }
 
-// Stage 6: tun_net_xmit - RX终点（发送到VM）
 int kprobe__tun_net_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
     if (!is_vnet_interface(skb)) return 0;
     
@@ -284,14 +248,13 @@ int kprobe__tun_net_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
     if (!parse_packet_key(skb, &key)) return 0;
     
     struct flow_data_t *flow = flow_tracker.lookup(&key);
-    if (flow && flow->direction == 1) {  // RX方向
+    if (flow && flow->direction == 1) {
         update_flow_stage(ctx, &key, 6, skb, 1);
     }
     return 0;
 }
 """
 
-# Python数据结构
 class FlowKey(ctypes.Structure):
     _fields_ = [
         ("src_ip", ctypes.c_uint32),
@@ -332,7 +295,6 @@ class Filter(ctypes.Structure):
         ("direction", ctypes.c_uint8),
     ]
 
-# TX路径阶段名称
 TX_STAGE_NAMES = {
     0: "tun_get_user",
     1: "internal_dev_xmit", 
@@ -343,7 +305,6 @@ TX_STAGE_NAMES = {
     6: "__dev_queue_xmit"
 }
 
-# RX路径阶段名称
 RX_STAGE_NAMES = {
     0: "__netif_receive_skb",
     1: "netdev_frame_hook",
@@ -366,12 +327,10 @@ def ip_to_int(ip_str):
 def print_latency_event(cpu, data, size):
     event = ctypes.cast(data, ctypes.POINTER(LatencyEvent)).contents
     
-    # 提取流信息
     protocol = "TCP" if event.key.protocol == 6 else "UDP"
     direction = "TX" if event.data.direction == 0 else "RX"
     stage_names = TX_STAGE_NAMES if event.data.direction == 0 else RX_STAGE_NAMES
     
-    # 打印头部
     print("\n=== VM Network Latency Trace: {} ({}) ===".format(
         time.strftime("%Y-%m-%d %H:%M:%S"), direction))
     print("Flow: {}:{} -> {}:{} ({})".format(
@@ -382,11 +341,11 @@ def print_latency_event(cpu, data, size):
         protocol))
     
     if event.data.direction == 0:  # TX
-        print("VM Device: {} → Physical: {}".format(
+        print("VM Device: {}  Physical: {}".format(
             event.data.vm_ifname.decode('utf-8', 'replace'),
             event.data.phy_ifname.decode('utf-8', 'replace') if event.data.phy_ifname[0] else "N/A"))
     else:  # RX
-        print("Physical: {} → VM Device: {}".format(
+        print("Physical: {}  VM Device: {}".format(
             event.data.phy_ifname.decode('utf-8', 'replace') if event.data.phy_ifname[0] else "N/A",
             event.data.vm_ifname.decode('utf-8', 'replace')))
     
@@ -394,7 +353,6 @@ def print_latency_event(cpu, data, size):
         event.data.pid,
         event.data.comm.decode('utf-8', 'replace')))
     
-    # 计算并打印分段延迟
     print("\nLatencies (us):")
     prev_stage = -1
     prev_ts = 0
@@ -413,7 +371,6 @@ def print_latency_event(cpu, data, size):
                     stage_names.get(i, "unknown"),
                     latency_us))
                 
-                # 特殊说明
                 if prev_stage == 2 and i == 5:
                     print("         (OVS Fast Path - No Upcall)")
             
@@ -449,7 +406,6 @@ Examples:
     
     args = parser.parse_args()
     
-    # 加载BPF程序
     print("Loading BPF program...")
     try:
         global b
@@ -459,7 +415,6 @@ Examples:
         print("Error loading BPF program: {}".format(e))
         return 1
     
-    # 设置过滤条件
     filter_params = Filter()
     filter_params.src_ip = ip_to_int(args.src_ip) if args.src_ip else 0
     filter_params.dst_ip = ip_to_int(args.dst_ip) if args.dst_ip else 0
@@ -482,7 +437,6 @@ Examples:
     
     b["filter_config"][0] = filter_params
     
-    # 打印配置
     print("\nConfiguration:")
     if args.src_ip:
         print("  Source IP: {}".format(args.src_ip))
@@ -506,7 +460,6 @@ Examples:
         for i, name in RX_STAGE_NAMES.items():
             print("    Stage {}: {}".format(i, name))
     
-    # 开始监控
     b["latency_events"].open_perf_buffer(print_latency_event)
     print("\nTracing VM network segment latency... Hit Ctrl-C to end")
     

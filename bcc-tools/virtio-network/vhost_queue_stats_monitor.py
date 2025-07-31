@@ -778,7 +778,6 @@ Examples:
         print("Failed to load BPF program: {}".format(e))
         return
     
-    # Set device filter
     devname_map = b["name_map"]
     _name = Devname()
     if args.device:
@@ -790,7 +789,6 @@ Examples:
         devname_map[0] = _name
         print("Device filter: All TUN devices")
     
-    # Set queue filter
     if args.queue is not None:
         b["filter_enabled"][0] = ct.c_uint32(1)
         b["filter_queue"][0] = ct.c_uint32(args.queue)

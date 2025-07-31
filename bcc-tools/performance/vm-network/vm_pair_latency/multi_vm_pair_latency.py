@@ -22,7 +22,6 @@ bpf_text = r"""
 #define IFNAMSIZ 16
 #endif
 
-// flow_key: 包含 src/dst MAC + IPv4 + UDP ports
 struct flow_key_t {
     unsigned char smac[6];    // source MAC
     unsigned char dmac[6];    // dest MAC
@@ -35,28 +34,23 @@ struct flow_key_t {
 // Map: flow_key -> timestamp(ns)
 BPF_HASH(send_ts, struct flow_key_t, u64);
 
-// 发送侧 / 接收侧 ifaces
 BPF_HASH(send_ifaces, u32, u8); // key=ifindex, val=1
-BPF_HASH(recv_ifaces, u32, u8); // 同上
 
 // Allowed UDP ports
 BPF_HASH(allowed_ports, u16, u8); // key=port(host order), val=1
 
-// 判断 ifindex 是否在 send_ifaces
 static __always_inline int is_send_iface(u32 idx)
 {
     u8 *flag = send_ifaces.lookup(&idx);
     return flag ? 1 : 0;
 }
 
-// 判断 ifindex 是否在 recv_ifaces
 static __always_inline int is_recv_iface(u32 idx)
 {
     u8 *flag = recv_ifaces.lookup(&idx);
     return flag ? 1 : 0;
 }
 
-// 判断端口是否在 allowed_ports
 static __always_inline int is_allowed_port(u16 port_be)
 {
     // ntohs
@@ -65,37 +59,29 @@ static __always_inline int is_allowed_port(u16 port_be)
     return flag ? 1 : 0;
 }
 
-//// 读取以太头(14字节)，从 skb 获取 mac header 并写入 fkey->dmac 和 fkey->smac
 //static __always_inline int read_ethhdr(struct sk_buff *skb, struct flow_key_t *fkey)
 //{
-//    // 注意：tracepoint 参数给的 skb 需转换成真实 sk_buff
 //    struct sk_buff *real_skb = (struct sk_buff *) skb;
 //    if (!real_skb)
 //        return -1;
 //
-//    // 获取 mac_header 偏移
 //    u32 mac_off = 0;
 //    bpf_probe_read_kernel(&mac_off, sizeof(mac_off), &real_skb->mac_header);
 //    bpf_trace_printk("read_ethhdr: mac_off=%u\n", mac_off);
 //
-//    // 读取 skb->head 指针
 //    unsigned char *head = 0;
 //    bpf_probe_read_kernel(&head, sizeof(head), &real_skb->head);
 //    if (!head)
 //        return -1;
 //
-//    // 读取 14 字节的以太网头
 //    unsigned char eth[14] = {0};
 //    bpf_probe_read_kernel(&eth, sizeof(eth), head + mac_off);
 //
-//    // 调试：打印原始 ETH header 信息
 //    bpf_trace_printk("read_ethhdr: dmac part1: %x:%x:%x\n", eth[0], eth[1], eth[2]);
 //    bpf_trace_printk("read_ethhdr: dmac part2: %x:%x:%x\n", eth[3], eth[4], eth[5]);
 //    bpf_trace_printk("read_ethhdr: smac part1: %x:%x:%x\n", eth[6], eth[7], eth[8]);
 //    bpf_trace_printk("read_ethhdr: smac part2: %x:%x:%x\n", eth[9], eth[10], eth[11]);
-//    // 此处也可以打印 eth[12] 和 eth[13] 检查 eth_type
 //
-//    // 将 14 字节数据切分拷贝到 fkey：前 6 字节为 dmac，后 6 字节为 smac
 //    __builtin_memcpy(fkey->dmac, eth, 6);
 //    __builtin_memcpy(fkey->smac, eth + 6, 6);
 //
@@ -112,7 +98,6 @@ static __always_inline int read_ethhdr(struct sk_buff *skb, struct flow_key_t *f
     /* for easy access we re-use the Kernel's struct definitions */
     struct ethhdr  *eth  = data;
 
-    // 定义一个局部的 ethhdr 结构实例
     //struct ethhdr eth = {};
     //if (bpf_probe_read_kernel(&eth, sizeof(eth), skb->data) < 0)
     //    return -1;
@@ -121,22 +106,18 @@ static __always_inline int read_ethhdr(struct sk_buff *skb, struct flow_key_t *f
         eth->h_dest[0], eth->h_dest[1], eth->h_dest[2]);
     bpf_trace_printk("read_ethhdr: h_dest part2: %x:%x:%x\n",
         eth->h_dest[3], eth->h_dest[4], eth->h_dest[5]);
-    // 调试：打印整个以太网头信息，包括目的 MAC、源 MAC 和协议类型
     //bpf_trace_printk("read_ethhdr: h_dest part1: %x:%x:%x\n",
     //    eth.h_dest[0], eth.h_dest[1], eth.h_dest[2]);
     //bpf_trace_printk("read_ethhdr: h_dest part2: %x:%x:%x\n",
     //    eth.h_dest[3], eth.h_dest[4], eth.h_dest[5]);
 
-    // 打印源 MAC 地址，拆分成两次
     //bpf_trace_printk("read_ethhdr: h_source part1: %x:%x:%x\n",
     //    eth.h_source[0], eth.h_source[1], eth.h_source[2]);
     //bpf_trace_printk("read_ethhdr: h_source part2: %x:%x:%x\n",
     //    eth.h_source[3], eth.h_source[4], eth.h_source[5]);
 
-    // 打印协议类型
     //bpf_trace_printk("read_ethhdr: h_proto=%x\n", ntohs(eth.h_proto));
 
-    // 将目的 MAC 和源 MAC 分别拷贝到 flow key 中
     //__builtin_memcpy(fkey->dmac, eth.h_dest, ETH_ALEN);
     //__builtin_memcpy(fkey->smac, eth.h_source, ETH_ALEN);
     __builtin_memcpy(fkey->dmac, eth->h_dest, ETH_ALEN);
@@ -146,11 +127,8 @@ static __always_inline int read_ethhdr(struct sk_buff *skb, struct flow_key_t *f
 }
 
 
-// 定义一个宏，用于将 0~15 的数转换为对应的字符
 #define HEX_DIGIT(n) (((n) < 10) ? ('0' + (n)) : ('a' + ((n) - 10)))
 
-// 辅助函数：将 6 字节 MAC 地址转换为形如 "aa:bb:cc:dd:ee:ff" 的字符串。
-// buf 必须至少有 18 个字节的存储空间 (17 字符 + '\0')
 static __always_inline void mac_to_str(const unsigned char *mac, char *buf, int buf_len)
 {
     if (buf_len < 18)
@@ -176,7 +154,6 @@ static __always_inline void mac_to_str(const unsigned char *mac, char *buf, int 
 }
 
 // ---------------------------------------------------
-// 接收侧: netif_receive_skb  (VM -> host)
 TRACEPOINT_PROBE(net, netif_receive_skb)
 {
     struct sk_buff *skb = (struct sk_buff *) args->skbaddr;
@@ -233,7 +210,6 @@ TRACEPOINT_PROBE(net, netif_receive_skb)
     send_ts.update(&fkey, &now);
 
     //bpf_trace_printk("DEBUG: Completed netif_receive_skb probe, stored timestamp\n");
-    // 分别转换 source 和 destination MAC 地址为字符串
     char src_mac_str[18] = {0};
     char dst_mac_str[18] = {0};
     mac_to_str(fkey.smac, src_mac_str, sizeof(src_mac_str));
@@ -245,7 +221,6 @@ TRACEPOINT_PROBE(net, netif_receive_skb)
 }
 
 // ---------------------------------------------------
-// 发送侧: net_dev_xmit  (host -> VM)
 TRACEPOINT_PROBE(net, net_dev_xmit)
 {
     struct sk_buff *skb = (struct sk_buff *) args->skbaddr;
@@ -307,7 +282,6 @@ TRACEPOINT_PROBE(net, net_dev_xmit)
         bpf_trace_printk("DEBUG: Latency computed: %llu us, port=%u, dev_name=%s\n",
                            delta_us, ntohs(fkey.dport), ifname);
 
-        // 分别转换 source 和 destination MAC 地址为字符串
         char src_mac_str[18] = {0};
         char dst_mac_str[18] = {0};
         mac_to_str(fkey.smac, src_mac_str, sizeof(src_mac_str));
@@ -318,7 +292,6 @@ TRACEPOINT_PROBE(net, net_dev_xmit)
         send_ts.delete(&fkey);
     } else {
         bpf_trace_printk("DEBUG: No matching timestamp found in send_ts\n");
-        // 分别转换 source 和 destination MAC 地址为字符串
         char src_mac_str[18] = {0};
         char dst_mac_str[18] = {0};
         mac_to_str(fkey.smac, src_mac_str, sizeof(src_mac_str));
@@ -331,7 +304,6 @@ TRACEPOINT_PROBE(net, net_dev_xmit)
 }
 """
 
-# ---------------- Python2 用户态：动态插入 ifindex、端口等 ----------------
 def parse_args():
     parser = argparse.ArgumentParser(
         description="Measure E2E latency from 'send-dev'(netif_receive_skb) to 'recv-dev'(net_dev_xmit) with MAC+IP+port flow_key"
@@ -361,7 +333,6 @@ def get_if_index(devname):
 def main():
     args = parse_args()
 
-    # 处理 dev list
     def parse_dev_list(s):
         return [x.strip() for x in s.replace(',', ' ').split() if x.strip()]
     send_dev_list = parse_dev_list(args.send_dev)
@@ -377,7 +348,6 @@ def main():
     recv_ifaces = b.get_table("recv_ifaces")
     allowed_ports = b.get_table("allowed_ports")
 
-    # 插入 send-dev ifindex
     for dev in send_dev_list:
         try:
             idx = get_if_index(dev)
@@ -386,7 +356,6 @@ def main():
         except OSError as e:
             print("Warn:", str(e))
 
-    # 插入 recv-dev ifindex
     for dev in recv_dev_list:
         try:
             idx = get_if_index(dev)
@@ -395,13 +364,11 @@ def main():
         except OSError as e:
             print("Warn:", str(e))
 
-    # 插入 allowed ports
     for p in args.ports:
         allowed_ports[ctypes.c_ushort(p)] = ctypes.c_ubyte(1)
 
     print("\nAttaching BPF. Listening for 'MAC_LAT' logs. Ctrl+C to stop.\n")
 
-    # 输出 trace
     try:
         while True:
             (task, pid, cpu, flags, ts, msg) = b.trace_fields()

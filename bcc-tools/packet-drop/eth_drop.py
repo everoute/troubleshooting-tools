@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 from __future__ import print_function
@@ -269,6 +269,11 @@ struct packet_data_t {
     u16 skb_transport_header;
     u32 skb_len;
     u32 skb_data_len;
+    
+    // Execution context debug fields
+    u32 cpu_id;
+    u32 tgid;
+    u8 in_interrupt;
 };
 
 BPF_PERF_OUTPUT(packet_drops);
@@ -328,10 +333,15 @@ int trace_kfree_skb(struct pt_regs *ctx) {
     // Initialize packet data
     struct packet_data_t data = {};
     data.timestamp = bpf_ktime_get_ns();
-    data.pid = bpf_get_current_pid_tgid();
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    data.pid = pid_tgid & 0xFFFFFFFF;
+    data.tgid = pid_tgid >> 32;
     data.stack_id = stack_traces.get_stackid(ctx, BPF_F_REUSE_STACKID);
-    
     bpf_get_current_comm(&data.comm, sizeof(data.comm));
+    
+    // Get execution context information
+    data.cpu_id = bpf_get_smp_processor_id();
+    data.in_interrupt = (bpf_get_current_task() == 0) ? 1 : 0;
     
     // Get interface name
     struct net_device *dev;
@@ -444,7 +454,10 @@ int trace_kfree_skb(struct pt_regs *ctx) {
             data.ipv4_daddr = iph.daddr;
             data.ipv4_protocol = iph.protocol;
 
-            // Check L4 protocol filter\n            if (L4_PROTOCOL != 0 && data.ipv4_protocol != L4_PROTOCOL) {\n                return 0;\n            }
+            // Check L4 protocol filter
+            if (L4_PROTOCOL != 0 && data.ipv4_protocol != L4_PROTOCOL) {
+                return 0;
+            }
             data.ipv4_ttl = iph.ttl;
             data.ipv4_id = ntohs(iph.id);
             data.ipv4_tot_len = ntohs(iph.tot_len);
@@ -652,6 +665,11 @@ class PacketData(ct.Structure):
         ("skb_transport_header", ct.c_uint16),
         ("skb_len", ct.c_uint32),
         ("skb_data_len", ct.c_uint32),
+        
+        # Execution context debug fields
+        ("cpu_id", ct.c_uint32),
+        ("tgid", ct.c_uint32),
+        ("in_interrupt", ct.c_uint8),
     ]
 
 def format_mac_address(mac_bytes):
@@ -692,7 +710,8 @@ def print_packet_event(cpu, data, size):
     
     # Print timestamp and basic info
     timestamp = strftime("%H:%M:%S")
-    print("[{}] PID: {} COMM: {}".format(timestamp, event.pid, safe_str(event.comm)))
+    print("[{}] PID: {} TGID: {} COMM: {} CPU: {}".format(
+        timestamp, event.pid, event.tgid, safe_str(event.comm), event.cpu_id))
     
     # Print debug info if verbose
     if args.verbose:
@@ -700,6 +719,9 @@ def print_packet_event(cpu, data, size):
         print("  SKB Length: {} bytes, Data Length: {} bytes".format(event.skb_len, event.skb_data_len))
         print("  MAC Header Offset: {}, Network Header Offset: {}, Transport Header Offset: {}".format(
             event.skb_mac_header, event.skb_network_header, event.skb_transport_header))
+        print("  Execution Context: CPU={}, PID={}, TGID={}, COMM={}".format(
+            event.cpu_id, event.pid, event.tgid, safe_str(event.comm)))
+        print("  Interrupt Context: in_interrupt={}".format(event.in_interrupt))
     
     # Print VLAN info if present
     vlan_prefix = ""

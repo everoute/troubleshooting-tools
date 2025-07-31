@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 Enhanced Virtio IRQ Monitor with detailed interrupt information
@@ -15,16 +15,19 @@ import sys
 from collections import defaultdict
 from time import strftime
 
-# BCC/BPFCC module import
+# BCC module import with fallback
 try:
-    from bpfcc import BPF
-    print("Using bpfcc module")
+    from bcc import BPF
 except ImportError:
     try:
-        from bcc import BPF
-        print("Using bcc module")
+        from bpfcc import BPF
     except ImportError:
-        print("Error: Neither bpfcc nor bcc module found!")
+        import sys
+        print("Error: Neither bcc nor bpfcc module found!")
+        if sys.version_info[0] == 3:
+            print("Please install: python3-bcc or python3-bpfcc")
+        else:
+            print("Please install: python-bcc or python2-bcc")
         sys.exit(1)
 
 # IRQ return values

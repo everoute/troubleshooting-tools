@@ -1,8 +1,19 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python
 
 from __future__ import print_function
-from bcc import BPF
-#from bpfcc import BPF
+# BCC module import with fallback
+try:
+    from bcc import BPF
+except ImportError:
+    try:
+        from bpfcc import BPF
+    except ImportError:
+        print("Error: Neither bcc nor bpfcc module found!")
+        if sys.version_info[0] == 3:
+            print("Please install: python3-bcc or python3-bpfcc")
+        else:
+            print("Please install: python-bcc or python2-bcc")
+        sys.exit(1)
 from ctypes import *
 import argparse
 import os

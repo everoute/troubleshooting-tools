@@ -3,7 +3,6 @@
 
 from bcc import BPF
 
-# BPF 源码
 bpf_text = r"""
 #include <uapi/linux/ptrace.h>
 #include <uapi/linux/if_ether.h>
@@ -24,10 +23,8 @@ struct flow_key_t {
     u16 dport;
 };
 
-// 存储发送时刻(ns)
 BPF_HASH(send_ts, struct flow_key_t, u64);
 
-// 判断是否是我们关心的端口(62109)
 static inline int is_target_port(u16 port)
 {
     return ntohs(port) == 62109;
@@ -81,7 +78,6 @@ TRACEPOINT_PROBE(net, net_dev_xmit)
         return 0;
     }
 
-    // 直接使用 skb 中的偏移量读取 IP 头
     struct iphdr iph;
     bpf_probe_read_kernel(&iph, sizeof(iph), skb->head + skb->network_header);
     if (iph.protocol != IPPROTO_UDP) {
@@ -89,7 +85,6 @@ TRACEPOINT_PROBE(net, net_dev_xmit)
         return 0;
     }
 
-    // 直接使用 skb 中的偏移量读取 UDP 头
     struct udphdr udph;
     bpf_probe_read_kernel(&udph, sizeof(udph), skb->head + skb->transport_header);
 
@@ -140,7 +135,6 @@ TRACEPOINT_PROBE(net, netif_receive_skb)
         return 0;
     }
 
-    // 直接使用 skb 中的偏移量读取 IP 头
     struct iphdr iph;
     bpf_probe_read_kernel(&iph, sizeof(iph), skb->head + skb->network_header);
     if (iph.protocol != IPPROTO_UDP) {
@@ -148,7 +142,6 @@ TRACEPOINT_PROBE(net, netif_receive_skb)
         return 0;
     }
 
-    // 直接使用 skb 中的偏移量读取 UDP 头
     struct udphdr udph;
     bpf_probe_read_kernel(&udph, sizeof(udph), skb->head + skb->transport_header);
 

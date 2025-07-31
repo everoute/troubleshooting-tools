@@ -6,7 +6,7 @@ uprobe:/usr/lib64/libpthread-2.28.so:__pthread_rwlock_wrlock
 uretprobe:/usr/lib64/libpthread-2.28.so:__pthread_rwlock_wrlock
 /@begin[tid]/
 {
-    @lat = hist((nsecs-@begin[tid])/1000);   // us 级直方图
+    @lat = hist((nsecs-@begin[tid])/1000);
     delete(@begin[tid]);
 }
 END { print(@lat); }

@@ -92,17 +92,9 @@ Documentation and design documents:
 - **BCC (BPF Compiler Collection)** - Required for Python BPF tools
 - **bpftrace** - Required for .bt scripts
 - **Python 2/3** - Most tools support both versions
-  - Python 2 for el7 systems with bcc package
-  - Python 3 for oe1 systems with bpfcc package
+  - Python 2 for el7 systems with python-bcc package and bcc >= 0.15
+  - Python 3 for oe1 systems with python3-bpfcc package and bcc >= 0.15
 
-## Installation
-
-1. Install BCC:
-3. Clone the repository:
-```bash
-git clone <repository-url>
-cd troubleshooting-tools
-```
 
 ## Usage Examples
 
@@ -110,12 +102,9 @@ cd troubleshooting-tools
 Monitor packet drops for specific connections:
 ```bash
 # Monitor TCP drops for specific connection
-sudo ./bcc-tools/packet-drop/multi-protocol-drop-monitor.py \
+sudo ./bcc-tools/packet-drop/eth_drop.py \
     --src 192.168.1.10 --dst 192.168.1.20 --protocol tcp --dst-port 443
 
-# Monitor all protocol drops
-sudo ./bcc-tools/packet-drop/drop.py
-```
 
 ### Network Latency Measurement
 Measure network latency at various layers:
@@ -215,18 +204,7 @@ When adding new tools:
 
 ## Q&A (中文)
 
-### Debug Mode
-Many tools support debug mode for detailed output:
-```bash
-sudo ./tool-name --debug
-```
-类似的，丢包追踪工具仅能初步筛查：虚拟化数据路径的 host 段是否发生特定类型的丢包，有的话大体位于何处（调用栈）。更进一步分析，需要结合丢包位置前后其他数据路径点上的数据结构/元数据具体内容变化来进一步定位，就需要借助该工具。
-
-#### 虚拟机网络/系统网络性能分析/优化
-使用 performance 目录下的工具进行系统级和虚拟机网络性能分析，包括延迟测量、CPU 绑定优化等。
-
 ### 本工具集合针对的对象
-## Q&A (中文)
 1. **售后人员**：按照说明采集日志，交研发人员进一步分析
 2. **研发人员**：根据特定问题确定追踪参数，提供完整命令给售后或自行执行
 

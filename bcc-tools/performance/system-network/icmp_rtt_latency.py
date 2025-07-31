@@ -1,17 +1,10 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 
-# 注意事项：
-#   1) 如果是 oe 系统:
-#      a) 请修改第一行 python2 为 python3:  #!/usr/bin/env python2  ->  #!/usr/bin/env python3
-#      b) 修改 from bcc import BPF 为 from bpfcc import BPF
-#   2) 如果是 el7 系统:
-#      a) 安装 bcc 和 python-bcc 0.21.0:
 # curl -fLO http://192.168.17.20/tmp/bpftools/x86_64/bcc-0.21.0-1.el7.x86_64.rpm
 # curl -fLO http://192.168.17.20/tmp/bpftools/noarch/python-bcc-0.21.0-1.el7.noarch.rpm 
 # rpm -ivh bcc-0.21.0-1.el7.x86_64.rpm python-bcc-0.21.0-1.el7.noarch.rpm --force 
 
-# 使用说明:
 # ./icmp_rtt_latency.py --help
 # usage: icmp_rtt_latency.py [-h] --src-ip SRC_IP --dst-ip DST_IP --phy-iface1
 #                            PHY_IFACE1 [--phy-iface2 PHY_IFACE2]
@@ -66,33 +59,14 @@
 # It identifies matching ICMP request/reply pairs and reports segment latencies for both paths.
 # Supports "outgoing" (local host initiates ping) and "incoming" (remote host initiates ping to local host) traces.
 #
-# 以下为中文使用示例：
-# 1. 使用方式及参数示例：
-#    1.1) 追踪 192.168.1.10 -> 192.168.1.20 的 ICMP 延迟: ping 从 192.168.1.10 发起 icmp request，到对端回复后，本机收到 icmp reply 的端到端延迟。
-#    完整命令如下：
 #    sudo ./icmp_rtt_latency.py --src-ip 192.168.1.10 --dst-ip 192.168.1.20 \
 #                               --phy-iface1 eth0 --phy-iface2 eth1 \
 #                               [--latency-ms 10] [--direction outgoing]
-#    --phy-iface1 eth0 和 --phy-iface2 eth1 是物理网卡
-#    如果使用 bond，假设 eth0 和 eth1 是 bond 的成员物理网卡，则 --phy-iface1 eth0 和 --phy-iface2 eth1 是 bond 的成员物理网卡
-#    如果非 bond，假设 eth0 是 ovs uplink 物理网卡，则 --phy-iface1 eth0 是 ovs uplink 物理网卡
-#    --latency-ms 10 表示仅过滤延迟大于 10ms 的包
-#    --direction outgoing 表示方向为出站 
-#    --disable-kernel-stacks 表示不打印内核栈回溯信息, 默认打印
 #    
-#    1.2) 追踪 192.168.1.10 -> 192.168.1.20 的 ICMP 延迟，其中在 host 192.168.1.10 上的分段:
 #    sudo ./icmp_rtt_latency.py --src-ip 192.168.1.10 --dst-ip 192.168.1.20 \
 #                               --phy-iface1 eth0 --phy-iface2 eth1 \
 #                               [--latency-ms 2] [--direction incoming]
-#    --latency-ms 2 表示仅过滤延迟大于 2ms 的包, 特别的，在接收端主机，追踪的延迟为收到对端 icmp request, 一直到本机回复 icmp reply 发出本主机 物理端口的延迟，
-#    因此，latency-ms 值可以设置的略小。
-#    --direction incoming 表示方向为入站. 
-#    --disable-kernel-stacks 表示不打印内核栈回溯信息, 默认打印
 #    
-# 2. 输出信息说明：
-#    - Path1（请求路径）和 Path2（应答路径）各个阶段的分段延迟，单位微秒
-#    - 总 RTT 延迟（Path1 起始到 Path2 结束），单位微秒
-#    - SKB 指针地址信息及可选的内核栈回溯，用于深度排查
 
 
 from bcc import BPF

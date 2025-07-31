@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 from __future__ import print_function
@@ -58,12 +58,10 @@ def is_normal_kfree_pattern(stack_trace):
     stack_trace_str = [safe_str(item) for item in stack_trace]
     
     # Stack trace is ordered from innermost (0) to outermost (-1)
-    # Check if the first function is kfree_skb
     first_func = stack_trace_str[0]
     if 'kfree_skb' not in first_func:
         return False
     
-    # Check if the second function matches any normal pattern
     if len(stack_trace_str) >= 2:
         second_func = stack_trace_str[1]
         for pattern_name, pattern_funcs in normal_patterns.items():
@@ -118,7 +116,6 @@ dst_port = args.dst_port if args.dst_port else 0
 vlan_filter = args.vlan_id if args.vlan_id else 0
 interface_filter = args.interface if args.interface else ""
 
-# Parse protocol filter
 if args.type == 'all':
     protocol_filter = 0  # No filtering
 else:
@@ -564,13 +561,11 @@ b = BPF(text=bpf_text % (
     protocol_filter, l4_protocol, vlan_filter, interface_filter_enabled
 ))
 
-# Set up interface filter if specified
 if interface_filter:
     # Create interface name buffer structure
     class InterfaceName(ct.Structure):
         _fields_ = [("name", ct.c_char * 16)]
     
-    # Set target interface name in the BPF map
     interface_map = b.get_table("interface_map")
     target_name = InterfaceName()
     # Python 2 compatible string encoding

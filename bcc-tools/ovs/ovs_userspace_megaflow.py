@@ -602,44 +602,36 @@ def matches_filter_upcall(event):
     if event.parse_status != 0:
         return False
     
-    # Check ethernet source
     if FILTER_CONFIG.eth_src:
         current_mac = mac_bytes_to_str(event.eth_src)
         if current_mac != FILTER_CONFIG.eth_src:
             return False
     
-    # Check ethernet destination
     if FILTER_CONFIG.eth_dst:
         current_mac = mac_bytes_to_str(event.eth_dst)
         if current_mac != FILTER_CONFIG.eth_dst:
             return False
     
-    # Check ethernet type
     if FILTER_CONFIG.eth_type is not None:
         if event.eth_type != FILTER_CONFIG.eth_type:
             return False
     
-    # Check IP source
     if FILTER_CONFIG.ip_src is not None:
         if event.src_ip != FILTER_CONFIG.ip_src:
             return False
     
-    # Check IP destination
     if FILTER_CONFIG.ip_dst is not None:
         if event.dst_ip != FILTER_CONFIG.ip_dst:
             return False
     
-    # Check IP protocol
     if FILTER_CONFIG.ip_proto is not None:
         if event.ip_proto != FILTER_CONFIG.ip_proto:
             return False
     
-    # Check L4 source port
     if FILTER_CONFIG.l4_src_port is not None:
         if event.src_port != FILTER_CONFIG.l4_src_port:
             return False
     
-    # Check L4 destination port
     if FILTER_CONFIG.l4_dst_port is not None:
         if event.dst_port != FILTER_CONFIG.l4_dst_port:
             return False
@@ -660,7 +652,6 @@ def matches_filter_flow(parsed_flow, debug_info=None):
     
     key = parsed_flow['key']
     
-    # Check ethernet source
     if FILTER_CONFIG.eth_src:
         if 'ethernet' not in key:
             debug_info['reason'] = 'no_ethernet_field'
@@ -673,7 +664,6 @@ def matches_filter_flow(parsed_flow, debug_info=None):
             debug_info['actual'] = current_mac
             return False
     
-    # Check ethernet destination
     if FILTER_CONFIG.eth_dst:
         if 'ethernet' not in key:
             debug_info['reason'] = 'no_ethernet_field'
@@ -686,7 +676,6 @@ def matches_filter_flow(parsed_flow, debug_info=None):
             debug_info['actual'] = current_mac
             return False
     
-    # Check ethernet type
     if FILTER_CONFIG.eth_type is not None:
         if 'eth_type' not in key:
             debug_info['reason'] = 'no_eth_type_field'
@@ -699,7 +688,6 @@ def matches_filter_flow(parsed_flow, debug_info=None):
             debug_info['actual'] = '0x%04x' % current_type
             return False
     
-    # Check IP source
     if FILTER_CONFIG.ip_src is not None:
         if 'ipv4' not in key:
             debug_info['reason'] = 'no_ipv4_field'
@@ -713,7 +701,6 @@ def matches_filter_flow(parsed_flow, debug_info=None):
             debug_info['actual'] = current_ip
             return False
     
-    # Check IP destination
     if FILTER_CONFIG.ip_dst is not None:
         if 'ipv4' not in key:
             debug_info['reason'] = 'no_ipv4_field'
@@ -727,7 +714,6 @@ def matches_filter_flow(parsed_flow, debug_info=None):
             debug_info['actual'] = current_ip
             return False
     
-    # Check IP protocol
     if FILTER_CONFIG.ip_proto is not None:
         if 'ipv4' not in key:
             debug_info['reason'] = 'no_ipv4_field'
@@ -740,7 +726,6 @@ def matches_filter_flow(parsed_flow, debug_info=None):
             debug_info['actual'] = current_proto
             return False
     
-    # Check L4 source port
     if FILTER_CONFIG.l4_src_port is not None:
         port_found = False
         current_port = None
@@ -762,7 +747,6 @@ def matches_filter_flow(parsed_flow, debug_info=None):
             debug_info['actual'] = current_port
             return False
     
-    # Check L4 destination port
     if FILTER_CONFIG.l4_dst_port is not None:
         port_found = False
         current_port = None
@@ -1048,7 +1032,6 @@ def configure_filters(args):
     
     DEBUG_MODE = args.debug
     
-    # Configure filters
     FILTER_CONFIG.eth_src = args.eth_src
     FILTER_CONFIG.eth_dst = args.eth_dst
     FILTER_CONFIG.eth_type = int(args.eth_type, 0) if args.eth_type else None
@@ -1107,11 +1090,11 @@ def main():
     
     try:
         b.attach_kprobe(event="ovs_dp_upcall", fn_name="trace_ovs_dp_upcall")
-        print("✅ Attached to ovs_dp_upcall")
+        print("Attached to ovs_dp_upcall")
         
         try:
             b.attach_kprobe(event="ovs_flow_cmd_new", fn_name="trace_ovs_flow_cmd_new")
-            print("✅ Attached to ovs_flow_cmd_new")
+            print("Attached to ovs_flow_cmd_new")
         except Exception as e:
             print("Warning: Cannot attach to ovs_flow_cmd_new: %s" % str(e))
             
@@ -1122,7 +1105,7 @@ def main():
     b["upcall_events"].open_perf_buffer(handle_upcall_event)
     b["flow_cmd_new_events"].open_perf_buffer(handle_flow_cmd_new_event)
     
-    print("\\n🔍 Starting monitoring...\\n")
+    print("\\n Starting monitoring...\\n")
     
     try:
         while True:

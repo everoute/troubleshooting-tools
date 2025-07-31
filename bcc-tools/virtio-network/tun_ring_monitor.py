@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
 from __future__ import print_function
@@ -6,7 +6,20 @@ import argparse
 import socket
 import struct
 import sys
-from bcc import BPF
+# BCC module import with fallback
+try:
+    from bcc import BPF
+except ImportError:
+    try:
+        from bpfcc import BPF
+    except ImportError:
+        import sys
+        print("Error: Neither bcc nor bpfcc module found!")
+        if sys.version_info[0] == 3:
+            print("Please install: python3-bcc or python3-bpfcc")
+        else:
+            print("Please install: python-bcc or python2-bcc")
+        sys.exit(1)
 import ctypes as ct
 
 # Devname structure for device filtering (same as iface_netstat.py)

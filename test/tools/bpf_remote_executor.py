@@ -87,24 +87,37 @@ class BPFRemoteExecutor:
             
             # Use expect script for proper Ctrl+C handling
             expect_script = f'''#!/usr/bin/expect -f
-set timeout -1
+set timeout {duration + 5}
 log_file {output_file}
 spawn bash -c "{full_command}"
-expect {{
-    "Hit Ctrl-C to end" {{
-        after [expr {duration} * 1000] {{
+
+# Start timer immediately, regardless of output
+after [expr {duration} * 1000] {{
+    send "\\003"
+    expect {{
+        eof {{ exit 0 }}
+        timeout {{ 
             send "\\003"
-            exp_continue
+            expect eof {{ exit 0 }}
         }}
-        exp_continue
     }}
+}}
+
+# Handle program output and termination
+expect {{
     eof {{
         exit 0
     }}
     timeout {{
         send "\\003"
-        expect eof {{ exit 0 }}
-        exit 1
+        expect {{
+            eof {{ exit 0 }}
+            timeout {{
+                send "\\003"
+                send "\\003"
+                exit 1
+            }}
+        }}
     }}
 }}
 '''

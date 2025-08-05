@@ -12,6 +12,7 @@ Features:
 2. Smart category filtering: data (vhost threads) vs control (QEMU process) separation
 3. Advanced thread filtering: specific vhost thread PID filtering for data category
 4. Ultra-high performance with BPF_HISTOGRAM kernel-side aggregation
+5. Call source analysis: detailed tracking of irqfd_wakeup parameters to identify different interrupt sources
 
 Test Environment: Virtualization Host
 """
@@ -83,6 +84,11 @@ typedef struct hist_key {
     u32 cpu_id;            // CPU ID
     u32 pid;
     char comm[16];
+    // irqfd_wakeup function parameters
+    u64 wait_ptr;          // wait_queue_entry_t *wait parameter
+    u32 mode;              // unsigned mode parameter
+    u32 sync;              // int sync parameter  
+    u64 key_flags;         // void *key parameter (as flags)
     u64 slot;
 } hist_key_t;
 
@@ -208,6 +214,11 @@ int trace_vm_irqfd_stats(struct pt_regs *ctx) {
     for (int i = 0; i < 16; i++) {
         hist_key.comm[i] = comm[i];
     }
+    // Record irqfd_wakeup function parameters
+    hist_key.wait_ptr = (u64)wait;
+    hist_key.mode = mode;
+    hist_key.sync = sync;
+    hist_key.key_flags = flags;
     hist_key.slot = 0;  // For counting, slot is fixed to 0
     
     irq_count_hist.atomic_increment(hist_key);
@@ -238,6 +249,11 @@ class HistKey(ct.Structure):
         ("cpu_id", ct.c_uint32),
         ("pid", ct.c_uint32),
         ("comm", ct.c_char * 16),
+        # irqfd_wakeup function parameters
+        ("wait_ptr", ct.c_uint64),
+        ("mode", ct.c_uint32),
+        ("sync", ct.c_uint32),
+        ("key_flags", ct.c_uint64),
         ("slot", ct.c_uint64),
     ]
 
@@ -297,7 +313,8 @@ def print_histogram_stats(b):
             'pids': set(),
             'comms': set(),
             'data_count': 0,
-            'control_count': 0
+            'control_count': 0,
+            'call_sources': defaultdict(int)  # Track different call sources for same GSI
         }),
         'first_time': None,
         'last_time': None
@@ -341,6 +358,11 @@ def print_histogram_stats(b):
         
         comm_str = k.comm.decode('utf-8', 'replace')
         queue_stat['comms'].add(comm_str)
+        
+        # Track call sources with irqfd_wakeup parameters as unique identifier
+        call_source_key = "wait:0x{:x}_mode:{}_sync:{}_flags:0x{:x}".format(
+            k.wait_ptr, k.mode, k.sync, k.key_flags)
+        queue_stat['call_sources'][call_source_key] += count
         
         if comm_str.startswith('qemu'):
             queue_stat['control_count'] += count
@@ -409,6 +431,18 @@ def print_histogram_stats(b):
                 ', '.join(list(queue_stat['comms'])[:3]),
                 ', '.join(str(pid) for pid in sorted(list(queue_stat['pids']))[:3])
             ))
+            
+            # Display call sources for this GSI
+            if len(queue_stat['call_sources']) > 1:
+                print("        Call Sources for GSI {}:".format(queue_stat['gsi']))
+                for source_idx, (call_source, source_count) in enumerate(sorted(queue_stat['call_sources'].items(), key=lambda x: x[1], reverse=True), 1):
+                    source_rate = source_count / interval if interval > 0 else 0
+                    percentage = 100.0 * source_count / queue_stat['count'] if queue_stat['count'] > 0 else 0
+                    print("          Source #{}: {} ({:.2f}/sec, {:.1f}%)".format(
+                        source_idx, call_source, source_rate, percentage))
+            elif len(queue_stat['call_sources']) == 1:
+                call_source = list(queue_stat['call_sources'].keys())[0]
+                print("        Single Call Source: {}".format(call_source))
         print()
     
     # Clear histogram for next round of statistics
@@ -475,6 +509,7 @@ def main():
     print("  - Use BPF_HISTOGRAM for kernel-side statistics aggregation")
     print("  - Fixed vhost PID and COMM filtering issues")
     print("  - Periodic statistics histogram output")
+    print("  - Call source analysis with irqfd_wakeup parameter tracking")
     print("  - Ultra-high performance, suitable for high-frequency scenarios")
     
     # Display filter conditions

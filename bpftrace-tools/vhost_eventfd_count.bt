@@ -1,0 +1,24 @@
+#!/usr/bin/env bpftrace
+
+/*
+ * vhost_eventfd_count.bt - Count vhost_virtqueue + eventfd_ctx pointer combinations
+ * 
+ * This script tracks unique combinations of vhost_virtqueue pointer and its 
+ * eventfd_ctx field, counting occurrences.
+ */
+
+#include <linux/vhost.h>
+
+kprobe:vhost_add_used_and_signal_n
+{
+    $vq = (struct vhost_virtqueue *)arg1;
+    $eventfd = $vq->eventfd_ctx;
+    
+    @count[$vq, $eventfd] = count();
+}
+
+END
+{
+    print(@count);
+    clear(@count);
+}

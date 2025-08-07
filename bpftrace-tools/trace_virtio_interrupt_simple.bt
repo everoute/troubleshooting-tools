@@ -1,0 +1,35 @@
+#!/usr/bin/bpftrace
+
+#define IRQ1 69
+#define IRQ2 71
+#define IRQ3 73
+#define IRQ4 75
+
+tracepoint:irq:irq_handler_entry {
+	$irq = args->irq;
+	if ($irq == IRQ1 || $irq == IRQ2 || $irq == IRQ3 || $irq == IRQ4) {
+		@irq_entry[$irq] = count();
+	}
+}
+
+tracepoint:irq:irq_handler_exit {
+	$irq = args->irq;
+	if ($irq == IRQ1 || $irq == IRQ2 || $irq == IRQ3 || $irq == IRQ4) {
+		@irq_exit_ret[$irq, args->ret] = count();
+	}
+}
+
+interval:s:1 {
+	time("%H:%M:%S \n");
+	printf("Interrupt counts:\n");
+	print(@irq_entry);
+	printf("Interrupt handler return values:\n");
+	print(@irq_exit_ret);
+	clear(@irq_entry);
+	clear(@irq_exit_ret);
+}
+
+END {
+	clear(@irq_entry);
+	clear(@irq_exit_ret);
+}

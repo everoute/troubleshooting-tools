@@ -27,7 +27,7 @@ from time import sleep, strftime
 class Devname(ct.Structure):
     _fields_=[("name", ct.c_char*16)]
 
-# BPF program for queue statistics using histograms
+# Simple BPF program for queue statistics - only tun_net_xmit and vhost_signal
 bpf_text = """
 #include <linux/skbuff.h>
 #include <linux/ip.h>
@@ -289,31 +289,17 @@ struct queue_key {
     char dev_name[16];   // Device name
 };
 
-// Signal idx frequency tracking key structure
-struct idx_freq_key {
-    u64 sock_ptr;       // Queue identifier
-    u16 last_used_idx;  // The idx value
-};
+
 
 // Maps
 BPF_HASH(target_queues, u64, struct queue_key, 256);  // Track target queue sock pointers
-BPF_HASH(handle_rx_vqs, u64, u64, 256);  // Track handle_rx VQ pointers for signal filtering
-BPF_HASH(signal_idx_freq, struct idx_freq_key, u32, 8192);  // Track idx frequency per queue (increased size)
-BPF_HASH(signal_total_count, u64, u32, 256);  // Track total signal count per sock_ptr for verification
 BPF_ARRAY(name_map, union name_buf, 1);
 BPF_ARRAY(filter_enabled, u32, 1);
 BPF_ARRAY(filter_queue, u32, 1);
 
-// Histograms for statistics
-BPF_HISTOGRAM(vq_consumption_progress_handle_rx, hist_key_t);    // avail_idx - last_avail_idx at handle_rx
-BPF_HISTOGRAM(vq_processing_delay_handle_rx, hist_key_t);       // last_avail_idx - last_used_idx at handle_rx
-BPF_HISTOGRAM(vq_consumption_progress_vhost_signal, hist_key_t); // avail_idx - last_avail_idx at vhost_signal  
-BPF_HISTOGRAM(vq_processing_delay_vhost_signal, hist_key_t);    // last_avail_idx - last_used_idx at vhost_signal
-BPF_HISTOGRAM(vq_last_used_idx_handle_rx, hist_key_t);         // last_used_idx value distribution at handle_rx
+// Histograms for statistics - only vhost_signal stats
 BPF_HISTOGRAM(vq_last_used_idx_vhost_signal, hist_key_t);      // last_used_idx value distribution at vhost_signal
-// Remove old duplicate signal count histogram
 BPF_HISTOGRAM(ptr_ring_depth_xmit, hist_key_t);       // PTR ring depth at tun_net_xmit
-BPF_HISTOGRAM(ptr_ring_depth_recv, hist_key_t);       // PTR ring depth at tun_recvmsg
 
 // Device filter logic - fixed to use bpf_probe_read_kernel like iface_netstat.c
 static inline int name_filter(struct net_device *dev){
@@ -332,12 +318,6 @@ static inline int name_filter(struct net_device *dev){
         return 0;  // Device name doesn't match
     }
     return 1;  // Device name matches
-}
-
-// Check if this sock pointer belongs to our target queue
-static inline int is_target_queue_sock(u64 sock_ptr) {
-    struct queue_key *key = target_queues.lookup(&sock_ptr);
-    return key ? 1 : 0;
 }
 
 // Extract ptr_ring state using proven member_read approach from tun_ring_monitor.py
@@ -438,120 +418,7 @@ int trace_tun_net_xmit(struct pt_regs *ctx, struct sk_buff *skb, struct net_devi
     return 0;
 }
 
-// Stage 2: handle_rx - Track VQ state
-int trace_handle_rx(struct pt_regs *ctx) {
-    struct vhost_net *net = (struct vhost_net *)PT_REGS_PARM1(ctx);
-    if (!net) return 0;
-    
-    // Get RX virtqueue (vqs[0].vq) using member_read
-    struct vhost_net_virtqueue *nvq = &net->vqs[0];
-    struct vhost_virtqueue *vq = &nvq->vq;
-    
-    // Get sock pointer from private_data using READ_FIELD  
-    void *private_data = NULL;
-    READ_FIELD(&private_data, vq, private_data);
-    
-    u64 sock_ptr = (u64)private_data;
-    
-    // Check if this is our target queue (ONLY sock-based filtering)
-    struct queue_key *qkey = target_queues.lookup(&sock_ptr);
-    if (!qkey) {
-        return 0;  // Not our target queue
-    }
-    
-    // Track this VQ for signal filtering
-    u64 vq_addr = (u64)vq;
-    handle_rx_vqs.update(&sock_ptr, &vq_addr);
-    
-    // Get VQ indices
-    u16 last_avail_idx, avail_idx, last_used_idx;
-    READ_FIELD(&last_avail_idx, vq, last_avail_idx);
-    READ_FIELD(&avail_idx, vq, avail_idx);
-    READ_FIELD(&last_used_idx, vq, last_used_idx);
-    
-    // Calculate consumption progress (how much is available to consume)
-    u16 consumption_progress = 0;
-    if (avail_idx >= last_avail_idx) {
-        consumption_progress = avail_idx - last_avail_idx;
-    } else {
-        // Handle wraparound - assuming 16-bit indices
-        consumption_progress = (u16)(65536 + avail_idx - last_avail_idx);
-    }
-    
-    // Calculate processing delay (how much is in-flight)
-    u16 processing_delay = 0;
-    if (last_avail_idx >= last_used_idx) {
-        processing_delay = last_avail_idx - last_used_idx;
-    } else {
-        // Handle wraparound
-        processing_delay = (u16)(65536 + last_avail_idx - last_used_idx);
-    }
-    
-    // Record in histograms for handle_rx
-    hist_key_t hist_key = {};
-    hist_key.queue_index = qkey->queue_index;
-    __builtin_memcpy(hist_key.dev_name, qkey->dev_name, sizeof(hist_key.dev_name));
-    
-    // VQ consumption progress histogram at handle_rx
-    hist_key.slot = bpf_log2l(consumption_progress);
-    vq_consumption_progress_handle_rx.atomic_increment(hist_key);
-    
-    // VQ processing delay histogram at handle_rx
-    hist_key.slot = bpf_log2l(processing_delay);
-    vq_processing_delay_handle_rx.atomic_increment(hist_key);
-    
-    // VQ last_used_idx value histogram at handle_rx
-    // Use log2 scale for histogram compatibility
-    // Force proper 0 handling since bpf_log2l(0) returns anomalous values
-    if (last_used_idx == 0 || last_used_idx > 65535) {
-        hist_key.slot = 0;  // Handle 0 and any anomalous values
-    } else if (last_used_idx == 1) {
-        hist_key.slot = 0;  // log2(1) = 0
-    } else {
-        u64 log_result = bpf_log2l(last_used_idx);
-        hist_key.slot = (log_result > 15) ? 15 : log_result;  // Cap at slot 15
-    }
-    vq_last_used_idx_handle_rx.atomic_increment(hist_key);
-    
-    return 0;
-}
-
-// Stage 3: tun_recvmsg - Track PTR ring depth
-int trace_tun_recvmsg_entry(struct pt_regs *ctx, struct socket *sock, struct msghdr *m, size_t total_len, int flags) {
-    if (!sock) return 0;
-    
-    // Get tun_file from socket using proper calculation
-    struct tun_file *tfile = (struct tun_file *)((char *)sock - offsetof(struct tun_file, socket));
-    if (!tfile) return 0;
-    
-    // Get socket pointer directly from parameter
-    u64 sock_ptr = (u64)sock;
-    
-    // Check if this is our target queue (ONLY sock-based filtering)
-    struct queue_key *qkey = target_queues.lookup(&sock_ptr);
-    if (!qkey) {
-        return 0;  // Not our target queue
-    }
-    
-    // Get PTR ring depth and record in histogram
-    u32 depth = get_ptr_ring_depth(tfile);
-    hist_key_t hist_key = {};
-    hist_key.queue_index = qkey->queue_index;
-    __builtin_memcpy(hist_key.dev_name, qkey->dev_name, sizeof(hist_key.dev_name));
-    
-    // Handle depth=0 case properly - bpf_log2l(0) returns a large value
-    if (depth == 0) {
-        hist_key.slot = 0;  // Put 0 in slot 0
-    } else {
-        hist_key.slot = bpf_log2l(depth);  // Use log2 scale for histogram
-    }
-    
-    ptr_ring_depth_recv.atomic_increment(hist_key);
-    
-    return 0;
-}
-
-// Stage 4: vhost_signal - Track VQ state at signal time
+// Stage 2: vhost_signal - Track VQ state at signal time
 int trace_vhost_signal(struct pt_regs *ctx) {
     void *dev = (void *)PT_REGS_PARM1(ctx);
     struct vhost_virtqueue *vq = (struct vhost_virtqueue *)PT_REGS_PARM2(ctx);
@@ -570,53 +437,14 @@ int trace_vhost_signal(struct pt_regs *ctx) {
         return 0;  // Not our target queue
     }
     
-    // Filter VQ: only allow signals from handle_rx VQs
-    u64 expected_vq_addr = 0;
-    u64 *expected_vq_ptr = handle_rx_vqs.lookup(&sock_ptr);
-    if (expected_vq_ptr) {
-        expected_vq_addr = *expected_vq_ptr;
-    }
-    
-    u64 current_vq_addr = (u64)vq;
-    if (expected_vq_addr != 0 && current_vq_addr != expected_vq_addr) {
-        return 0;  // Filter out signals from different VQ (likely TX direction)
-    }
-    
-    // Get VQ indices for additional statistics
-    u16 last_avail_idx, avail_idx, last_used_idx;
-    READ_FIELD(&last_avail_idx, vq, last_avail_idx);
-    READ_FIELD(&avail_idx, vq, avail_idx);
+    // Get VQ indices for statistics
+    u16 last_used_idx;
     READ_FIELD(&last_used_idx, vq, last_used_idx);
-    
-    // Calculate consumption progress and processing delay at signal time
-    u16 consumption_progress = 0;
-    if (avail_idx >= last_avail_idx) {
-        consumption_progress = avail_idx - last_avail_idx;
-    } else {
-        // Handle wraparound
-        consumption_progress = (u16)(65536 + avail_idx - last_avail_idx);
-    }
-    
-    u16 processing_delay = 0;
-    if (last_avail_idx >= last_used_idx) {
-        processing_delay = last_avail_idx - last_used_idx;
-    } else {
-        // Handle wraparound
-        processing_delay = (u16)(65536 + last_avail_idx - last_used_idx);
-    }
     
     // Record in histograms for vhost_signal
     hist_key_t hist_key = {};
     hist_key.queue_index = qkey->queue_index;
     __builtin_memcpy(hist_key.dev_name, qkey->dev_name, sizeof(hist_key.dev_name));
-    
-    // VQ consumption progress histogram at vhost_signal
-    hist_key.slot = bpf_log2l(consumption_progress);
-    vq_consumption_progress_vhost_signal.atomic_increment(hist_key);
-    
-    // VQ processing delay histogram at vhost_signal
-    hist_key.slot = bpf_log2l(processing_delay);
-    vq_processing_delay_vhost_signal.atomic_increment(hist_key);
     
     // VQ last_used_idx value histogram at vhost_signal
     // Use log2 scale for histogram compatibility
@@ -631,83 +459,10 @@ int trace_vhost_signal(struct pt_regs *ctx) {
     }
     vq_last_used_idx_vhost_signal.atomic_increment(hist_key);
     
-    // Track total signal count per sock_ptr for verification
-    u32 *total_count = signal_total_count.lookup(&sock_ptr);
-    if (total_count) {
-        (*total_count)++;
-    } else {
-        u32 init_total = 1;
-        signal_total_count.update(&sock_ptr, &init_total);
-    }
-    
-    // Track signal idx frequency - simple hash counting
-    struct idx_freq_key freq_key = {};
-    freq_key.sock_ptr = sock_ptr;
-    freq_key.last_used_idx = last_used_idx;
-    
-    u32 *count = signal_idx_freq.lookup(&freq_key);
-    if (count) {
-        (*count)++;  // Increment existing count
-    } else {
-        u32 init_count = 1;
-        signal_idx_freq.update(&freq_key, &init_count);  // Initialize to 1
-    }
     
     return 0;
 }
 """
-
-def print_index_histogram(hist_table):
-    """Print histogram for u16 index values (0-65535)"""
-    if len(hist_table) == 0:
-        print("    No data")
-        return
-    
-    # Group by queue and device
-    queue_data = {}
-    for k, v in hist_table.items():
-        dev_name = k.dev_name.decode('utf-8', 'replace')
-        queue_index = k.queue_index
-        queue_key = "{}:q{}".format(dev_name, queue_index)
-        if queue_key not in queue_data:
-            queue_data[queue_key] = {}
-        slot = k.slot  # This is now the original u16 value (0-65535)
-        queue_data[queue_key][slot] = v.value
-    
-    for queue_name in sorted(queue_data.keys()):
-        print("  Queue: {}".format(queue_name))
-        slots = queue_data[queue_name]
-        if not slots:
-            print("    No data")
-            continue
-            
-        total_count = sum(slots.values())
-        print("    Total: {} events".format(total_count))
-        
-        # Find min and max slot values (original u16 values)
-        min_slot = min(slots.keys())
-        max_slot = max(slots.keys())
-        
-        # Show distribution range for u16 values (0-65535)
-        print("    Index value distribution (u16 range 0-65535):")
-        print("    Min: {}, Max: {}, Range: {}".format(min_slot, max_slot, max_slot - min_slot))
-        
-        # Count how many index values appeared more than once (duplicates)
-        duplicate_count = sum(1 for count in slots.values() if count > 1)
-        unique_count = len(slots)
-        print("    Unique indices: {}, Duplicate indices: {} ({:.1f}%)".format(
-            unique_count, duplicate_count, 
-            (duplicate_count * 100.0 / unique_count) if unique_count > 0 else 0))
-        
-        # Only show top list if there are duplicate indices
-        if duplicate_count > 0:
-            # Show top 20 most frequent values (focus on duplicates)
-            sorted_slots = sorted(slots.items(), key=lambda x: x[1], reverse=True)[:20]
-            print("    Top 20 most frequent index values:")
-            for slot, count in sorted_slots:
-                pct = (count * 100.0 / total_count) if total_count > 0 else 0
-                status = "DUPLICATE" if count > 1 else "normal"
-                print("      idx {:>5}: {:>3} times ({:>5.1f}%) [{}]".format(slot, count, pct, status))
 
 def print_histogram(hist_table, unit):
     """Print histogram with queue information"""
@@ -757,21 +512,10 @@ def print_histogram(hist_table, unit):
             
             print("    Actual value range in this period: {} - {}".format(min_val, max_val))
         
-        # For duplicate signals, show interpretation
-        elif "duplicate_signals" in unit:
-            max_duplicates = max_slot
-            total_events = sum(slots.values())
-            unique_idx_sequences = len([s for s in slots.keys() if slots[s] > 0])
-            print("    Max consecutive duplicates: {} signals".format(max_duplicates))
-            print("    Total duplicate events: {} (across {} different sequences)".format(total_events, unique_idx_sequences))
-        
         for slot in range(max_slot + 1):
             count = slots.get(slot, 0)
             if count > 0:
-                if "duplicate_signals" in unit:
-                    # For duplicate signals, slot directly represents count
-                    range_str = "{} repeats".format(slot)
-                elif slot > 15:  # Beyond u16 range, show as anomaly
+                if slot > 15:  # Beyond u16 range, show as anomaly
                     range_str = "ANOMALY-{}".format(slot)
                 elif slot == 0:
                     range_str = "0-1"
@@ -783,79 +527,10 @@ def print_histogram(hist_table, unit):
                 pct = (count * 100) // total_count if total_count > 0 else 0
                 print("    {:>10} : {:>8} ({}%)".format(range_str, count, pct))
 
-def print_signal_idx_frequency(signal_freq_table, target_queues_map, signal_total_count_table):
-    """Print top 10 most frequent last_used_idx values in vhost_signal"""
-    if len(signal_freq_table) == 0:
-        print("    No data")
-        return
-    
-    # Build sock_ptr to queue info mapping
-    sock_to_queue = {}
-    for sock_ptr, qkey in target_queues_map.items():
-        sock_to_queue[sock_ptr.value] = {
-            'dev_name': qkey.dev_name.decode('utf-8', 'replace'),
-            'queue_index': qkey.queue_index
-        }
-    
-    # Get total count verification data
-    total_count_verification = {}
-    for sock_ptr, count in signal_total_count_table.items():
-        total_count_verification[sock_ptr.value] = count.value
-    
-    # Group by queue (sock_ptr)
-    queue_data = {}
-    for k, v in signal_freq_table.items():
-        sock_ptr = k.sock_ptr
-        last_used_idx = k.last_used_idx
-        count = v.value
-        
-        if sock_ptr not in queue_data:
-            queue_data[sock_ptr] = {}
-        queue_data[sock_ptr][last_used_idx] = count
-    
-    for sock_ptr in sorted(queue_data.keys()):
-        idx_counts = queue_data[sock_ptr]
-        if not idx_counts:
-            continue
-            
-        # Sort by count (descending) and take top 10
-        sorted_items = sorted(idx_counts.items(), key=lambda x: x[1], reverse=True)[:10]
-        total_signals = sum(idx_counts.values())
-        unique_indices = len(idx_counts)
-        
-        # Get verification count
-        verification_count = total_count_verification.get(sock_ptr, 0)
-        
-        # Get queue name from mapping
-        if sock_ptr in sock_to_queue:
-            qinfo = sock_to_queue[sock_ptr]
-            queue_name = "{}:q{}".format(qinfo['dev_name'], qinfo['queue_index'])
-            print("  Queue: {} (sock: 0x{:x})".format(queue_name, sock_ptr))
-        else:
-            print("  Sock: 0x{:x} (queue info not found)".format(sock_ptr))
-            
-        print("    Total signals: {} (verification: {}), Unique indices: {}".format(
-            total_signals, verification_count, unique_indices))
-        
-        # Discrepancy check removed as requested
-        
-        if unique_indices < total_signals:
-            duplicate_signals = total_signals - unique_indices
-            print("    Duplicate signals: {} ({:.1f}%)".format(
-                duplicate_signals, (duplicate_signals * 100.0 / total_signals)))
-        
-        print("    Top 10 most frequent last_used_idx values:")
-        print("    {:>8} : {:>6} {:>7}".format("idx", "count", "percent"))
-        print("    " + "-" * 23)
-        
-        for idx, count in sorted_items:
-            pct = (count * 100.0 / total_signals) if total_signals > 0 else 0
-            status = "DUP" if count > 1 else ""
-            print("    {:>8} : {:>6} {:>6.1f}% {}".format(idx, count, pct, status))
 
 def main():
     parser = argparse.ArgumentParser(
-        description="VHOST-NET Queue Statistics Monitor with periodic distribution output",
+        description="Simple VHOST-NET Queue Monitor - tracks tun_net_xmit and vhost_signal only",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -883,10 +558,8 @@ Examples:
     try:
         b = BPF(text=bpf_text)
         
-        # Attach kprobes
+        # Attach kprobes - only tun_net_xmit and vhost_signal
         b.attach_kprobe(event="tun_net_xmit", fn_name="trace_tun_net_xmit")
-        b.attach_kprobe(event="handle_rx", fn_name="trace_handle_rx")
-        b.attach_kprobe(event="tun_recvmsg", fn_name="trace_tun_recvmsg_entry")
         b.attach_kprobe(event="vhost_add_used_and_signal_n", fn_name="trace_vhost_signal")
         
     except Exception as e:
@@ -912,44 +585,25 @@ Examples:
         b["filter_enabled"][0] = ct.c_uint32(0)
         print("Queue filter: All queues")
     
-    print("VHOST-NET Queue Statistics Monitor Started")
+    print("Simple VHOST-NET Queue Monitor Started")
+    print("Tracking: tun_net_xmit and vhost_signal only")
     print("Interval: {}s | Outputs: {}".format(args.interval, "unlimited" if args.outputs == 99999999 else args.outputs))
     print("Collecting statistics... Press Ctrl+C to stop\n")
     
     # Clear maps to avoid stale entries - CRITICAL for correct filtering
     target_queues_map = b["target_queues"]
-    handle_rx_vqs_map = b["handle_rx_vqs"]
-    signal_idx_freq_map = b["signal_idx_freq"]
-    signal_total_count_map = b["signal_total_count"]
     
     print("Clearing all maps to ensure clean state...")
     target_queues_map.clear()
-    handle_rx_vqs_map.clear()
-    signal_idx_freq_map.clear()
-    signal_total_count_map.clear()
     
     # Also clear histogram maps to ensure clean start
-    vq_consumption_handle_rx = b.get_table("vq_consumption_progress_handle_rx")
-    vq_delay_handle_rx = b.get_table("vq_processing_delay_handle_rx")
-    vq_consumption_vhost_signal = b.get_table("vq_consumption_progress_vhost_signal")
-    vq_delay_vhost_signal = b.get_table("vq_processing_delay_vhost_signal")
-    vq_last_used_idx_handle_rx = b.get_table("vq_last_used_idx_handle_rx")
     vq_last_used_idx_vhost_signal = b.get_table("vq_last_used_idx_vhost_signal")
     ptr_xmit = b.get_table("ptr_ring_depth_xmit")
-    ptr_recv = b.get_table("ptr_ring_depth_recv")
     
-    vq_consumption_handle_rx.clear()
-    vq_delay_handle_rx.clear()
-    vq_consumption_vhost_signal.clear()
-    vq_delay_vhost_signal.clear()
-    vq_last_used_idx_handle_rx.clear()
     vq_last_used_idx_vhost_signal.clear()
     ptr_xmit.clear()
-    ptr_recv.clear()
     
     print("All maps cleared.")
-    
-# Maps already obtained above
     
     exiting = 0
     try:
@@ -965,62 +619,19 @@ Examples:
                 now = datetime.datetime.now()
                 print("Time: {}".format(now.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]))
             
-            # Print VQ Consumption Progress Distribution from handle_rx
-            print("\nVQ Consumption Progress Distribution at handle_rx (avail_idx - last_avail_idx):")
-            print("Shows how many descriptors are available for consumption when VHOST handles RX")
-            print_histogram(vq_consumption_handle_rx, "descriptors")
-            
-            # Print VQ Processing Delay Distribution from handle_rx
-            print("\nVQ Processing Delay Distribution at handle_rx (last_avail_idx - last_used_idx):")
-            print("Shows how many descriptors are in-flight when VHOST handles RX")
-            print_histogram(vq_delay_handle_rx, "descriptors")
-            
-            # Print VQ Consumption Progress Distribution from vhost_signal
-            print("\nVQ Consumption Progress Distribution at vhost_signal (avail_idx - last_avail_idx):")
-            print("Shows how many descriptors are available for consumption when VHOST signals guest")
-            print_histogram(vq_consumption_vhost_signal, "descriptors")
-            
-            # Print VQ Processing Delay Distribution from vhost_signal
-            print("\nVQ Processing Delay Distribution at vhost_signal (last_avail_idx - last_used_idx):")
-            print("Shows how many descriptors are in-flight when VHOST signals guest")
-            print_histogram(vq_delay_vhost_signal, "descriptors")
-            
-            # Print VQ last_used_idx Value Distribution from handle_rx
-            print("\nVQ last_used_idx Value Distribution at handle_rx:")
-            print("Shows last_used_idx value ranges when VHOST handles RX")
-            print_histogram(vq_last_used_idx_handle_rx, "last_used_idx")
-            
             # Print VQ last_used_idx Value Distribution from vhost_signal
             print("\nVQ last_used_idx Value Distribution at vhost_signal:")
             print("Shows last_used_idx value ranges when VHOST signals guest")
             print_histogram(vq_last_used_idx_vhost_signal, "last_used_idx")
-            
-            # Print Signal Index Frequency Analysis
-            print("\nSignal Index Frequency Analysis at vhost_signal:")
-            print("Shows most frequently used last_used_idx values and their call counts")
-            print_signal_idx_frequency(signal_idx_freq_map, target_queues_map, signal_total_count_map)
             
             # Print PTR Ring Depth at tun_net_xmit
             print("\nPTR Ring Depth Distribution at tun_net_xmit:")
             print("Shows ring buffer utilization when packets are transmitted")
             print_histogram(ptr_xmit, "entries")
             
-            # Print PTR Ring Depth at tun_recvmsg
-            print("\nPTR Ring Depth Distribution at tun_recvmsg:")
-            print("Shows ring buffer utilization when packets are received")
-            print_histogram(ptr_recv, "entries")
-            
             # Clear histograms for next interval
-            vq_consumption_handle_rx.clear()
-            vq_delay_handle_rx.clear()
-            vq_consumption_vhost_signal.clear()
-            vq_delay_vhost_signal.clear()
-            vq_last_used_idx_handle_rx.clear()
             vq_last_used_idx_vhost_signal.clear()
-            signal_idx_freq_map.clear()  # Clear frequency map each cycle
-            signal_total_count_map.clear()  # Clear verification map each cycle
             ptr_xmit.clear()
-            ptr_recv.clear()
             
             countdown -= 1
             if exiting:

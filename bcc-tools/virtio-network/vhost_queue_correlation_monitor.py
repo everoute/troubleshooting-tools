@@ -304,6 +304,14 @@ struct queue_event {
     u64 skb_ptr;
     u64 tfile_ptr;
     u64 vq_ptr;
+    u64 nvq_ptr;
+    u64 tx_nvq_ptr;
+    int rx_busyloop_timeout;
+    int tx_busyloop_timeout;
+    
+    // vhost_signal parameters
+    u64 signal_param3;
+    u64 signal_param4;
     
     // Packet info (from tun_xmit)
     u32 saddr;
@@ -596,6 +604,9 @@ int trace_handle_rx(struct pt_regs *ctx) {
     struct vhost_net_virtqueue *nvq = &net->vqs[0];
     struct vhost_virtqueue *vq = &nvq->vq;
     
+    // Get TX virtqueue (vqs[1].vq)
+    struct vhost_net_virtqueue *tx_nvq = &net->vqs[1];
+    
     // Get sock pointer from private_data using READ_FIELD  
     void *private_data = NULL;
     READ_FIELD(&private_data, vq, private_data);
@@ -620,6 +631,14 @@ int trace_handle_rx(struct pt_regs *ctx) {
     event.queue_index = qkey->queue_index;
     __builtin_memcpy(event.dev_name, qkey->dev_name, sizeof(event.dev_name));
     event.vq_ptr = (u64)vq;
+    event.nvq_ptr = (u64)nvq;
+    event.tx_nvq_ptr = (u64)tx_nvq;
+    
+    // Get busyloop_timeout for RX and TX
+    READ_FIELD(&event.rx_busyloop_timeout, vq, busyloop_timeout);
+    
+    struct vhost_virtqueue *tx_vq = &tx_nvq->vq;
+    READ_FIELD(&event.tx_busyloop_timeout, tx_vq, busyloop_timeout);
     
     // Get vhost virtqueue state
     get_vhost_vq_state(vq, &event);
@@ -686,6 +705,8 @@ int trace_tun_recvmsg_return(struct pt_regs *ctx) {
 int trace_vhost_signal(struct pt_regs *ctx) {
     void *dev = (void *)PT_REGS_PARM1(ctx);
     struct vhost_virtqueue *vq = (struct vhost_virtqueue *)PT_REGS_PARM2(ctx);
+    u64 param3 = (u64)PT_REGS_PARM3(ctx);
+    u64 param4 = (u64)PT_REGS_PARM4(ctx);
     
     if (!vq) return 0;
     
@@ -725,6 +746,8 @@ int trace_vhost_signal(struct pt_regs *ctx) {
     event.queue_index = qkey->queue_index;
     __builtin_memcpy(event.dev_name, qkey->dev_name, sizeof(event.dev_name));
     event.vq_ptr = (u64)vq;
+    event.signal_param3 = param3;
+    event.signal_param4 = param4;
     
     // Get vhost virtqueue state
     get_vhost_vq_state(vq, &event);
@@ -757,6 +780,12 @@ class QueueEvent(ct.Structure):
         ("skb_ptr", ct.c_uint64),
         ("tfile_ptr", ct.c_uint64),
         ("vq_ptr", ct.c_uint64),
+        ("nvq_ptr", ct.c_uint64),
+        ("tx_nvq_ptr", ct.c_uint64),
+        ("rx_busyloop_timeout", ct.c_int),
+        ("tx_busyloop_timeout", ct.c_int),
+        ("signal_param3", ct.c_uint64),
+        ("signal_param4", ct.c_uint64),
         ("saddr", ct.c_uint32),
         ("daddr", ct.c_uint32),
         ("sport", ct.c_uint16),
@@ -827,7 +856,8 @@ def print_event(cpu, data, size):
         if event.rx_ring_ptr:
             print("PTR Ring: 0x{:x}".format(event.rx_ring_ptr))
     elif event.event_type == 2:  # handle_rx
-        print("VQ: 0x{:x}".format(event.vq_ptr))
+        print("VQ: 0x{:x} | NVQ: 0x{:x} | TX_NVQ: 0x{:x}".format(event.vq_ptr, event.nvq_ptr, event.tx_nvq_ptr))
+        print("Busyloop: RX={}, TX={}".format(event.rx_busyloop_timeout, event.tx_busyloop_timeout))
         print("VQ State: avail_idx={}, last_avail={}, last_used={}, used_flags=0x{:x}".format(
             event.avail_idx, event.last_avail_idx, event.last_used_idx, event.used_flags))
         print("Signal: signalled_used={}, valid={}, log_used={}".format(
@@ -845,7 +875,7 @@ def print_event(cpu, data, size):
         if event.rx_ring_ptr:
             print("PTR Ring: 0x{:x}".format(event.rx_ring_ptr))
     elif event.event_type == 4:  # vhost_signal
-        print("VQ: 0x{:x}".format(event.vq_ptr))
+        print("VQ: 0x{:x} | Param3: 0x{:x} | Param4: 0x{:x}".format(event.vq_ptr, event.signal_param3, event.signal_param4))
         print("VQ State: avail_idx={}, last_avail={}, last_used={}, used_flags=0x{:x}".format(
             event.avail_idx, event.last_avail_idx, event.last_used_idx, event.used_flags))
         print("Signal: signalled_used={}, valid={}, log_used={}".format(

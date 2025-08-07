@@ -103,6 +103,41 @@ struct irqfd_info {
 
 BPF_HASH(irqfd_info_map, u64, struct irqfd_info, 4096);
 
+// Track KVM+GSI seen in irqfd_wakeup for comparison
+struct kvm_gsi_key {
+    u64 kvm_ptr;
+    u32 gsi;
+    u32 pad;
+};
+BPF_HASH(active_kvm_gsi, struct kvm_gsi_key, u8, 1024);
+
+// kvm_arch_set_irq_inatomic histogram key
+typedef struct arch_set_irq_hist_key {
+    u64 kvm_ptr;
+    u32 gsi;
+    u32 pad;
+    u64 slot;
+} arch_set_irq_hist_key_t;
+
+BPF_HISTOGRAM(arch_set_irq_hist, arch_set_irq_hist_key_t);
+
+// Track return values of kvm_arch_set_irq_inatomic
+struct arch_set_irq_ret_key {
+    u64 kvm_ptr;
+    u32 gsi;
+    u32 pad;
+};
+
+struct arch_set_irq_ret_val {
+    u64 total_calls;
+    u64 success_count;    // ret > 0
+    u64 fail_count;       // ret <= 0
+    u64 total_delivered;  // sum of positive returns
+};
+
+BPF_HASH(arch_set_irq_ret_stats, struct arch_set_irq_ret_key, struct arch_set_irq_ret_val, 1024);
+BPF_HASH(arch_set_irq_args, u64, struct arch_set_irq_ret_key, 1024);
+
 // Filter parameters (set from userspace)
 struct filter_params {
     u32 qemu_pid;          // Required parameter
@@ -237,6 +272,91 @@ int trace_vm_irqfd_stats(struct pt_regs *ctx) {
         info->last_timestamp = bpf_ktime_get_ns();
     }
     
+    // Track this KVM+GSI combination for comparison
+    struct kvm_gsi_key kvm_gsi_key = {};
+    kvm_gsi_key.kvm_ptr = (u64)kvm;
+    kvm_gsi_key.gsi = (u32)gsi;
+    u8 active = 1;
+    active_kvm_gsi.update(&kvm_gsi_key, &active);
+    
+    return 0;
+}
+
+// Trace kvm_arch_set_irq_inatomic with filtering based on active_kvm_gsi
+int trace_kvm_arch_set_irq_inatomic(struct pt_regs *ctx) {
+    struct kvm_kernel_irq_routing_entry *e = (struct kvm_kernel_irq_routing_entry *)PT_REGS_PARM1(ctx);
+    struct kvm *kvm = (struct kvm *)PT_REGS_PARM2(ctx);
+    
+    if (!e || !kvm || (u64)kvm < 0xffff000000000000ULL) {
+        return 0;
+    }
+    
+    // Extract GSI from routing entry
+    u32 gsi = 0;
+    bpf_probe_read_kernel(&gsi, sizeof(gsi), &e->gsi);
+    
+    // Apply filtering based on active_kvm_gsi from irqfd_wakeup
+    struct kvm_gsi_key filter_key = {};
+    filter_key.kvm_ptr = (u64)kvm;
+    filter_key.gsi = gsi;
+    
+    u8 *is_active = active_kvm_gsi.lookup(&filter_key);
+    if (!is_active) {
+        // This KVM+GSI was not seen in irqfd_wakeup, skip it
+        return 0;
+    }
+    
+    // Record to arch_set_irq histogram
+    arch_set_irq_hist_key_t hist_key = {};
+    hist_key.kvm_ptr = (u64)kvm;
+    hist_key.gsi = gsi;
+    hist_key.slot = 0;
+    
+    arch_set_irq_hist.atomic_increment(hist_key);
+    
+    // Store parameters for return probe
+    struct arch_set_irq_ret_key ret_key = {};
+    ret_key.kvm_ptr = (u64)kvm;
+    ret_key.gsi = gsi;
+    
+    u64 tid = bpf_get_current_pid_tgid();
+    arch_set_irq_args.update(&tid, &ret_key);
+    
+    return 0;
+}
+
+int trace_kvm_arch_set_irq_inatomic_ret(struct pt_regs *ctx) {
+    int ret = PT_REGS_RC(ctx);
+    u64 tid = bpf_get_current_pid_tgid();
+    
+    struct arch_set_irq_ret_key *key_ptr = arch_set_irq_args.lookup(&tid);
+    if (!key_ptr) return 0;
+    
+    struct arch_set_irq_ret_key key = *key_ptr;
+    arch_set_irq_args.delete(&tid);
+    
+    // Update return value statistics
+    struct arch_set_irq_ret_val *val = arch_set_irq_ret_stats.lookup(&key);
+    if (!val) {
+        struct arch_set_irq_ret_val new_val = {};
+        new_val.total_calls = 1;
+        if (ret > 0) {
+            new_val.success_count = 1;
+            new_val.total_delivered = ret;
+        } else {
+            new_val.fail_count = 1;
+        }
+        arch_set_irq_ret_stats.update(&key, &new_val);
+    } else {
+        val->total_calls++;
+        if (ret > 0) {
+            val->success_count++;
+            val->total_delivered += ret;
+        } else {
+            val->fail_count++;
+        }
+    }
+    
     return 0;
 }
 """
@@ -263,6 +383,29 @@ class IrqfdInfo(ct.Structure):
         ("eventfd_ctx", ct.c_uint64),
         ("first_timestamp", ct.c_uint64),
         ("last_timestamp", ct.c_uint64),
+    ]
+
+class ArchSetIrqHistKey(ct.Structure):
+    _fields_ = [
+        ("kvm_ptr", ct.c_uint64),
+        ("gsi", ct.c_uint32),
+        ("pad", ct.c_uint32),
+        ("slot", ct.c_uint64),
+    ]
+
+class ArchSetIrqRetKey(ct.Structure):
+    _fields_ = [
+        ("kvm_ptr", ct.c_uint64),
+        ("gsi", ct.c_uint32),
+        ("pad", ct.c_uint32),
+    ]
+
+class ArchSetIrqRetVal(ct.Structure):
+    _fields_ = [
+        ("total_calls", ct.c_uint64),
+        ("success_count", ct.c_uint64),
+        ("fail_count", ct.c_uint64),
+        ("total_delivered", ct.c_uint64),
     ]
 
 class FilterParams(ct.Structure):
@@ -305,8 +448,10 @@ def print_histogram_stats(b):
     
     vm_stats = defaultdict(lambda: {
         'total_interrupts': 0,
+        'total_arch_set_irq': 0,
         'queues': defaultdict(lambda: {
             'count': 0,
+            'arch_set_irq_count': 0,
             'gsi': None,
             'eventfd': None,
             'cpus': set(),
@@ -317,7 +462,13 @@ def print_histogram_stats(b):
             'call_sources': defaultdict(int)  # Track different call sources for same GSI
         }),
         'first_time': None,
-        'last_time': None
+        'last_time': None,
+        'arch_set_irq_ret_stats': defaultdict(lambda: {
+            'total': 0,
+            'success': 0,
+            'fail': 0,
+            'total_delivered': 0
+        })
     })
     
     total_interrupts = 0
@@ -368,6 +519,74 @@ def print_histogram_stats(b):
             queue_stat['control_count'] += count
         elif comm_str.startswith('vhost-'):
             queue_stat['data_count'] += count
+    
+    # Process kvm_arch_set_irq_inatomic histogram
+    arch_set_irq_table = b["arch_set_irq_hist"]
+    total_arch_set_irq = 0
+    
+    for k, v in arch_set_irq_table.items():
+        if v.value == 0:
+            continue
+        kvm_ptr = k.kvm_ptr
+        irqfd_ptr = 0  # We don't have irqfd_ptr in this trace
+        gsi = k.gsi
+        count = v.value
+        
+        total_arch_set_irq += count
+        
+        vm_stat = vm_stats[kvm_ptr]
+        vm_stat['total_arch_set_irq'] += count
+        
+        # Find matching queue by GSI
+        for queue_irqfd_ptr, queue_stat in vm_stat['queues'].items():
+            if queue_stat['gsi'] == gsi:
+                queue_stat['arch_set_irq_count'] += count
+                break
+    
+    # Process kvm_arch_set_irq_inatomic return statistics
+    arch_ret_table = b["arch_set_irq_ret_stats"]
+    for k, v in arch_ret_table.items():
+        if v.total_calls == 0:
+            continue
+            
+        kvm_ptr = k.kvm_ptr
+        gsi = k.gsi
+        
+        vm_stat = vm_stats[kvm_ptr]
+        ret_stats = vm_stat['arch_set_irq_ret_stats'][gsi]
+        ret_stats['total'] += v.total_calls
+        ret_stats['success'] += v.success_count
+        ret_stats['fail'] += v.fail_count
+        ret_stats['total_delivered'] += v.total_delivered
+    
+    print("DEBUG: Interrupt chain analysis:")
+    print("  Total irqfd_wakeup calls: {}".format(total_interrupts))
+    print("  Total kvm_arch_set_irq_inatomic calls: {}".format(total_arch_set_irq))
+    
+    # Show target VM analysis
+    target_kvm = 0xffffb28da688d000
+    target_vm_stat = vm_stats.get(target_kvm)
+    if target_vm_stat:
+        print("  Target VM (0x{:x}):".format(target_kvm))
+        print("    Wakeups: {}".format(target_vm_stat['total_interrupts']))
+        print("    Arch set_irq: {}".format(target_vm_stat['total_arch_set_irq']))
+        
+        if target_vm_stat['arch_set_irq_ret_stats']:
+            print("    Arch set_irq results by GSI:")
+            for gsi, stats in sorted(target_vm_stat['arch_set_irq_ret_stats'].items()):
+                if stats['total'] > 0:
+                    success_rate = 100.0 * stats['success'] / stats['total'] if stats['total'] > 0 else 0
+                    avg_delivered = stats['total_delivered'] / stats['success'] if stats['success'] > 0 else 0
+                    print("      GSI {}: total={}, success={} ({:.1f}%), fail={}, avg_delivered={:.1f}".format(
+                        gsi, stats['total'], stats['success'], success_rate, stats['fail'], avg_delivered))
+        
+        print("    Per-queue breakdown:")
+        for irqfd_ptr, queue_stat in target_vm_stat['queues'].items():
+            if queue_stat['count'] > 0:
+                injection_rate = queue_stat['arch_set_irq_count'] / queue_stat['count'] if queue_stat['count'] > 0 else 0
+                print("      GSI {}: wakeups={}, injections={} ({:.1f}%)".format(
+                    queue_stat['gsi'], queue_stat['count'], queue_stat['arch_set_irq_count'], 
+                    100.0 * injection_rate))
     
     print("Total Interrupts: {} ({:.2f} interrupts/sec)".format(
         total_interrupts, 
@@ -445,8 +664,11 @@ def print_histogram_stats(b):
                 print("        Single Call Source: {}".format(call_source))
         print()
     
-    # Clear histogram for next round of statistics
+    # Clear histograms for next round of statistics
     hist_table.clear()
+    arch_set_irq_table.clear()
+    arch_ret_table.clear()
+    # Keep active_kvm_gsi for cross-reference
     
     last_print_time = current_time
 
@@ -467,6 +689,9 @@ def main():
         b = BPF(text=bpf_text)
         b.attach_kprobe(event="irqfd_wakeup", fn_name="trace_vm_irqfd_stats")
         print("Successfully attached to irqfd_wakeup")
+        b.attach_kprobe(event="kvm_arch_set_irq_inatomic", fn_name="trace_kvm_arch_set_irq_inatomic")
+        b.attach_kretprobe(event="kvm_arch_set_irq_inatomic", fn_name="trace_kvm_arch_set_irq_inatomic_ret")
+        print("Successfully attached to kvm_arch_set_irq_inatomic")
     except Exception as e:
         print("Loading failed: {}".format(e))
         return

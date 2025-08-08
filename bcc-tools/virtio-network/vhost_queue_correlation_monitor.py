@@ -838,8 +838,8 @@ def print_event(cpu, data, size):
     }
     
     print("="*80)
-    print("Event: {} | Time: {}".format(
-        event_names.get(event.event_type, "unknown"), timestamp_str))
+    print("Event: {} | Time: {} | Timestamp: {}ns".format(
+        event_names.get(event.event_type, "unknown"), timestamp_str, event.timestamp))
     print("Queue: {} | Device: {} | Process: {} (PID: {})".format(
         event.queue_index, event.dev_name.decode('utf-8', 'replace'),
         event.comm.decode('utf-8', 'replace'), event.pid))

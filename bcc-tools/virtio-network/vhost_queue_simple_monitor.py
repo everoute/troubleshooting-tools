@@ -297,6 +297,14 @@ BPF_ARRAY(name_map, union name_buf, 1);
 BPF_ARRAY(filter_enabled, u32, 1);
 BPF_ARRAY(filter_queue, u32, 1);
 
+// Per-queue last_used_idx value tracking
+struct idx_value_key {
+    u32 queue_index;
+    char dev_name[16];
+};
+BPF_HASH(last_used_idx_values, struct idx_value_key, u16, 256);  // Track actual last_used_idx values
+BPF_HASH(last_used_idx_counts, struct idx_value_key, u64, 256);  // Track how many times we've seen this queue
+
 // Histograms for statistics - only vhost_signal stats
 BPF_HISTOGRAM(vq_last_used_idx_vhost_signal, hist_key_t);      // last_used_idx value distribution at vhost_signal
 BPF_HISTOGRAM(ptr_ring_depth_xmit, hist_key_t);       // PTR ring depth at tun_net_xmit
@@ -459,6 +467,22 @@ int trace_vhost_signal(struct pt_regs *ctx) {
     }
     vq_last_used_idx_vhost_signal.atomic_increment(hist_key);
     
+    // Track actual last_used_idx values for periodic display
+    struct idx_value_key idx_key = {};
+    idx_key.queue_index = qkey->queue_index;
+    __builtin_memcpy(idx_key.dev_name, qkey->dev_name, sizeof(idx_key.dev_name));
+    
+    // Update the current last_used_idx value for this queue
+    last_used_idx_values.update(&idx_key, &last_used_idx);
+    
+    // Increment count for this queue
+    u64 *count = last_used_idx_counts.lookup(&idx_key);
+    if (count) {
+        (*count)++;
+    } else {
+        u64 init_count = 1;
+        last_used_idx_counts.update(&idx_key, &init_count);
+    }
     
     return 0;
 }
@@ -599,9 +623,13 @@ Examples:
     # Also clear histogram maps to ensure clean start
     vq_last_used_idx_vhost_signal = b.get_table("vq_last_used_idx_vhost_signal")
     ptr_xmit = b.get_table("ptr_ring_depth_xmit")
+    last_used_idx_values = b.get_table("last_used_idx_values")
+    last_used_idx_counts = b.get_table("last_used_idx_counts")
     
     vq_last_used_idx_vhost_signal.clear()
     ptr_xmit.clear()
+    last_used_idx_values.clear()
+    last_used_idx_counts.clear()
     
     print("All maps cleared.")
     
@@ -619,6 +647,33 @@ Examples:
                 now = datetime.datetime.now()
                 print("Time: {}".format(now.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]))
             
+            # Print VQ last_used_idx values for this period
+            print("\nVQ last_used_idx Values at vhost_signal (this period):")
+            print("Shows actual last_used_idx values when VHOST signals guest")
+            if len(last_used_idx_values) == 0:
+                print("    No data")
+            else:
+                # Group by queue and device
+                queue_data = {}
+                for k, v in last_used_idx_values.items():
+                    dev_name = k.dev_name.decode('utf-8', 'replace')
+                    queue_index = k.queue_index
+                    queue_key = "{}:q{}".format(dev_name, queue_index)
+                    queue_data[queue_key] = v.value
+                
+                for queue_name in sorted(queue_data.keys()):
+                    idx_value = queue_data[queue_name]
+                    # Get call count for this queue
+                    call_count = 0
+                    for k, v in last_used_idx_counts.items():
+                        dev_name = k.dev_name.decode('utf-8', 'replace')
+                        queue_index = k.queue_index
+                        q_key = "{}:q{}".format(dev_name, queue_index)
+                        if q_key == queue_name:
+                            call_count = v.value
+                            break
+                    print("  Queue: {} | last_used_idx: {} | calls: {}".format(queue_name, idx_value, call_count))
+            
             # Print VQ last_used_idx Value Distribution from vhost_signal
             print("\nVQ last_used_idx Value Distribution at vhost_signal:")
             print("Shows last_used_idx value ranges when VHOST signals guest")
@@ -632,6 +687,8 @@ Examples:
             # Clear histograms for next interval
             vq_last_used_idx_vhost_signal.clear()
             ptr_xmit.clear()
+            last_used_idx_values.clear()
+            last_used_idx_counts.clear()
             
             countdown -= 1
             if exiting:

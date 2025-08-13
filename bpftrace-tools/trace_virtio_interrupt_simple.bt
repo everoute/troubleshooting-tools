@@ -1,13 +1,9 @@
 #!/usr/bin/bpftrace
 
-#define IRQ1 69
-#define IRQ2 71
-#define IRQ3 73
-#define IRQ4 75
 
 tracepoint:irq:irq_handler_entry {
         $irq = args->irq;
-        //if ($irq == IRQ1 || $irq == IRQ2 || $irq == IRQ3 || $irq == IRQ4) {
+        // get virtio queue interrupt range from /proc/interrupts, modify irq range 
         if ($irq >= 24 && $irq <= 63) {
                 @irq_entry[$irq] = count();
         }
@@ -15,6 +11,7 @@ tracepoint:irq:irq_handler_entry {
 
 tracepoint:irq:irq_handler_exit {
         $irq = args->irq;
+        // get virtio queue interrupt range from /proc/interrupts, modify irq range 
         if ($irq >= 24 && $irq <= 63) {
                 @irq_exit_ret[$irq, args->ret] = count();
         }

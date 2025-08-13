@@ -111,7 +111,7 @@ struct kvm_gsi_key {
 };
 BPF_HASH(active_kvm_gsi, struct kvm_gsi_key, u8, 1024);
 
-// Track active KVM pointers from irqfd_wakeup for filtering vgic_queue_irq_unlock
+// Track active KVM pointers from irqfd_wakeup for filtering vgic_queue_irq_unlock, arm arch specific
 BPF_HASH(active_kvm_ptrs, u64, u8, 256);
 
 // kvm_arch_set_irq_inatomic histogram key

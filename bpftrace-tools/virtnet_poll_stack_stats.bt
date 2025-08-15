@@ -1,0 +1,39 @@
+#!/usr/bin/env bpftrace
+
+/*
+ * virtnet_poll Stack Statistics - Count unique call stacks
+ * 
+ * This script counts the frequency of different call stacks leading to virtnet_poll.
+ * It aggregates the results and shows unique call paths with their counts.
+ *
+ * Usage: sudo bpftrace virtnet_poll_stack_stats.bt
+ *        Press Ctrl+C to see the summary
+ */
+
+kprobe:virtnet_poll
+{
+    @stack_counts[kstack] = count();
+    @total_calls++;
+}
+
+// Optional: Show progress every 10 seconds
+interval:s:10
+{
+    time("%H:%M:%S ");
+    printf("Total virtnet_poll calls: %d\n", @total_calls);
+}
+
+END
+{
+    printf("\n");
+    time("%H:%M:%S ");
+    printf("virtnet_poll Call Stack Statistics:\n");
+    printf("====================================\n");
+    printf("Total calls: %d\n\n", @total_calls);
+    
+    // Print all unique stacks with their counts
+    printf("Unique call stacks and their frequencies:\n");
+    print(@stack_counts);
+    
+    printf("\nTracing completed.\n");
+}

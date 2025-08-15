@@ -1,17 +1,20 @@
 #!/usr/bin/env bpftrace
 
 /*
- * VM RX Simple Statistics - Basic return value tracking
+ * VirtIO Network RX Path Summary - Comprehensive RX monitoring
  * 
- * Tracks return values for key virtio network RX functions:
+ * Tracks virtio network RX functions and interrupt handling:
  * - virtnet_poll: packets processed per call
  * - virtqueue_enable_cb_prepare: queue status  
  * - napi_complete_done: completion status
  * - virtqueue_poll: available items
  * - virtqueue_enable_cb_delayed: delayed callback setup
  * - virtqueue_get_buf_ctx: buffer retrieval
+ * - IRQ handling: interrupt counts and vring_interrupt statistics
  *
- * Usage: sudo bpftrace vm-rx-simple-stats.bt [duration_seconds]
+ * Usage: sudo bpftrace virtionet-rx-path-summary.bt [duration_seconds] [period_seconds]
+ *        duration_seconds: total runtime (0 for unlimited)
+ *        period_seconds:   periodic display interval (default: 2)
  */
 
 #include <linux/virtio.h>
@@ -69,17 +72,28 @@ struct vring_virtqueue {
 
 BEGIN 
 {
+    // Parse duration parameter
     if ($1 > 0) {
         @duration = $1;
-        printf("VM RX Statistics - Running for %d seconds\n", @duration);
+        printf("VirtIO RX Path Summary - Running for %d seconds\n", @duration);
         @end_time = nsecs + ((uint64)@duration * 1000000000);
     } else {
         @duration = 0;
-        printf("VM RX Statistics - Running until Ctrl+C\n");
+        printf("VirtIO RX Path Summary - Running until Ctrl+C\n");
     }
     
-    printf("Collecting RX path function statistics...\n\n");
+    // Parse period parameter (default: 2 seconds)
+    if ($2 > 0) {
+        @period = $2;
+        printf("Period interval: %d seconds\n", @period);
+    } else {
+        @period = 2;
+        printf("Period interval: %d seconds (default)\n", @period);
+    }
+    
+    printf("Collecting RX path and interrupt statistics...\n\n");
     @start_time = nsecs;
+    @last_period_time = nsecs;
 }
 
 // virtnet_poll - main NAPI poll function
@@ -205,68 +219,147 @@ kprobe:virtqueue_get_buf_ctx
     }
 }
 
-// Progress indicator every 10 seconds
-interval:s:10
+// ===== INTERRUPT TRACKING (from trace_virtio_interrupt_simple.bt) =====
+
+tracepoint:irq:irq_handler_entry {
+    $irq = args->irq;
+    // Track virtio queue interrupt range (modify this range as needed)
+    if ($irq >= 24 && $irq <= 63) {
+        @period_irq_entry[$irq]++;
+    }
+}
+
+tracepoint:irq:irq_handler_exit {
+    $irq = args->irq;
+    // Track virtio queue interrupt range (modify this range as needed)
+    if ($irq >= 24 && $irq <= 63) {
+        @period_irq_exit_ret[$irq, args->ret]++;
+    }
+}
+
+// Track vring_interrupt calls
+kprobe:vring_interrupt {
+    @period_vring_interrupt_calls++;
+    @period_vring_interrupt_irq[arg0]++;  // arg0 is the IRQ number
+}
+
+// Track vring_interrupt return values
+kretprobe:vring_interrupt {
+    @period_vring_interrupt_returns[retval]++;
+    // retval: IRQ_NONE=0, IRQ_HANDLED=1, IRQ_WAKE_THREAD=2
+    if (retval == 0) {
+        @period_vring_interrupt_ret_none++;
+    } else if (retval == 1) {
+        @period_vring_interrupt_ret_handled++;
+    } else if (retval == 2) {
+        @period_vring_interrupt_ret_wake_thread++;
+    }
+}
+
+// Dynamic periodic display based on @period
+interval:ms:100
 {
-    $elapsed = (nsecs - @start_time) / 1000000000;
-    printf("Progress: %d seconds, period histograms (last 10s):\n", $elapsed);
+    $current_time = nsecs;
+    $period_ns = (uint64)@period * 1000000000;
     
-    // Show period histograms if there's data
-    if (@period_virtnet_poll_calls > 0) {
-        printf("\nVIRTNET_POLL return values (last 10s):\n");
-        print(@period_virtnet_poll_ret);
+    // Check if it's time for periodic display
+    if ($current_time >= (@last_period_time + $period_ns)) {
+        @last_period_time = $current_time;
+        
+        $elapsed = ($current_time - @start_time) / 1000000000;
+        time("%H:%M:%S ");
+        printf("Progress: %d seconds, period stats (last %d seconds):\n", $elapsed, @period);
+    
+        // === INTERRUPT STATISTICS ===
+        printf("\n--- INTERRUPT STATISTICS ---\n");
+        
+        printf("IRQ Handler Entry counts:\n");
+        print(@period_irq_entry);
+        
+        printf("IRQ Handler Exit return values:\n");
+        print(@period_irq_exit_ret);
+        
+        printf("vring_interrupt statistics:\n");
+        printf("  Total calls: %d\n", @period_vring_interrupt_calls);
+        if (@period_vring_interrupt_calls > 0) {
+            printf("  Calls per IRQ:\n");
+            print(@period_vring_interrupt_irq);
+        }
+        printf("  Return values (raw):\n");
+        print(@period_vring_interrupt_returns);
+        printf("  IRQ_NONE (0): %d\n", @period_vring_interrupt_ret_none);
+        printf("  IRQ_HANDLED (1): %d\n", @period_vring_interrupt_ret_handled);
+        printf("  IRQ_WAKE_THREAD (2): %d\n", @period_vring_interrupt_ret_wake_thread);
+    
+        // === RX PATH HISTOGRAMS ===  
+        printf("\n--- RX PATH HISTOGRAMS ---\n");
+        
+        if (@period_virtnet_poll_calls > 0) {
+            printf("VIRTNET_POLL return values:\n");
+            print(@period_virtnet_poll_ret);
+        }
+        
+        if (@period_enable_cb_calls > 0) {
+            printf("ENABLE_CB_PREPARE return values:\n");
+            print(@period_enable_cb_ret);
+        }
+        
+        if (@period_napi_complete_calls > 0) {
+            printf("NAPI_COMPLETE return values:\n");
+            print(@period_napi_complete_ret);
+        }
+        
+        if (@period_virtqueue_poll_calls > 0) {
+            printf("VIRTQUEUE_POLL return values:\n");
+            print(@period_virtqueue_poll_ret);
+        }
+        
+        if (@period_enable_cb_delayed_calls > 0) {
+            printf("ENABLE_CB_DELAYED return values:\n");
+            print(@period_enable_cb_delayed_ret);
+            printf("ENABLE_CB_DELAYED last_used_idx:\n");
+            print(@period_enable_cb_delayed_last_used);
+        }
+        
+        if (@period_get_buf_ctx_calls > 0) {
+            printf("GET_BUF_CTX last_used_idx:\n");
+            print(@period_get_buf_ctx_last_used);
+        }
+        
+        printf("\n");
+        
+        // Reset period counters
+        @period_virtnet_poll_calls = 0;
+        @period_virtnet_poll_productive = 0;
+        @period_virtnet_poll_total_packets = 0;
+        @period_enable_cb_calls = 0;
+        @period_napi_complete_calls = 0;
+        @period_napi_complete_success = 0;
+        @period_virtqueue_poll_calls = 0;
+        @period_virtqueue_poll_data_available = 0;
+        @period_enable_cb_delayed_calls = 0;
+        @period_enable_cb_delayed_data_available = 0;
+        @period_get_buf_ctx_calls = 0;
+        
+        // Clear period histograms
+        clear(@period_virtnet_poll_ret);
+        clear(@period_enable_cb_ret);
+        clear(@period_napi_complete_ret);
+        clear(@period_virtqueue_poll_ret);
+        clear(@period_enable_cb_delayed_ret);
+        clear(@period_enable_cb_delayed_last_used);
+        clear(@period_get_buf_ctx_last_used);
+        
+        // Clear interrupt statistics
+        clear(@period_irq_entry);
+        clear(@period_irq_exit_ret);
+        @period_vring_interrupt_calls = 0;
+        clear(@period_vring_interrupt_irq);
+        clear(@period_vring_interrupt_returns);
+        @period_vring_interrupt_ret_none = 0;
+        @period_vring_interrupt_ret_handled = 0;
+        @period_vring_interrupt_ret_wake_thread = 0;
     }
-    
-    if (@period_enable_cb_calls > 0) {
-        printf("\nENABLE_CB_PREPARE return values (last 10s):\n");
-        print(@period_enable_cb_ret);
-    }
-    
-    if (@period_napi_complete_calls > 0) {
-        printf("\nNAPI_COMPLETE return values (last 10s):\n");
-        print(@period_napi_complete_ret);
-    }
-    
-    if (@period_virtqueue_poll_calls > 0) {
-        printf("\nVIRTQUEUE_POLL return values (last 10s):\n");
-        print(@period_virtqueue_poll_ret);
-    }
-    
-    if (@period_enable_cb_delayed_calls > 0) {
-        printf("\nENABLE_CB_DELAYED return values (last 10s):\n");
-        print(@period_enable_cb_delayed_ret);
-        printf("\nENABLE_CB_DELAYED last_used_idx (last 10s):\n");
-        print(@period_enable_cb_delayed_last_used);
-    }
-    
-    if (@period_get_buf_ctx_calls > 0) {
-        printf("\nGET_BUF_CTX last_used_idx (last 10s):\n");
-        print(@period_get_buf_ctx_last_used);
-    }
-    
-    printf("\n");
-    
-    // Reset period counters
-    @period_virtnet_poll_calls = 0;
-    @period_virtnet_poll_productive = 0;
-    @period_virtnet_poll_total_packets = 0;
-    @period_enable_cb_calls = 0;
-    @period_napi_complete_calls = 0;
-    @period_napi_complete_success = 0;
-    @period_virtqueue_poll_calls = 0;
-    @period_virtqueue_poll_data_available = 0;
-    @period_enable_cb_delayed_calls = 0;
-    @period_enable_cb_delayed_data_available = 0;
-    @period_get_buf_ctx_calls = 0;
-    
-    // Clear period histograms
-    clear(@period_virtnet_poll_ret);
-    clear(@period_enable_cb_ret);
-    clear(@period_napi_complete_ret);
-    clear(@period_virtqueue_poll_ret);
-    clear(@period_enable_cb_delayed_ret);
-    clear(@period_enable_cb_delayed_last_used);
-    clear(@period_get_buf_ctx_last_used);
 }
 
 END 

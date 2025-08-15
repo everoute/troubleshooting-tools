@@ -42,6 +42,7 @@ bpf_text = """
 #include <linux/if_tun.h>
 #include <linux/vhost.h>
 #include <linux/virtio_net.h>
+#include <linux/virtio_ring.h>
 
 #define NETDEV_ALIGN 32
 #define MAX_QUEUES 256
@@ -298,7 +299,7 @@ struct queue_event {
     char dev_name[16];
     
     // Event type
-    u8 event_type;  // 1=tun_xmit, 2=handle_rx, 3=tun_recvmsg, 4=vhost_signal
+    u8 event_type;  // 1=tun_xmit, 2=handle_rx, 3=tun_recvmsg, 4=vhost_signal, 5=vhost_notify
     
     // Event-specific data
     u64 skb_ptr;
@@ -308,10 +309,6 @@ struct queue_event {
     u64 tx_nvq_ptr;
     int rx_busyloop_timeout;
     int tx_busyloop_timeout;
-    
-    // vhost_signal parameters
-    u64 signal_param3;
-    u64 signal_param4;
     
     // Packet info (from tun_xmit)
     u32 saddr;
@@ -329,6 +326,13 @@ struct queue_event {
     
     // Return values
     int ret_val;
+    
+    // vhost_notify specific
+    bool has_event_idx_feature;
+    u16 avail_flags;        // Guest avail ring flags (from guest memory)
+    u16 used_event_idx;     // Guest used event index (from guest memory, if EVENT_IDX enabled)
+    bool guest_flags_valid; // Whether we successfully read guest flags
+    bool guest_event_valid; // Whether we successfully read event idx
     
     // VHOST virtqueue state (for handle_rx and vhost_signal)
     u16 last_avail_idx;
@@ -705,8 +709,6 @@ int trace_tun_recvmsg_return(struct pt_regs *ctx) {
 int trace_vhost_signal(struct pt_regs *ctx) {
     void *dev = (void *)PT_REGS_PARM1(ctx);
     struct vhost_virtqueue *vq = (struct vhost_virtqueue *)PT_REGS_PARM2(ctx);
-    u64 param3 = (u64)PT_REGS_PARM3(ctx);
-    u64 param4 = (u64)PT_REGS_PARM4(ctx);
     
     if (!vq) return 0;
     
@@ -746,14 +748,137 @@ int trace_vhost_signal(struct pt_regs *ctx) {
     event.queue_index = qkey->queue_index;
     __builtin_memcpy(event.dev_name, qkey->dev_name, sizeof(event.dev_name));
     event.vq_ptr = (u64)vq;
-    event.signal_param3 = param3;
-    event.signal_param4 = param4;
     
     // Get vhost virtqueue state
     get_vhost_vq_state(vq, &event);
     
     // Try to get the container vhost_net_virtqueue (this is tricky)
     // For now, we'll skip nvq state since we don't have easy access to it
+    
+    events.perf_submit(ctx, &event, sizeof(event));
+    return 0;
+}
+
+// Stage 6: vhost_notify - Track notification decisions
+#define VIRTIO_RING_F_EVENT_IDX 29
+
+int trace_vhost_notify_return(struct pt_regs *ctx) {
+    // Get return value (bool)
+    int ret = PT_REGS_RC(ctx);
+    
+    // Need to get the vq pointer from entry probe
+    // For simplicity, we'll use a map to track entry parameters
+    return 0;
+}
+
+// Map to store vhost_notify entry parameters
+BPF_HASH(vhost_notify_params, u64, struct vhost_virtqueue*, 256);
+
+int trace_vhost_notify_entry(struct pt_regs *ctx) {
+    struct vhost_dev *dev = (struct vhost_dev *)PT_REGS_PARM1(ctx);
+    struct vhost_virtqueue *vq = (struct vhost_virtqueue *)PT_REGS_PARM2(ctx);
+    
+    if (!vq) return 0;
+    
+    // Get sock pointer from private_data using READ_FIELD  
+    void *private_data = NULL;
+    READ_FIELD(&private_data, vq, private_data);
+    
+    u64 sock_ptr = (u64)private_data;
+    
+    // Check if this is our target queue (ONLY sock-based filtering)
+    struct queue_key *qkey = target_queues.lookup(&sock_ptr);
+    if (!qkey) {
+        return 0;  // Not our target queue
+    }
+    
+    // Store vq pointer for return probe
+    u64 tid = bpf_get_current_pid_tgid();
+    vhost_notify_params.update(&tid, &vq);
+    
+    return 0;
+}
+
+int trace_vhost_notify_return2(struct pt_regs *ctx) {
+    u64 tid = bpf_get_current_pid_tgid();
+    
+    // Get vq from entry probe
+    struct vhost_virtqueue **vq_ptr = vhost_notify_params.lookup(&tid);
+    if (!vq_ptr || !*vq_ptr) {
+        return 0;
+    }
+    
+    struct vhost_virtqueue *vq = *vq_ptr;
+    vhost_notify_params.delete(&tid);
+    
+    // Get sock pointer from private_data using READ_FIELD  
+    void *private_data = NULL;
+    READ_FIELD(&private_data, vq, private_data);
+    
+    u64 sock_ptr = (u64)private_data;
+    
+    // Check if this is our target queue (ONLY sock-based filtering)
+    struct queue_key *qkey = target_queues.lookup(&sock_ptr);
+    if (!qkey) {
+        return 0;  // Not our target queue
+    }
+    
+    // Create event
+    struct queue_event event = {};
+    event.timestamp = bpf_ktime_get_ns();
+    event.pid = tid >> 32;
+    event.tid = tid & 0xFFFFFFFF;
+    bpf_get_current_comm(&event.comm, sizeof(event.comm));
+    event.event_type = 5;  // vhost_notify
+    
+    event.sock_ptr = sock_ptr;
+    event.queue_index = qkey->queue_index;
+    __builtin_memcpy(event.dev_name, qkey->dev_name, sizeof(event.dev_name));
+    event.vq_ptr = (u64)vq;
+    
+    // Get return value
+    event.ret_val = PT_REGS_RC(ctx);
+    
+    // Get vhost virtqueue state
+    get_vhost_vq_state(vq, &event);
+    
+    // Check if VIRTIO_RING_F_EVENT_IDX is supported
+    u64 acked_features = 0;
+    READ_FIELD(&acked_features, vq, acked_features);
+    event.has_event_idx_feature = (acked_features & (1ULL << VIRTIO_RING_F_EVENT_IDX)) != 0;
+    
+    // Try to read avail flags from guest memory
+    struct vring_avail *avail = NULL;
+    READ_FIELD(&avail, vq, avail);
+    if (avail) {
+        __virtio16 flags = 0;
+        // Read from user space (guest memory)
+        if (bpf_probe_read_user(&flags, sizeof(flags), &avail->flags) == 0) {
+            event.avail_flags = flags;
+            event.guest_flags_valid = true;
+        }
+    }
+    
+    // If EVENT_IDX is enabled, try to read used_event_idx from guest memory
+    if (event.has_event_idx_feature) {
+        // vhost_used_event(vq) = &vq->avail->ring[vq->num]
+        // This is the used_event field in the avail ring
+        unsigned int num = 0;
+        READ_FIELD(&num, vq, num);
+        
+        if (avail && num > 0) {
+            // Calculate the address of used_event_idx
+            // It's located after the ring array: avail->ring[num]
+            __virtio16 *used_event_ptr = (__virtio16 *)((char *)avail + 
+                                          offsetof(struct vring_avail, ring) + 
+                                          num * sizeof(__virtio16));
+            __virtio16 used_event = 0;
+            if (bpf_probe_read_user(&used_event, sizeof(used_event), used_event_ptr) == 0) {
+                event.used_event_idx = used_event;
+                event.guest_event_valid = true;
+            }
+        }
+    }
     
     events.perf_submit(ctx, &event, sizeof(event));
     return 0;
@@ -784,8 +909,6 @@ class QueueEvent(ct.Structure):
         ("tx_nvq_ptr", ct.c_uint64),
         ("rx_busyloop_timeout", ct.c_int),
         ("tx_busyloop_timeout", ct.c_int),
-        ("signal_param3", ct.c_uint64),
-        ("signal_param4", ct.c_uint64),
         ("saddr", ct.c_uint32),
         ("daddr", ct.c_uint32),
         ("sport", ct.c_uint16),
@@ -797,6 +920,11 @@ class QueueEvent(ct.Structure):
         ("consumer_tail", ct.c_uint32),
         ("ring_full", ct.c_uint32),
         ("ret_val", ct.c_int),
+        ("has_event_idx_feature", ct.c_bool),
+        ("avail_flags", ct.c_uint16),
+        ("used_event_idx", ct.c_uint16),
+        ("guest_flags_valid", ct.c_bool),
+        ("guest_event_valid", ct.c_bool),
         # VHOST virtqueue state
         ("last_avail_idx", ct.c_uint16),
         ("avail_idx", ct.c_uint16),
@@ -834,12 +962,13 @@ def print_event(cpu, data, size):
         1: "tun_net_xmit",
         2: "handle_rx",
         3: "tun_recvmsg",
-        4: "vhost_signal"
+        4: "vhost_signal",
+        5: "vhost_notify"
     }
     
     print("="*80)
-    print("Event: {} | Time: {} | Timestamp: {}ns".format(
-        event_names.get(event.event_type, "unknown"), timestamp_str, event.timestamp))
+    print("Event: {} | Time: {}".format(
+        event_names.get(event.event_type, "unknown"), timestamp_str))
     print("Queue: {} | Device: {} | Process: {} (PID: {})".format(
         event.queue_index, event.dev_name.decode('utf-8', 'replace'),
         event.comm.decode('utf-8', 'replace'), event.pid))
@@ -875,7 +1004,7 @@ def print_event(cpu, data, size):
         if event.rx_ring_ptr:
             print("PTR Ring: 0x{:x}".format(event.rx_ring_ptr))
     elif event.event_type == 4:  # vhost_signal
-        print("VQ: 0x{:x} | Param3: 0x{:x} | Param4: 0x{:x}".format(event.vq_ptr, event.signal_param3, event.signal_param4))
+        print("VQ: 0x{:x}".format(event.vq_ptr))
         print("VQ State: avail_idx={}, last_avail={}, last_used={}, used_flags=0x{:x}".format(
             event.avail_idx, event.last_avail_idx, event.last_used_idx, event.used_flags))
         print("Signal: signalled_used={}, valid={}, log_used={}".format(
@@ -885,6 +1014,27 @@ def print_event(cpu, data, size):
             event.acked_features, event.acked_backend_features))
         if event.log_used and event.log_addr:
             print("Log: addr=0x{:x}".format(event.log_addr))
+    elif event.event_type == 5:  # vhost_notify
+        print("VQ: 0x{:x} | Return: {} (notify={})".format(
+            event.vq_ptr, event.ret_val, "YES" if event.ret_val else "NO"))
+        print("VQ State: avail_idx={}, last_avail={}, last_used={}, used_flags=0x{:x}".format(
+            event.avail_idx, event.last_avail_idx, event.last_used_idx, event.used_flags))
+        print("Features: acked=0x{:x}, backend=0x{:x}, EVENT_IDX={}".format(
+            event.acked_features, event.acked_backend_features,
+            "ENABLED" if event.has_event_idx_feature else "DISABLED"))
+        # Guest memory fields
+        if event.guest_flags_valid:
+            no_interrupt = (event.avail_flags & 0x1) != 0  # VRING_AVAIL_F_NO_INTERRUPT = 1
+            print("Guest avail_flags: 0x{:x} (NO_INTERRUPT={})".format(
+                event.avail_flags, "YES" if no_interrupt else "NO"))
+        else:
+            print("Guest avail_flags: <failed to read>")
+        
+        if event.has_event_idx_feature and event.guest_event_valid:
+            print("Guest used_event_idx: {} (host last_used={})".format(
+                event.used_event_idx, event.last_used_idx))
+        elif event.has_event_idx_feature:
+            print("Guest used_event_idx: <failed to read>")
     
     # Show ptr_ring state if available
     if event.ptr_ring_size > 0:
@@ -937,7 +1087,33 @@ Examples:
         b.attach_kprobe(event="handle_rx", fn_name="trace_handle_rx")
         b.attach_kprobe(event="tun_recvmsg", fn_name="trace_tun_recvmsg_entry")
         b.attach_kretprobe(event="tun_recvmsg", fn_name="trace_tun_recvmsg_return")
-        b.attach_kprobe(event="vhost_add_used_and_signal_n", fn_name="trace_vhost_signal")
+        b.attach_kprobe(event="vhost_signal", fn_name="trace_vhost_signal")
+        
+        # Try to attach vhost_notify - it might be inlined with .isra suffix
+        vhost_notify_attached = False
+        try:
+            b.attach_kprobe(event="vhost_notify", fn_name="trace_vhost_notify_entry")
+            b.attach_kretprobe(event="vhost_notify", fn_name="trace_vhost_notify_return2")
+            vhost_notify_attached = True
+            if args.verbose:
+                print("Attached to vhost_notify")
+        except:
+            # Try with .isra suffix (common for inlined functions)
+            for suffix in [".isra.24", ".isra.23", ".isra.25", ".isra.26", ".isra.27", ".isra.28"]:
+                try:
+                    event_name = "vhost_notify" + suffix
+                    b.attach_kprobe(event=event_name, fn_name="trace_vhost_notify_entry")
+                    b.attach_kretprobe(event=event_name, fn_name="trace_vhost_notify_return2")
+                    vhost_notify_attached = True
+                    if args.verbose:
+                        print("Attached to {}".format(event_name))
+                    break
+                except:
+                    continue
+        
+        if not vhost_notify_attached:
+            print("Warning: Could not attach to vhost_notify (function may be inlined differently)")
+            print("Continuing without vhost_notify monitoring...")
         
         if args.verbose:
             print("All probes attached successfully")
@@ -967,7 +1143,7 @@ Examples:
     
     print("VHOST-NET Queue Correlation Monitor Started")
     print("Using sock pointer (0x...) to correlate events across stages")
-    print("Clearing target_queues and handle_rx_vqs maps to avoid stale entries")
+    print("Clearing maps to avoid stale entries")
     
     # Clear target_queues map to avoid stale entries
     target_queues_map = b["target_queues"]
@@ -976,6 +1152,11 @@ Examples:
     # Clear handle_rx_vqs map to avoid stale entries
     handle_rx_vqs_map = b["handle_rx_vqs"]
     handle_rx_vqs_map.clear()
+    
+    # Clear vhost_notify_params map to avoid stale entries (if it exists)
+    if "vhost_notify_params" in b:
+        vhost_notify_params_map = b["vhost_notify_params"]
+        vhost_notify_params_map.clear()
     
     print("Waiting for events... Press Ctrl+C to stop\n")
     

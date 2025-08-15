@@ -154,6 +154,16 @@ typedef struct kvm_vcpu_kick_hist_key {
 
 BPF_HISTOGRAM(kvm_vcpu_kick_hist, kvm_vcpu_kick_hist_key_t);
 
+// vgic_populate_lr histogram key (actual hardware LR population)
+typedef struct vgic_populate_lr_hist_key {
+    u64 kvm_ptr;
+    u32 intid;
+    u32 version;  // 2 for v2, 3 for v3
+    u64 slot;
+} vgic_populate_lr_hist_key_t;
+
+BPF_HISTOGRAM(vgic_populate_lr_hist, vgic_populate_lr_hist_key_t);
+
 // Track return values of kvm_arch_set_irq_inatomic
 struct arch_set_irq_ret_key {
     u64 kvm_ptr;
@@ -503,6 +513,86 @@ int trace_kvm_vcpu_kick(struct pt_regs *ctx) {
     
     return 0;
 }
+
+// Trace vgic_v2_populate_lr for actual hardware LR population (GICv2)
+int trace_vgic_v2_populate_lr(struct pt_regs *ctx) {
+    struct kvm_vcpu *vcpu = (struct kvm_vcpu *)PT_REGS_PARM1(ctx);
+    struct vgic_irq *irq = (struct vgic_irq *)PT_REGS_PARM2(ctx);
+    
+    if (!vcpu || !irq || (u64)vcpu < 0xffff000000000000ULL || (u64)irq < 0xffff000000000000ULL) {
+        return 0;
+    }
+    
+    // Extract KVM pointer from vcpu
+    struct kvm *kvm = NULL;
+    bpf_probe_read_kernel(&kvm, sizeof(kvm), &vcpu->kvm);
+    if (!kvm || (u64)kvm < 0xffff000000000000ULL) {
+        return 0;
+    }
+    
+    // Apply filtering based on active KVM pointers from irqfd_wakeup
+    u64 kvm_ptr_key = (u64)kvm;
+    u8 *is_active = active_kvm_ptrs.lookup(&kvm_ptr_key);
+    if (!is_active) {
+        // This KVM was not seen in irqfd_wakeup, skip it
+        return 0;
+    }
+    
+    // Extract intid from vgic_irq
+    u32 intid = 0;
+    bpf_probe_read_kernel(&intid, sizeof(intid), &irq->intid);
+    
+    // Record to vgic_populate_lr histogram
+    vgic_populate_lr_hist_key_t hist_key = {};
+    hist_key.kvm_ptr = (u64)kvm;
+    hist_key.intid = intid;
+    hist_key.version = 2;  // GICv2
+    hist_key.slot = 0;
+    
+    vgic_populate_lr_hist.atomic_increment(hist_key);
+    
+    return 0;
+}
+
+// Trace vgic_v3_populate_lr for actual hardware LR population (GICv3)
+int trace_vgic_v3_populate_lr(struct pt_regs *ctx) {
+    struct kvm_vcpu *vcpu = (struct kvm_vcpu *)PT_REGS_PARM1(ctx);
+    struct vgic_irq *irq = (struct vgic_irq *)PT_REGS_PARM2(ctx);
+    
+    if (!vcpu || !irq || (u64)vcpu < 0xffff000000000000ULL || (u64)irq < 0xffff000000000000ULL) {
+        return 0;
+    }
+    
+    // Extract KVM pointer from vcpu
+    struct kvm *kvm = NULL;
+    bpf_probe_read_kernel(&kvm, sizeof(kvm), &vcpu->kvm);
+    if (!kvm || (u64)kvm < 0xffff000000000000ULL) {
+        return 0;
+    }
+    
+    // Apply filtering based on active KVM pointers from irqfd_wakeup
+    u64 kvm_ptr_key = (u64)kvm;
+    u8 *is_active = active_kvm_ptrs.lookup(&kvm_ptr_key);
+    if (!is_active) {
+        // This KVM was not seen in irqfd_wakeup, skip it
+        return 0;
+    }
+    
+    // Extract intid from vgic_irq
+    u32 intid = 0;
+    bpf_probe_read_kernel(&intid, sizeof(intid), &irq->intid);
+    
+    // Record to vgic_populate_lr histogram
+    vgic_populate_lr_hist_key_t hist_key = {};
+    hist_key.kvm_ptr = (u64)kvm;
+    hist_key.intid = intid;
+    hist_key.version = 3;  // GICv3
+    hist_key.slot = 0;
+    
+    vgic_populate_lr_hist.atomic_increment(hist_key);
+    
+    return 0;
+}
 """
 
 class HistKey(ct.Structure):
@@ -576,6 +666,14 @@ class KvmVcpuKickHistKey(ct.Structure):
         ("slot", ct.c_uint64),
     ]
 
+class VgicPopulateLrHistKey(ct.Structure):
+    _fields_ = [
+        ("kvm_ptr", ct.c_uint64),
+        ("intid", ct.c_uint32),
+        ("version", ct.c_uint32),
+        ("slot", ct.c_uint64),
+    ]
+
 class FilterParams(ct.Structure):
     _fields_ = [
         ("qemu_pid", ct.c_uint32),
@@ -620,6 +718,7 @@ def print_histogram_stats(b):
         'total_kvm_set_msi': 0,
         'total_vgic_queue': 0,
         'total_vcpu_kick': 0,
+        'total_populate_lr': 0,
         'queues': defaultdict(lambda: {
             'count': 0,
             'arch_set_irq_count': 0,
@@ -644,7 +743,10 @@ def print_histogram_stats(b):
         }),
         'kvm_set_msi_by_gsi': defaultdict(int),
         'vgic_queue_by_intid': defaultdict(int),
-        'vcpu_kick_by_vcpuid': defaultdict(int)
+        'vcpu_kick_by_vcpuid': defaultdict(int),
+        'populate_lr_by_intid': defaultdict(int),
+        'populate_lr_v2_count': 0,
+        'populate_lr_v3_count': 0
     })
     
     total_interrupts = 0
@@ -779,6 +881,29 @@ def print_histogram_stats(b):
         vm_stat['total_vcpu_kick'] += count
         vm_stat['vcpu_kick_by_vcpuid'][vcpu_id] += count
     
+    # Process vgic_populate_lr histogram (actual hardware LR population)
+    populate_lr_table = b["vgic_populate_lr_hist"]
+    total_populate_lr = 0
+    
+    for k, v in populate_lr_table.items():
+        if v.value == 0:
+            continue
+        kvm_ptr = k.kvm_ptr
+        intid = k.intid
+        version = k.version
+        count = v.value
+        
+        total_populate_lr += count
+        
+        vm_stat = vm_stats[kvm_ptr]
+        vm_stat['total_populate_lr'] += count
+        vm_stat['populate_lr_by_intid'][intid] += count
+        
+        if version == 2:
+            vm_stat['populate_lr_v2_count'] += count
+        elif version == 3:
+            vm_stat['populate_lr_v3_count'] += count
+    
     # Process kvm_arch_set_irq_inatomic return statistics
     arch_ret_table = b["arch_set_irq_ret_stats"]
     for k, v in arch_ret_table.items():
@@ -801,6 +926,7 @@ def print_histogram_stats(b):
     print("  Total kvm_set_msi calls: {}".format(total_kvm_set_msi))
     print("  Total vgic_queue_irq_unlock calls: {}".format(total_vgic_queue))
     print("  Total kvm_vcpu_kick calls: {}".format(total_vcpu_kick))
+    print("  Total vgic_populate_lr calls (actual injection): {}".format(total_populate_lr))
     
     # Show target VM analysis
     target_kvm = 0xffffb28da688d000
@@ -812,6 +938,7 @@ def print_histogram_stats(b):
         print("    kvm_set_msi: {}".format(target_vm_stat['total_kvm_set_msi']))
         print("    vgic_queue: {}".format(target_vm_stat['total_vgic_queue']))
         print("    vcpu_kick: {}".format(target_vm_stat['total_vcpu_kick']))
+        print("    populate_lr (actual injection): {}".format(target_vm_stat['total_populate_lr']))
         
         if target_vm_stat['arch_set_irq_ret_stats']:
             print("    Arch set_irq results by GSI:")
@@ -862,6 +989,15 @@ def print_histogram_stats(b):
             vm_stat['total_vcpu_kick'],
             vm_stat['total_vcpu_kick'] / interval if interval > 0 else 0
         ))
+        print("   populate_lr calls (actual injection): {} ({:.2f}/sec)".format(
+            vm_stat['total_populate_lr'],
+            vm_stat['total_populate_lr'] / interval if interval > 0 else 0
+        ))
+        if vm_stat['populate_lr_v2_count'] > 0 or vm_stat['populate_lr_v3_count'] > 0:
+            print("     GICv2: {}, GICv3: {}".format(
+                vm_stat['populate_lr_v2_count'],
+                vm_stat['populate_lr_v3_count']
+            ))
         print("   Threads with interrupts in this interval: {}".format(active_threads))
         
         if vm_stat['first_time'] and vm_stat['last_time']:
@@ -938,6 +1074,14 @@ def print_histogram_stats(b):
                     rate = count / interval if interval > 0 else 0
                     print("     VCPU {}: {} kicks ({:.2f}/sec)".format(vcpu_id, count, rate))
         
+        # Display vgic_populate_lr statistics by intid (actual injection)
+        if vm_stat['populate_lr_by_intid']:
+            print("   vgic_populate_lr breakdown by intid (actual hardware injection):")
+            for intid, count in sorted(vm_stat['populate_lr_by_intid'].items()):
+                if count > 0:
+                    rate = count / interval if interval > 0 else 0
+                    print("     intid {}: {} injections ({:.2f}/sec)".format(intid, count, rate))
+        
         print()
     
     # Clear histograms for next round of statistics
@@ -947,6 +1091,7 @@ def print_histogram_stats(b):
     kvm_set_msi_table.clear()
     vgic_queue_table.clear()
     vcpu_kick_table.clear()
+    populate_lr_table.clear()
     # Keep active_kvm_gsi and active_kvm_ptrs for cross-reference
     
     last_print_time = current_time
@@ -977,6 +1122,20 @@ def main():
         print("Successfully attached to vgic_queue_irq_unlock")
         b.attach_kprobe(event="kvm_vcpu_kick", fn_name="trace_kvm_vcpu_kick")
         print("Successfully attached to kvm_vcpu_kick")
+        
+        # Try to attach both GICv2 and GICv3 populate_lr functions
+        # Only one will typically succeed depending on the system configuration
+        try:
+            b.attach_kprobe(event="vgic_v2_populate_lr", fn_name="trace_vgic_v2_populate_lr")
+            print("Successfully attached to vgic_v2_populate_lr")
+        except:
+            print("Note: vgic_v2_populate_lr not available (system may use GICv3)")
+        
+        try:
+            b.attach_kprobe(event="vgic_v3_populate_lr", fn_name="trace_vgic_v3_populate_lr")
+            print("Successfully attached to vgic_v3_populate_lr")
+        except:
+            print("Note: vgic_v3_populate_lr not available (system may use GICv2)")
     except Exception as e:
         print("Loading failed: {}".format(e))
         return
@@ -1020,7 +1179,9 @@ def main():
     print("  - Fixed vhost PID and COMM filtering issues")
     print("  - Periodic statistics histogram output")
     print("  - Call source analysis with irqfd_wakeup parameter tracking")
-    print("  - Complete interrupt chain tracking: irqfd_wakeup -> kvm_arch_set_irq_inatomic -> kvm_set_msi -> vgic_queue_irq_unlock -> kvm_vcpu_kick")
+    print("  - Complete ARM interrupt chain tracking:")
+    print("    irqfd_wakeup -> kvm_arch_set_irq_inatomic -> kvm_set_msi -> vgic_queue_irq_unlock")
+    print("    -> kvm_vcpu_kick -> vgic_v2/v3_populate_lr (actual hardware injection)")
     print("  - Ultra-high performance, suitable for high-frequency scenarios")
     
     # Display filter conditions

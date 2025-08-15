@@ -1,0 +1,429 @@
+#!/usr/bin/env bpftrace
+
+/*
+ * VM RX Simple Statistics - Basic return value tracking
+ * 
+ * Tracks return values for key virtio network RX functions:
+ * - virtnet_poll: packets processed per call
+ * - virtqueue_enable_cb_prepare: queue status  
+ * - napi_complete_done: completion status
+ * - virtqueue_poll: available items
+ * - virtqueue_enable_cb_delayed: delayed callback setup
+ * - virtqueue_get_buf_ctx: buffer retrieval
+ *
+ * Usage: sudo bpftrace vm-rx-simple-stats.bt [duration_seconds]
+ */
+
+#include <linux/virtio.h>
+#include <linux/virtio_ring.h>
+
+// Define vring_virtqueue structure needed for accessing last_used_idx
+struct vring_desc_state {
+    void *data;
+    struct vring_desc *indir_desc;
+};
+
+struct vring_virtqueue {
+    struct virtqueue vq;
+    
+    // Actual memory layout for this queue
+    struct vring vring;
+    
+    // Can we use weak barriers?
+    bool weak_barriers;
+    
+    // Other side has made a mess, don't try any more.
+    bool broken;
+    
+    // Host supports indirect buffers
+    bool indirect;
+    
+    // Host publishes avail event idx
+    bool event;
+    
+    // Head of free buffer list.
+    unsigned int free_head;
+    // Number we've added since last sync.
+    unsigned int num_added;
+    
+    // Last used index we've seen.
+    u16 last_used_idx;
+    
+    // Last written value to avail->flags
+    u16 avail_flags_shadow;
+    
+    // Last written value to avail->idx in guest byte order
+    u16 avail_idx_shadow;
+    
+    // How to notify other side
+    bool (*notify)(struct virtqueue *vq);
+    
+    // DMA, allocation, and size information
+    bool we_own_ring;
+    size_t queue_size_in_bytes;
+    dma_addr_t queue_dma_addr;
+    
+    // Per-descriptor state.
+    struct vring_desc_state desc_state[];
+};
+
+BEGIN 
+{
+    if ($1 > 0) {
+        @duration = $1;
+        printf("VM RX Statistics - Running for %d seconds\n", @duration);
+        @end_time = nsecs + ((uint64)@duration * 1000000000);
+    } else {
+        @duration = 0;
+        printf("VM RX Statistics - Running until Ctrl+C\n");
+    }
+    
+    printf("Collecting RX path function statistics...\n\n");
+    @start_time = nsecs;
+}
+
+// virtnet_poll - main NAPI poll function
+kretprobe:virtnet_poll
+{
+    @virtnet_poll_calls++;
+    @period_virtnet_poll_calls++;
+    @virtnet_poll_ret = hist(retval);
+    @period_virtnet_poll_ret = hist(retval);
+    
+    if (retval > 0) {
+        @virtnet_poll_productive++;
+        @period_virtnet_poll_productive++;
+        @virtnet_poll_total_packets += retval;
+        @period_virtnet_poll_total_packets += retval;
+    }
+    
+    if (@duration > 0 && nsecs >= @end_time) {
+        exit();
+    }
+}
+
+// virtqueue_enable_cb_prepare - prepare interrupt callback
+kretprobe:virtqueue_enable_cb_prepare
+{
+    @enable_cb_calls++;
+    @period_enable_cb_calls++;
+    @enable_cb_ret = hist(retval);
+    @period_enable_cb_ret = hist(retval);
+    
+    if (@duration > 0 && nsecs >= @end_time) {
+        exit();
+    }
+}
+
+// napi_complete_done - complete NAPI polling
+kretprobe:napi_complete_done
+{
+    @napi_complete_calls++;
+    @period_napi_complete_calls++;
+    @napi_complete_ret = hist(retval);
+    @period_napi_complete_ret = hist(retval);
+    
+    if (retval > 0) {
+        @napi_complete_success++;
+        @period_napi_complete_success++;
+    }
+    
+    if (@duration > 0 && nsecs >= @end_time) {
+        exit();
+    }
+}
+
+// virtqueue_poll - check virtqueue status
+kretprobe:virtqueue_poll
+{
+    @virtqueue_poll_calls++;
+    @period_virtqueue_poll_calls++;
+    @virtqueue_poll_ret = hist(retval);
+    @period_virtqueue_poll_ret = hist(retval);
+    
+    if (retval > 0) {
+        @virtqueue_poll_data_available++;
+        @period_virtqueue_poll_data_available++;
+    }
+    
+    if (@duration > 0 && nsecs >= @end_time) {
+        exit();
+    }
+}
+
+// virtqueue_enable_cb_delayed - delayed callback setup
+kprobe:virtqueue_enable_cb_delayed
+{
+    // Cast to the virtqueue structure pointer
+    $vq = (struct vring_virtqueue *)arg0;
+    
+    // Directly access last_used_idx field from the structure
+    // The vring_virtqueue structure has last_used_idx field
+    $last_used_idx = $vq->last_used_idx;
+    
+    @enable_cb_delayed_calls++;
+    @period_enable_cb_delayed_calls++;
+    @enable_cb_delayed_last_used = hist($last_used_idx);
+    @period_enable_cb_delayed_last_used = hist($last_used_idx);
+    
+    if (@duration > 0 && nsecs >= @end_time) {
+        exit();
+    }
+}
+
+kretprobe:virtqueue_enable_cb_delayed
+{
+    @enable_cb_delayed_ret = hist(retval);
+    @period_enable_cb_delayed_ret = hist(retval);
+    
+    if (retval > 0) {
+        @enable_cb_delayed_data_available++;
+        @period_enable_cb_delayed_data_available++;
+    }
+    
+    if (@duration > 0 && nsecs >= @end_time) {
+        exit();
+    }
+}
+
+// virtqueue_get_buf_ctx - buffer retrieval
+kprobe:virtqueue_get_buf_ctx
+{
+    // Cast to the virtqueue structure pointer
+    $vq = (struct vring_virtqueue *)arg0;
+    
+    // Directly access last_used_idx field from the structure
+    $last_used_idx = $vq->last_used_idx;
+    
+    @get_buf_ctx_calls++;
+    @period_get_buf_ctx_calls++;
+    @get_buf_ctx_last_used = hist($last_used_idx);
+    @period_get_buf_ctx_last_used = hist($last_used_idx);
+    
+    if (@duration > 0 && nsecs >= @end_time) {
+        exit();
+    }
+}
+
+// Progress indicator every 10 seconds
+interval:s:10
+{
+    $elapsed = (nsecs - @start_time) / 1000000000;
+    printf("Progress: %d seconds, period histograms (last 10s):\n", $elapsed);
+    
+    // Show period histograms if there's data
+    if (@period_virtnet_poll_calls > 0) {
+        printf("\nVIRTNET_POLL return values (last 10s):\n");
+        print(@period_virtnet_poll_ret);
+    }
+    
+    if (@period_enable_cb_calls > 0) {
+        printf("\nENABLE_CB_PREPARE return values (last 10s):\n");
+        print(@period_enable_cb_ret);
+    }
+    
+    if (@period_napi_complete_calls > 0) {
+        printf("\nNAPI_COMPLETE return values (last 10s):\n");
+        print(@period_napi_complete_ret);
+    }
+    
+    if (@period_virtqueue_poll_calls > 0) {
+        printf("\nVIRTQUEUE_POLL return values (last 10s):\n");
+        print(@period_virtqueue_poll_ret);
+    }
+    
+    if (@period_enable_cb_delayed_calls > 0) {
+        printf("\nENABLE_CB_DELAYED return values (last 10s):\n");
+        print(@period_enable_cb_delayed_ret);
+        printf("\nENABLE_CB_DELAYED last_used_idx (last 10s):\n");
+        print(@period_enable_cb_delayed_last_used);
+    }
+    
+    if (@period_get_buf_ctx_calls > 0) {
+        printf("\nGET_BUF_CTX last_used_idx (last 10s):\n");
+        print(@period_get_buf_ctx_last_used);
+    }
+    
+    printf("\n");
+    
+    // Reset period counters
+    @period_virtnet_poll_calls = 0;
+    @period_virtnet_poll_productive = 0;
+    @period_virtnet_poll_total_packets = 0;
+    @period_enable_cb_calls = 0;
+    @period_napi_complete_calls = 0;
+    @period_napi_complete_success = 0;
+    @period_virtqueue_poll_calls = 0;
+    @period_virtqueue_poll_data_available = 0;
+    @period_enable_cb_delayed_calls = 0;
+    @period_enable_cb_delayed_data_available = 0;
+    @period_get_buf_ctx_calls = 0;
+    
+    // Clear period histograms
+    clear(@period_virtnet_poll_ret);
+    clear(@period_enable_cb_ret);
+    clear(@period_napi_complete_ret);
+    clear(@period_virtqueue_poll_ret);
+    clear(@period_enable_cb_delayed_ret);
+    clear(@period_enable_cb_delayed_last_used);
+    clear(@period_get_buf_ctx_last_used);
+}
+
+END 
+{
+    $elapsed = (nsecs - @start_time) / 1000000000;
+    printf("\n");
+    printf("============================================================\n");
+    printf("VM RX PATH STATISTICS SUMMARY\n");
+    printf("Collection time: %d seconds\n", $elapsed);
+    printf("============================================================\n");
+    
+    // virtnet_poll results
+    printf("\nVIRTNET_POLL (NAPI polling):\n");
+    if (@virtnet_poll_calls > 0) {
+        printf("  Total calls: %d\n", @virtnet_poll_calls);
+        printf("  Productive calls: %d\n", @virtnet_poll_productive);
+        printf("  Empty polls: %d\n", @virtnet_poll_calls - @virtnet_poll_productive);
+        
+        if (@virtnet_poll_productive > 0) {
+            $productive_rate = (((uint64)@virtnet_poll_productive * 100) / (uint64)@virtnet_poll_calls);
+            printf("  Productive rate: %d%%\n", $productive_rate);
+        }
+        
+        if (@virtnet_poll_total_packets > 0) {
+            printf("  Total packets processed: %d\n", @virtnet_poll_total_packets);
+            $avg_packets = (uint64)@virtnet_poll_total_packets / (uint64)@virtnet_poll_productive;
+            printf("  Avg packets per productive call: %d\n", $avg_packets);
+            
+            if ($elapsed > 0) {
+                $pps = @virtnet_poll_total_packets / $elapsed;
+                printf("  Processing rate: %d packets/sec\n", $pps);
+            }
+        }
+        
+        printf("\n  Return value distribution (packets per call):\n");
+        print(@virtnet_poll_ret);
+    } else {
+        printf("  No calls observed\n");
+    }
+    
+    // virtqueue_enable_cb_prepare results
+    printf("\nVIRTQUEUE_ENABLE_CB_PREPARE (interrupt setup):\n");
+    if (@enable_cb_calls > 0) {
+        printf("  Total calls: %d\n", @enable_cb_calls);
+        
+        printf("\n  Return value distribution (queue status):\n");
+        print(@enable_cb_ret);
+    } else {
+        printf("  No calls observed\n");
+    }
+    
+    // napi_complete_done results  
+    printf("\nNAPI_COMPLETE_DONE (NAPI completion):\n");
+    if (@napi_complete_calls > 0) {
+        printf("  Total calls: %d\n", @napi_complete_calls);
+        printf("  Successful completions: %d\n", @napi_complete_success);
+        printf("  Failed completions: %d\n", @napi_complete_calls - @napi_complete_success);
+        
+        if (@napi_complete_calls > 0) {
+            $success_rate = (((uint64)@napi_complete_success * 100) / (uint64)@napi_complete_calls);
+            printf("  Success rate: %d%%\n", $success_rate);
+        }
+        
+        printf("\n  Return value distribution:\n");
+        print(@napi_complete_ret);
+    } else {
+        printf("  No calls observed\n");
+    }
+    
+    // virtqueue_poll results
+    printf("\nVIRTQUEUE_POLL (queue status check):\n");
+    if (@virtqueue_poll_calls > 0) {
+        printf("  Total calls: %d\n", @virtqueue_poll_calls);
+        printf("  Calls with data available: %d\n", @virtqueue_poll_data_available);
+        printf("  Calls with empty queue: %d\n", @virtqueue_poll_calls - @virtqueue_poll_data_available);
+        
+        if (@virtqueue_poll_calls > 0) {
+            $data_rate = (((uint64)@virtqueue_poll_data_available * 100) / (uint64)@virtqueue_poll_calls);
+            printf("  Data available rate: %d%%\n", $data_rate);
+        }
+        
+        printf("\n  Return value distribution (available items):\n");
+        print(@virtqueue_poll_ret);
+    } else {
+        printf("  No calls observed\n");
+    }
+    
+    // virtqueue_enable_cb_delayed results
+    printf("\nVIRTQUEUE_ENABLE_CB_DELAYED (delayed callback setup):\n");
+    if (@enable_cb_delayed_calls > 0) {
+        printf("  Total calls: %d\n", @enable_cb_delayed_calls);
+        printf("  Calls with data available: %d\n", @enable_cb_delayed_data_available);
+        printf("  Calls with empty queue: %d\n", @enable_cb_delayed_calls - @enable_cb_delayed_data_available);
+        
+        if (@enable_cb_delayed_calls > 0) {
+            $data_rate = (((uint64)@enable_cb_delayed_data_available * 100) / (uint64)@enable_cb_delayed_calls);
+            printf("  Data available rate: %d%%\n", $data_rate);
+        }
+        
+        printf("\n  last_used_idx distribution:\n");
+        print(@enable_cb_delayed_last_used);
+        
+        printf("\n  Return value distribution (queue status):\n");
+        print(@enable_cb_delayed_ret);
+    } else {
+        printf("  No calls observed\n");
+    }
+    
+    // virtqueue_get_buf_ctx results
+    printf("\nVIRTQUEUE_GET_BUF_CTX (buffer retrieval):\n");
+    if (@get_buf_ctx_calls > 0) {
+        printf("  Total calls: %d\n", @get_buf_ctx_calls);
+        
+        printf("\n  last_used_idx distribution:\n");
+        print(@get_buf_ctx_last_used);
+    } else {
+        printf("  No calls observed\n");
+    }
+    
+    // Summary insights
+    printf("\n============================================================\n");
+    printf("PERFORMANCE INSIGHTS:\n");
+    printf("============================================================\n");
+    
+    if (@virtnet_poll_calls > 0 && @virtnet_poll_productive > 0) {
+        $productive_rate = (((uint64)@virtnet_poll_productive * 100) / (uint64)@virtnet_poll_calls);
+        
+        printf("\nRX Processing Efficiency:\n");
+        if ($productive_rate >= 80) {
+            printf("  GOOD: High productive poll rate (%d%%)\n", $productive_rate);
+        } else if ($productive_rate >= 50) {
+            printf("  FAIR: Moderate productive poll rate (%d%%)\n", $productive_rate);
+        } else {
+            printf("  POOR: Low productive poll rate (%d%%)\n", $productive_rate);
+            printf("        May indicate over-polling or low traffic\n");
+        }
+        
+        if (@virtnet_poll_total_packets > 0) {
+            $avg_packets = (uint64)@virtnet_poll_total_packets / (uint64)@virtnet_poll_productive;
+            if ($avg_packets >= 8) {
+                printf("  GOOD: Excellent batching (%d packets/call)\n", $avg_packets);
+            } else if ($avg_packets >= 4) {
+                printf("  FAIR: Good batching (%d packets/call)\n", $avg_packets);
+            } else if ($avg_packets >= 2) {
+                printf("  FAIR: Moderate batching (%d packets/call)\n", $avg_packets);
+            } else {
+                printf("  POOR: Low batching (%d packets/call)\n", $avg_packets);
+                printf("        Consider interrupt coalescing tuning\n");
+            }
+        }
+    }
+    
+    printf("\nRecommendations:\n");
+    printf("  - Monitor during different traffic patterns\n");
+    printf("  - Check virtio interrupt coalescing settings\n");
+    printf("  - Correlate with CPU usage and network load\n");
+    printf("  - Compare with host-side vhost monitoring\n");
+    printf("  - Analyze last_used_idx patterns for queue utilization\n");
+    printf("  - Compare cb_delayed vs cb_prepare behavior\n");
+}

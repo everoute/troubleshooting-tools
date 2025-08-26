@@ -10,3 +10,4 @@ __pycache__/
 .claude/
 claude_local*
 CLAUDE.md
+AGENTS.md

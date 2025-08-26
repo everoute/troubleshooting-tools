@@ -305,6 +305,13 @@ struct idx_value_key {
 BPF_HASH(last_used_idx_values, struct idx_value_key, u16, 256);  // Track actual last_used_idx values
 BPF_HASH(last_used_idx_counts, struct idx_value_key, u64, 256);  // Track how many times we've seen this queue
 
+// NAPI status tracking
+struct napi_status {
+    bool napi_enabled;
+    bool napi_frags_enabled;
+};
+BPF_HASH(napi_status_values, struct idx_value_key, struct napi_status, 256);  // Track NAPI status per queue
+
 // Histograms for statistics - only vhost_signal stats
 BPF_HISTOGRAM(vq_last_used_idx_vhost_signal, hist_key_t);      // last_used_idx value distribution at vhost_signal
 BPF_HISTOGRAM(ptr_ring_depth_xmit, hist_key_t);       // PTR ring depth at tun_net_xmit
@@ -407,6 +414,22 @@ int trace_tun_net_xmit(struct pt_regs *ctx, struct sk_buff *skb, struct net_devi
     qkey.queue_index = queue_index;
     bpf_probe_read_kernel_str(qkey.dev_name, sizeof(qkey.dev_name), dev->name);
     target_queues.update(&sock_ptr, &qkey);
+    
+    // Get NAPI status from tfile
+    bool napi_enabled = false;
+    bool napi_frags_enabled = false;
+    READ_FIELD(&napi_enabled, tfile, napi_enabled);
+    READ_FIELD(&napi_frags_enabled, tfile, napi_frags_enabled);
+    
+    // Store NAPI status
+    struct idx_value_key napi_key = {};
+    napi_key.queue_index = queue_index;
+    bpf_probe_read_kernel_str(napi_key.dev_name, sizeof(napi_key.dev_name), dev->name);
+    
+    struct napi_status napi_status = {};
+    napi_status.napi_enabled = napi_enabled;
+    napi_status.napi_frags_enabled = napi_frags_enabled;
+    napi_status_values.update(&napi_key, &napi_status);
     
     // Get PTR ring depth and record in histogram
     u32 depth = get_ptr_ring_depth(tfile);
@@ -625,11 +648,13 @@ Examples:
     ptr_xmit = b.get_table("ptr_ring_depth_xmit")
     last_used_idx_values = b.get_table("last_used_idx_values")
     last_used_idx_counts = b.get_table("last_used_idx_counts")
+    napi_status_values = b.get_table("napi_status_values")
     
     vq_last_used_idx_vhost_signal.clear()
     ptr_xmit.clear()
     last_used_idx_values.clear()
     last_used_idx_counts.clear()
+    napi_status_values.clear()
     
     print("All maps cleared.")
     
@@ -672,7 +697,22 @@ Examples:
                         if q_key == queue_name:
                             call_count = v.value
                             break
-                    print("  Queue: {} | last_used_idx: {} | calls: {}".format(queue_name, idx_value, call_count))
+                    # Get napi_enabled status for this queue's tfile
+                    napi_enabled_status = "N/A"
+                    napi_frags_enabled_status = "N/A"
+                    
+                    # Find the NAPI status for this queue
+                    for k, v in napi_status_values.items():
+                        napi_dev_name = k.dev_name.decode('utf-8', 'replace')
+                        napi_queue_index = k.queue_index
+                        napi_queue_name = "{}:q{}".format(napi_dev_name, napi_queue_index)
+                        if napi_queue_name == queue_name:
+                            napi_enabled_status = "True" if v.napi_enabled else "False"
+                            napi_frags_enabled_status = "True" if v.napi_frags_enabled else "False"
+                            break
+                    
+                    print("  Queue: {} | last_used_idx: {} | calls: {} | napi_enabled: {} | napi_frags_enabled: {}".format(
+                        queue_name, idx_value, call_count, napi_enabled_status, napi_frags_enabled_status))
             
             # Print VQ last_used_idx Value Distribution from vhost_signal
             print("\nVQ last_used_idx Value Distribution at vhost_signal:")
@@ -689,6 +729,7 @@ Examples:
             ptr_xmit.clear()
             last_used_idx_values.clear()
             last_used_idx_counts.clear()
+            napi_status_values.clear()
             
             countdown -= 1
             if exiting:

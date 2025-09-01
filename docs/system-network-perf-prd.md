@@ -103,123 +103,87 @@ struct pkt_event {
 
 ## 2. 处理阶段定义
 
-### 2.1 系统网络相关阶段枚举（stage）
+### 2.1 系统网络相关阶段枚举（基于VM网络经验简化设计）
 
 ```c
-enum pkt_stage {
-    // 链路层接收路径
-    STG_RX_IN        = 1,   // netif_receive_skb - 统一接收入口
-    STG_GRO_IN       = 2,   // napi_gro_receive - GRO处理
-    STG_RPS_ENQ      = 3,   // enqueue_to_backlog - RPS入队（可选）
-    STG_RPS_DEQ      = 4,   // process_backlog - RPS出队（可选）
-    STG_XDP_PROC     = 5,   // netif_receive_generic_xdp - XDP处理
-    
-    // 网络层处理（IP协议栈）
-    STG_IP_RCV       = 10,  // ip_rcv - IP层接收入口
-    STG_IP_RCV_CORE  = 11,  // ip_rcv_core - IP核心处理
-    STG_IP_RCV_FIN   = 12,  // ip_rcv_finish - IP接收完成
-    STG_IP_LOCAL_DEL = 13,  // ip_local_deliver - 本地投递
-    STG_IP_FORWARD   = 14,  // ip_forward - IP转发
-    STG_FIB_LOOKUP   = 15,  // fib_table_lookup - 路由查询
-    
-    // OVS虚拟化处理
-    STG_OVS_IN       = 20,  // ovs_vport_receive - OVS入口
-    STG_OVS_ACT_IN   = 21,  // ovs_execute_actions进入
-    STG_OVS_ACT_OUT  = 22,  // ovs_execute_actions退出
-    STG_CT_IN        = 23,  // nf_conntrack_in进入
-    STG_CT_OUT       = 24,  // nf_conntrack_in退出
-    
-    // netfilter处理
-    STG_NF_HOOK      = 30,  // nf_hook_slow - netfilter钩子
-    STG_IPTABLES     = 31,  // ipt_do_table - iptables规则
-    STG_IPT6_TABLE   = 32,  // ip6t_do_table - ip6tables规则
-    STG_NAT_MANIP    = 33,  // nf_nat_manip_pkt - NAT转换
-    
-    // 传输层处理
-    STG_TCP_RCV      = 40,  // tcp_v4_rcv - TCP接收
-    STG_TCP_EST_RCV  = 41,  // tcp_rcv_established - TCP已建立连接处理
-    STG_UDP_RCV      = 42,  // udp_rcv - UDP接收
-    STG_ICMP_RCV     = 43,  // icmp_rcv - ICMP接收
-    STG_SOCK_LOOKUP  = 44,  // __inet_lookup_listener - socket查找
-    
-    // 发送路径起始
-    STG_SOCK_SEND    = 50,  // tcp_sendmsg/udp_sendmsg - 本地发送起点
-    STG_TCP_XMIT     = 51,  // __tcp_transmit_skb - TCP发送
-    STG_UDP_SEND     = 52,  // udp_send_skb - UDP发送
-    STG_IP_QUEUE     = 53,  // __ip_queue_xmit - IP队列发送
-    STG_IP_OUTPUT    = 54,  // ip_output - IP输出
-    STG_IP_FIN_OUT   = 55,  // ip_finish_output - IP输出完成
-    STG_IP_FIN_OUT2  = 56,  // ip_finish_output2 - IP输出最终处理
-    
-    // Qdisc流控处理
-    STG_QDISC_ENQ    = 60,  // fq_codel_enqueue - Qdisc入队
-    STG_QDISC_DEQ    = 61,  // fq_codel_dequeue - Qdisc出队
-    STG_TC_CLASSIFY  = 62,  // tcf_classify - TC分类
-    STG_TC_ACTION    = 63,  // tcf_action - TC动作
-    
-    // 设备发送路径
-    STG_DEV_Q_XMIT   = 70,  // dev_queue_xmit - 通用发送入口
-    STG_DEV_HARD_TX  = 71,  // dev_hard_start_xmit - 硬件发送启动
-    STG_TX_QUEUE     = 72,  // net_dev_queue - 设备队列
-    STG_TX_XMIT      = 73,  // net_dev_start_xmit - 设备发送
-    
-    // 应用层终点
-    STG_SOCK_RECV    = 90,  // tcp_cleanup_rbuf/udp_queue_rcv_skb - 本地接收终点
-    STG_SOCK_QUEUE   = 91,  // sock_queue_rcv_skb - socket队列入队
-};
+// Stage definitions - internal port perspective（基于internal port视角）
+// 系统 TX 路径（Local→Uplink，系统发送到外部）
+#define STG_SOCK_SEND        1   // tcp_sendmsg/udp_sendmsg - 系统发送起点
+#define STG_IP_OUTPUT        2   // ip_output - IP输出处理
+#define STG_OVS_TX           3   // ovs_vport_receive (internal port)
+#define STG_FLOW_EXTRACT_TX  4   // ovs_ct_update_key (flow extract phase)
+#define STG_CT_TX            5   // nf_conntrack_in
+#define STG_CT_OUT_TX        6   // ovs_ct_update_key (conntrack action)
+#define STG_PHY_QDISC_ENQ    7   // qdisc_enqueue (physical dev)
+#define STG_PHY_QDISC_DEQ    8   // qdisc_dequeue (physical dev)
+#define STG_PHY_TX           9   // dev_hard_start_xmit (physical) - LAST POINT
+
+// 系统 RX 路径（Uplink→Local，外部到系统接收）
+#define STG_PHY_RX           11  // netif_receive_skb (physical) - FIRST POINT
+#define STG_OVS_RX           12  // ovs_vport_receive (from physical to internal)
+#define STG_FLOW_EXTRACT_RX  13  // ovs_ct_update_key (flow extract phase)
+#define STG_CT_RX            14  // nf_conntrack_in
+#define STG_CT_OUT_RX        15  // ovs_ct_update_key (conntrack action)
+#define STG_INTERNAL_RX      16  // netif_receive_skb (internal port) - 注意：internal port无qdisc
+#define STG_IP_RCV           17  // ip_rcv - IP层接收
+#define STG_TCP_UDP_RCV      18  // tcp_v4_rcv/udp_rcv - 传输层处理
+#define STG_SOCK_RECV        19  // socket接收完成 - LAST POINT
 ```
 
 ---
 
-## 3. 系统网络数据路径（Local ↔ OVS Internal ↔ Uplink）
+## 3. 系统网络数据路径（基于VM网络经验简化设计）
 
-### 3.1 Local→Uplink 发送路径（基于协议栈完整链路）
+### 3.1 系统 TX 路径（Local→Uplink，系统发送到外部）
 
-| 阶段 | Probe点 | 函数签名 | 采集字段 | 优先级 |
-|------|---------|----------|----------|--------|
-| **STG_SOCK_SEND** | kprobe:tcp_sendmsg_locked<br>kprobe:udp_send_skb<br>kprobe:ping_v4_sendmsg | `tcp_sendmsg_locked(sk, msg, size)`<br>`udp_send_skb(sk, skb, fl4)`<br>`ping_v4_sendmsg()` | • 解析packet_key（从sk和msg）<br>• sk_wmem = sk->sk_wmem_queued<br>• sk_wmem_lim = sk->sk_sndbuf<br>• has_sk = 1<br>• protocol类型识别 | **HIGH** |
-| **STG_TCP_XMIT** | kprobe:__tcp_transmit_skb | `__tcp_transmit_skb(sk, skb, clone_it, gfp_mask, rcv_nxt)` | • TCP特有字段：seq、ack、窗口<br>• 重传标记<br>• 拥塞控制状态 | MED |
-| **STG_IP_QUEUE** | kprobe:__ip_queue_xmit | `__ip_queue_xmit(sk, skb, fl, opt_len)` | • IP层处理开始<br>• 路由查找准备 | **HIGH** |
-| **STG_FIB_LOOKUP** | kprobe:fib_table_lookup<br>kprobe:ip_route_output_key_hash | `fib_table_lookup(tb, flp, res)`<br>`ip_route_output_key_hash()` | • 路由查找耗时<br>• 路由缓存命中状态<br>• fib_hit标记 | MED |
-| **STG_IP_OUTPUT** | kprobe:ip_output | `ip_output(net, sk, skb)` | • IP输出处理<br>• TTL处理<br>• 分片标记 | MED |
-| **STG_IP_FIN_OUT** | kprobe:ip_finish_output | `ip_finish_output(net, sk, skb)` | • 输出完成处理<br>• GSO检查 | **HIGH** |
-| **STG_IP_FIN_OUT2** | kprobe:ip_finish_output2 | `ip_finish_output2(net, sk, skb)` | • 邻居子系统处理<br>• ARP查询（如需要） | MED |
-| **STG_OVS_IN** | kprobe:ovs_vport_receive | 同上 | • dev = internal port名称<br>• 绑定pkt_id<br>• OVS datapath信息 | **HIGH** |
-| **STG_OVS_ACT_IN/OUT** | 同上 | 同上 | • OVS actions执行<br>• flow table查找 | MED |
-| **STG_CT_IN/OUT** | kprobe:nf_conntrack_in<br>kretprobe:nf_conntrack_in | `nf_conntrack_in(net, pf, hooknum, skb)` | • conntrack状态<br>• NAT转换（如有）<br>• ct_lookup_ns耗时 | MED |
-| **STG_IPTABLES** | kprobe:ipt_do_table<br>kprobe:ipt_do_table_legacy | `ipt_do_table(skb, state, table)` | • iptables规则匹配<br>• 规则链遍历耗时<br>• verdict结果 | LOW |
-| **STG_QDISC_ENQ** | kprobe:fq_codel_enqueue<br>TP:qdisc:qdisc_enqueue | `fq_codel_enqueue(skb, sch, to_free)` | • qdisc队列状态<br>• flow队列选择<br>• 拥塞控制状态 | **HIGH** |
-| **STG_TC_CLASSIFY** | kprobe:tcf_classify | `tcf_classify(skb, tp, res)` | • TC规则匹配<br>• 流量整形决策 | LOW |
-| **STG_QDISC_DEQ** | kprobe:fq_codel_dequeue<br>TP:qdisc:qdisc_dequeue | `fq_codel_dequeue(sch)` | • 出队延迟（sojourn time）<br>• CoDel算法状态 | **HIGH** |
-| **STG_DEV_Q_XMIT** | kprobe:__dev_queue_xmit | `__dev_queue_xmit(skb, sb_dev)` | • 设备发送入口<br>• 队列选择逻辑 | **HIGH** |
-| **STG_TX_QUEUE** | TP:net:net_dev_queue | `net_dev_queue(skb)` | • 设备队列状态<br>• 多队列分发 | **HIGH** |
-| **STG_DEV_HARD_TX** | kprobe:dev_hard_start_xmit | `dev_hard_start_xmit(skb, dev, txq, more)` | • 驱动发送准备<br>• DMA映射状态 | **HIGH** |
-| **STG_TX_XMIT** | TP:net:net_dev_start_xmit | `net_dev_start_xmit(skb, dev)` | • 最终硬件发送<br>• 发送完成确认 | **HIGH** |
+| 阶段 | 函数 | 说明 | 重要度 |
+|------|------|------|--------|
+| **STG_SOCK_SEND (1)** | tcp_sendmsg/udp_sendmsg | 系统应用发送起点，解析五元组 | **HIGH** |
+| **STG_IP_OUTPUT (2)** | ip_output | IP层输出处理 | **HIGH** |
+| **STG_OVS_TX (3)** | ovs_vport_receive | OVS internal port接收（从系统协议栈） | **HIGH** |
+| **STG_FLOW_EXTRACT_TX (4)** | ovs_ct_update_key | OVS流提取阶段 | MED |
+| **STG_CT_TX (5)** | nf_conntrack_in | 连接跟踪入口 | MED |
+| **STG_CT_OUT_TX (6)** | ovs_ct_update_key | 连接跟踪动作阶段 | MED |
+| **STG_PHY_QDISC_ENQ (7)** | qdisc_enqueue | 物理网卡qdisc入队 | **HIGH** |
+| **STG_PHY_QDISC_DEQ (8)** | qdisc_dequeue | 物理网卡qdisc出队 | **HIGH** |
+| **STG_PHY_TX (9)** | dev_hard_start_xmit | 物理网卡最终发送 - **最后阶段** | **HIGH** |
 
-### 3.2 Uplink→Local 接收路径（基于协议栈完整链路）
+### 3.2 系统 RX 路径（Uplink→Local，外部到系统接收）
 
-| 阶段 | Probe点 | 函数签名 | 采集字段 | 优先级 |
-|------|---------|----------|----------|--------|
-| **STG_RX_IN** | TP:net:netif_receive_skb<br>kprobe:netif_receive_skb | `netif_receive_skb(skb)` | • dev = uplink<br>• 解析packet_key<br>• 接收队列信息<br>• GRO状态 | **HIGH** |
-| **STG_GRO_IN** | TP:net:napi_gro_receive_entry<br>kprobe:napi_gro_receive | `napi_gro_receive(napi, skb)` | • GRO合并状态<br>• NAPI处理状态 | MED |
-| **STG_RPS_ENQ** | kprobe:enqueue_to_backlog | `enqueue_to_backlog(skb, cpu, qlen)` | • RPS队列状态<br>• CPU负载均衡 | LOW |
-| **STG_XDP_PROC** | kprobe:netif_receive_generic_xdp | `netif_receive_generic_xdp(skb)` | • XDP程序处理结果<br>• 包重定向状态 | LOW |
-| **STG_IP_RCV** | kprobe:ip_rcv | `ip_rcv(skb, dev, pt, orig_dev)` | • IP层接收开始<br>• IP头校验状态 | **HIGH** |
-| **STG_IP_RCV_CORE** | kprobe:ip_rcv_core | `ip_rcv_core(skb, net)` | • IP核心处理<br>• 包过滤检查 | MED |
-| **STG_IPTABLES** | kprobe:ipt_do_table | `ipt_do_table(skb, state, table)` | • iptables PREROUTING<br>• 防火墙规则检查 | MED |
-| **STG_FIB_LOOKUP** | kprobe:fib_validate_source<br>kprobe:ip_route_input_slow | `fib_validate_source()`<br>`ip_route_input_slow()` | • 路由有效性检查<br>• 反向路径过滤（rp_filter）<br>• fib_lookup_ns耗时 | MED |
-| **STG_IP_RCV_FIN** | kprobe:ip_rcv_finish | `ip_rcv_finish(net, sk, skb)` | • 路由决策结果<br>• 本地投递vs转发 | **HIGH** |
-| **STG_IP_LOCAL_DEL** | kprobe:ip_local_deliver<br>kprobe:ip_local_deliver_finish | `ip_local_deliver(skb)`<br>`ip_local_deliver_finish(net, sk, skb)` | • 本地投递确认<br>• 传输层准备 | **HIGH** |
-| **STG_OVS_IN** | kprobe:ovs_vport_receive | 同上 | • dev = internal port<br>• OVS流表查找 | **HIGH** |
-| **STG_OVS_ACT_IN/OUT** | 同上 | 同上 | • OVS actions执行<br>• VLAN处理（如有） | MED |
-| **STG_CT_IN/OUT** | 同发送路径 | 同上 | • conntrack状态确认<br>• 已有连接匹配 | MED |
-| **STG_TCP_RCV** | kprobe:tcp_v4_rcv | `tcp_v4_rcv(skb)` | • TCP协议处理<br>• socket查找准备 | **HIGH** |
-| **STG_SOCK_LOOKUP** | kprobe:__inet_lookup_listener<br>kprobe:inet6_lookup_listener | `__inet_lookup_listener()`<br>`inet6_lookup_listener()` | • socket查找耗时<br>• 监听端口匹配结果 | MED |
-| **STG_TCP_EST_RCV** | kprobe:tcp_rcv_established<br>kprobe:tcp_v4_do_rcv | `tcp_rcv_established(sk, skb)`<br>`tcp_v4_do_rcv(sk, skb)` | • 已建立连接处理<br>• 序列号检查<br>• 窗口更新 | MED |
-| **STG_UDP_RCV** | kprobe:udp_rcv<br>kprobe:udp_unicast_rcv_skb | `udp_rcv(skb)`<br>`udp_unicast_rcv_skb()` | • UDP协议处理<br>• 校验和验证 | MED |
-| **STG_ICMP_RCV** | kprobe:icmp_rcv<br>kprobe:ping_rcv | `icmp_rcv(skb)`<br>`ping_rcv(skb)` | • ICMP协议处理<br>• ping响应处理 | MED |
-| **STG_SOCK_QUEUE** | kprobe:sock_queue_rcv_skb | `sock_queue_rcv_skb(sk, skb)` | • socket缓冲区入队<br>• 接收缓冲区状态检查 | **HIGH** |
-| **STG_SOCK_RECV** | kprobe:tcp_cleanup_rbuf<br>kprobe:udp_queue_rcv_skb<br>kprobe:__ping_queue_rcv_skb | `tcp_cleanup_rbuf(sk, copied)`<br>`udp_queue_rcv_skb(sk, skb)`<br>`__ping_queue_rcv_skb()` | • sk_rmem = sk->sk_rmem_alloc<br>• sk_rmem_lim = sk->sk_rcvbuf<br>• has_sk = 1<br>• 应用层读取准备完成 | **HIGH** |
+| 阶段 | 函数 | 说明 | 重要度 |
+|------|------|------|--------|
+| **STG_PHY_RX (11)** | netif_receive_skb | 物理网卡接收 - **首个阶段** | **HIGH** |
+| **STG_OVS_RX (12)** | ovs_vport_receive | OVS处理（从物理到internal port） | **HIGH** |
+| **STG_FLOW_EXTRACT_RX (13)** | ovs_ct_update_key | OVS流提取阶段 | MED |
+| **STG_CT_RX (14)** | nf_conntrack_in | 连接跟踪入口 | MED |
+| **STG_CT_OUT_RX (15)** | ovs_ct_update_key | 连接跟踪动作阶段 | MED |
+| **STG_INTERNAL_DEV_RECV (16)** | internal_dev_recv | internal port设备接收入口 | **HIGH** |
+| **STG_INTERNAL_SOFTIRQ (17)** | netif_receive_skb | internal port软中断处理 | **HIGH** |
+| **STG_IP_RCV (18)** | ip_rcv | IP层接收处理 | **HIGH** |
+| **STG_TCP_UDP_RCV (19)** | tcp_v4_rcv/udp_rcv | 传输层处理 | **HIGH** |
+| **STG_SOCK_RECV (20)** | socket接收完成 | 系统应用接收终点 - **最后阶段** | **HIGH** |
+
+### 3.3 关键差异（vs VM网络）
+
+1. **internal port无qdisc但有软中断处理**：
+   - internal port设置了`IFF_NO_QUEUE`标志，无qdisc队列
+   - 但在RX方向使用`netif_rx()`进入backlog队列，由软中断处理
+   - `internal_dev_recv()` → `netif_rx()` → `enqueue_to_backlog()` → 软中断 → `process_backlog()` → `netif_receive_skb()`
+
+2. **实际internal port RX流程**：
+   ```
+   OVS processing → internal_dev_recv() → netif_rx_internal() 
+   → enqueue_to_backlog() → NET_RX_SOFTIRQ → net_rx_action() 
+   → process_backlog() → __netif_receive_skb() → ip_rcv
+   ```
+
+3. **双向路径不对称**：
+   - TX路径：系统协议栈→internal port（作为OVS入口）→物理网卡
+   - RX路径：物理网卡→OVS→internal port（通过软中断处理）→系统协议栈
+
+4. **CT/conntrack处理**：完全类似VM网络实现，区分flow extract和conntrack action阶段
+
+5. **软中断延迟测量**：`internal_dev_recv` 到 `netif_receive_skb` 之间可以测量internal port的软中断处理延迟
 
 ---
 

@@ -21,34 +21,36 @@
 
 ### 1.1 包唯一标识键（Packet Key）
 
+基于`vm_network_latency.py`中经过验证的包识别方法：
+
 ```c
-// 支持TCP/UDP/ICMP的统一包标识结构
+// 使用与vm_network_latency.py完全一致的包标识结构
 struct packet_key_t {
-    __be32 src_ip;      // 源IP地址
-    __be32 dst_ip;      // 目标IP地址
+    __be32 saddr;       // 源IP地址
+    __be32 daddr;       // 目标IP地址
     u8 protocol;        // 协议类型：IPPROTO_TCP/UDP/ICMP
+    u8 pad[3];          // 对齐填充
     
     union {
-        // TCP包特征字段
+        // TCP包特征字段 - 使用seq作为唯一标识
         struct {
-            __be16 src_port;      // 源端口
-            __be16 dst_port;      // 目标端口
-            __be32 seq;           // 序列号
-            __be16 payload_len;   // 负载长度
+            __be16 source;        // 源端口
+            __be16 dest;          // 目标端口
+            __be32 seq;           // TCP序列号（主要标识符）
         } tcp;
         
-        // UDP包特征字段
+        // UDP包特征字段 - 使用IP ID作为标识
         struct {
-            __be16 src_port;      // 源端口
-            __be16 dst_port;      // 目标端口
-            __be16 ip_id;         // IP标识
-            __be16 frag_off;      // 分片偏移
+            __be16 source;        // 源端口
+            __be16 dest;          // 目标端口
+            __be16 id;            // IP标识（主要标识符）
+            __be16 len;           // UDP长度
         } udp;
         
-        // ICMP包特征字段
+        // ICMP包特征字段 - 使用ID+seq作为标识
         struct {
             __be16 id;            // ICMP ID
-            __be16 seq;           // ICMP序列号
+            __be16 sequence;      // ICMP序列号
             u8 type;              // ICMP类型
             u8 code;              // ICMP代码
         } icmp;
@@ -66,37 +68,30 @@ struct pkt_event {
     struct packet_key_t key;     // 包特征键（首次解析填充，后续查缓存）
     
     // 时间和位置信息
-    u64 t_ns;                    // 事件时间戳（单调时钟）
+    u64 timestamp;               // 事件时间戳（ktime_get_ns()）
     u32 cpu;                     // 当前CPU ID
-    char dev[16];                // 设备名称
-    u8 dir;                      // 方向：0=VM→UP, 1=UP→VM
+    u32 ifindex;                 // 设备ifindex（主要标识符）
+    char devname[16];            // 设备名称（辅助信息）
+    u8 direction;                // 方向：0=VM_TX(host视角input), 1=VM_RX(host视角output)
     u8 stage;                    // 处理阶段（见§2.1）
     
     // Queue/CPU信息
-    s16 rxq;                     // RX队列号（skb->queue_mapping，-1表示无效）
-    s16 txq;                     // TX队列号（net_dev_queue，-1表示无效）
-    u8 has_hash;                 // 是否有hash值
-    u8 has_sk;                   // 是否有socket
+    s16 queue_mapping;           // skb->queue_mapping
     u32 skb_hash;                // skb->hash（用于CPU/队列选择）
+    u8 has_sk;                   // 是否有socket
     
-    // Queue深度信息（软中断路径）
-    s32 backlog_qlen;            // softnet_data.input_pkt_queue.qlen（backlog输入队列）
-    s32 process_qlen;            // softnet_data.process_queue.qlen（处理队列）
-    s32 qdisc_qlen;              // fq_codel: sch->q.qlen
-    s32 flow_qlen;               // fq_codel: 单flow队列长度
-    u64 sojourn_ns;              // fq_codel: 包在队列中的停留时间
-    
-    // Buffer信息（socket相关）
-    u32 sk_wmem;                 // 发送缓冲区已用大小
-    u32 sk_wmem_lim;             // 发送缓冲区限制
-    u32 sk_rmem;                 // 接收缓冲区已用大小
-    u32 sk_rmem_lim;             // 接收缓冲区限制
+    // Queue深度信息
+    u32 qdisc_qlen;              // qdisc队列长度
+    u32 backlog_len;             // 软中断backlog队列长度（如可获取）
+    u64 sojourn_time;            // qdisc中停留时间（纳秒）
     
     // Lookup信息（查表开销）
-    u8 ct_hit;                   // conntrack查表结果：0=new, 1=found
-    u32 ct_lookup_ns;            // conntrack查表耗时（纳秒）
-    u8 fib_hit;                  // 路由查表结果
-    u32 fib_lookup_ns;           // 路由查表耗时
+    u8 ct_state;                 // conntrack状态：0=new, 1=established, 2=related
+    u32 ct_lookup_time;          // conntrack查表耗时（纳秒）
+    
+    // 数据包信息
+    u32 len;                     // 包长度
+    u32 data_len;                // 数据长度
 };
 ```
 
@@ -148,42 +143,34 @@ enum pkt_stage {
 
 ## 3. VM网络数据路径（VM ↔ OVS ↔ Uplink）
 
-### 3.1 VM→Uplink 发送路径
+### 3.1 VM→Uplink 发送路径（HOST视角：input方向，direction=0）
 
-| 阶段 | Probe点 | 函数签名 | 采集字段 |
-|------|---------|----------|----------|
-| **STG_RX_IN** | TP:net:netif_receive_skb | `netif_receive_skb(skb)` | • 解析packet_key<br>• rxq = skb->queue_mapping<br>• skb_hash = skb->hash<br>• read_backlog_info()：backlog_qlen, process_qlen<br>• dev = "vnet*" |
-| **STG_RX_BACKLOG** | kprobe:enqueue_to_backlog | `enqueue_to_backlog(skb, cpu, qtail)` | • 记录backlog入队<br>• 更新backlog_qlen（入队后）<br>• cpu = 目标CPU ID |
-| **STG_RX_PROCESS** | kprobe:process_backlog | `process_backlog(work, quota)` | • 记录backlog处理开始<br>• 更新process_qlen<br>• quota = 处理配额 |
-| **STG_RX_GRO_IN** | kprobe:dev_gro_receive | `dev_gro_receive(list, skb)` | • 记录GRO聚合入口 |
-| **STG_RX_GRO_OUT** | kretprobe:dev_gro_receive | 返回值 | • gro_result = 聚合结果<br>• 计算GRO处理耗时 |
-| **STG_OVS_IN** | kprobe:ovs_vport_receive | `ovs_vport_receive(vport, skb, tun_info)` | • has_sk = (skb->sk != NULL)<br>• 查缓存获取packet_key |
-| **STG_OVS_ACT_IN** | kprobe:ovs_execute_actions | `ovs_execute_actions(dp, skb, acts, key)` | • 记录进入时间戳 |
-| **STG_OVS_ACT_OUT** | kretprobe:ovs_execute_actions | 返回值 | • 计算OVS处理耗时 |
-| **STG_CT_IN** | kprobe:nf_conntrack_in | `nf_conntrack_in(net, pf, hooknum, skb)` | • 记录进入时间戳 |
-| **STG_CT_OUT** | kretprobe:nf_conntrack_in | 返回值 | • ct_hit = (ret == NF_ACCEPT && existing)<br>• ct_lookup_ns = 出入时间差 |
-| **STG_QDISC_ENQ** | kprobe:fq_codel_enqueue | `fq_codel_enqueue(skb, sch, to_free)` | • qdisc_qlen = sch->q.qlen<br>• flow_qlen = flow->head计数<br>• dev = uplink |
-| **STG_QDISC_DEQ** | kprobe:fq_codel_dequeue | `fq_codel_dequeue(sch)` | • sojourn_ns = now - flow->time_next_packet<br>• dev = uplink |
-| **STG_TX_QUEUE** | TP:net:net_dev_queue | `net_dev_queue(skb)` | • txq = queue_mapping<br>• skb_hash = skb->hash<br>• dev = uplink |
-| **STG_TX_XMIT** | TP:net:net_dev_start_xmit | `net_dev_start_xmit(skb, dev)` | • 记录实际发送<br>• dev = uplink |
+基于`vm_network_latency.py`验证的probe点选择：
 
-### 3.2 Uplink→VM 接收路径
+| 阶段 | Probe点 | 函数签名 | 采集字段 | 备注 |
+|------|---------|----------|----------|------|
+| **STG_RX_IN** | TP:net:netif_receive_skb | `netif_receive_skb(skb)` | • 解析packet_key（一次性）<br>• ifindex = skb->dev->ifindex<br>• queue_mapping = skb->queue_mapping<br>• skb_hash = skb->hash<br>• devname通过ifindex查询 | vnet*设备入口，direction=0 |
+| **STG_OVS_IN** | kprobe:ovs_vport_receive | `ovs_vport_receive(vport, skb, tun_info)` | • has_sk状态<br>• 查缓存获取packet_key | OVS处理入口 |
+| **STG_CT_IN** | kprobe:nf_conntrack_in | `nf_conntrack_in(net, pf, hooknum, skb)` | • 记录CT查询开始时间戳 | CT查询开始 |
+| **STG_CT_OUT** | kprobe:ovs_ct_update_key | `ovs_ct_update_key(key, info, skb, post_ct)` | • ct_state = 连接状态<br>• ct_lookup_time = 查询耗时 | 使用OVS专用CT更新点 |
+| **STG_QDISC_ENQ** | TP:qdisc:qdisc_enqueue | `trace_qdisc_enqueue(qdisc, txq, skb)` | • qdisc_qlen = sch->q.qlen<br>• ifindex = 物理网卡ifindex | qdisc入队tracepoint |
+| **STG_QDISC_DEQ** | TP:qdisc:qdisc_dequeue | `trace_qdisc_dequeue(sch, txq, skb)` | • sojourn_time计算<br>• ifindex = 物理网卡ifindex | qdisc出队tracepoint |
+| **STG_TX_QUEUE** | TP:net:net_dev_queue | `net_dev_queue(skb)` | • queue_mapping确认<br>• ifindex = 物理网卡 | 设备队列tracepoint |
+| **STG_TX_XMIT** | TP:net:net_dev_start_xmit | `net_dev_start_xmit(skb, dev)` | • 最终发送确认<br>• len, data_len | 实际发送tracepoint |
 
-| 阶段 | Probe点 | 函数签名 | 采集字段 |
-|------|---------|----------|----------|
-| **STG_RX_IN** | TP:net:netif_receive_skb | `netif_receive_skb(skb)` | • 解析packet_key<br>• rxq = skb->queue_mapping<br>• skb_hash = skb->hash<br>• read_backlog_info()：backlog_qlen, process_qlen<br>• dev = uplink |
-| **STG_RX_BACKLOG** | kprobe:enqueue_to_backlog | `enqueue_to_backlog(skb, cpu, qtail)` | • 记录backlog入队<br>• 更新backlog_qlen（入队后）<br>• cpu = 目标CPU ID |
-| **STG_RX_PROCESS** | kprobe:process_backlog | `process_backlog(work, quota)` | • 记录backlog处理开始<br>• 更新process_qlen<br>• quota = 处理配额 |
-| **STG_RX_GRO_IN** | kprobe:dev_gro_receive | `dev_gro_receive(list, skb)` | • 记录GRO聚合入口 |
-| **STG_RX_GRO_OUT** | kretprobe:dev_gro_receive | 返回值 | • gro_result = 聚合结果<br>• 计算GRO处理耗时 |
-| **STG_IP_RCV** | kprobe:ip_rcv | `ip_rcv(skb, dev, pt, orig_dev)` | • 记录IP层接收<br>• 协议栈处理开始 |
-| **STG_OVS_IN** | kprobe:ovs_vport_receive | `ovs_vport_receive(vport, skb, tun_info)` | • has_sk状态<br>• 查缓存获取packet_key |
-| **STG_OVS_ACT_IN** | kprobe:ovs_execute_actions | `ovs_execute_actions(dp, skb, acts, key)` | • 记录进入时间戳 |
-| **STG_OVS_ACT_OUT** | kretprobe:ovs_execute_actions | 返回值 | • 计算OVS处理耗时 |
-| **STG_CT_IN** | kprobe:nf_conntrack_in | `nf_conntrack_in(net, pf, hooknum, skb)` | • 记录进入时间戳 |
-| **STG_CT_OUT** | kretprobe:nf_conntrack_in | 返回值 | • ct_hit = (ret == NF_ACCEPT && existing)<br>• ct_lookup_ns = 出入时间差 |
-| **STG_DEV_Q_XMIT** | kprobe:dev_queue_xmit | `dev_queue_xmit(skb)` | • 记录发送意图<br>• dev = "vnet*" |
-| **STG_TX_QUEUE** | TP:net:net_dev_queue | `net_dev_queue(skb)` | • txq = 0（TAP通常单队列）<br>• dev = "vnet*" |
+### 3.2 Uplink→VM 接收路径（HOST视角：output方向，direction=1）
+
+关键修正：使用`tun_net_xmit`作为VM接收的关键probe点：
+
+| 阶段 | Probe点 | 函数签名 | 采集字段 | 备注 |
+|------|---------|----------|----------|------|
+| **STG_RX_IN** | TP:net:netif_receive_skb | `netif_receive_skb(skb)` | • 解析packet_key（一次性）<br>• ifindex = 物理网卡ifindex<br>• queue_mapping = skb->queue_mapping<br>• skb_hash = skb->hash | 物理网卡入口，direction=1（待确认） |
+| **STG_OVS_IN** | kprobe:ovs_vport_receive | `ovs_vport_receive(vport, skb, tun_info)` | • has_sk状态<br>• 查缓存获取packet_key | OVS处理入口 |
+| **STG_CT_IN** | kprobe:nf_conntrack_in | `nf_conntrack_in(net, pf, hooknum, skb)` | • 记录CT查询开始时间戳 | CT查询开始 |
+| **STG_CT_OUT** | kprobe:ovs_ct_update_key | `ovs_ct_update_key(key, info, skb, post_ct)` | • ct_state = 连接状态<br>• ct_lookup_time = 查询耗时 | 使用OVS专用CT更新点 |
+| **STG_TUN_XMIT** | kprobe:tun_net_xmit | `tun_net_xmit(skb, dev)` | • 确认direction=1<br>• ifindex = vnet*设备<br>• 包即将发送给VM | **关键VM RX路径probe点** |
+| **STG_TX_QUEUE** | TP:net:net_dev_queue | `net_dev_queue(skb)` | • queue_mapping（通常为0）<br>• ifindex = vnet*设备 | TAP设备队列 |
+| **STG_TX_XMIT** | TP:net:net_dev_start_xmit | `net_dev_start_xmit(skb, dev)` | • 最终发送给VM<br>• len, data_len | 发送给VM确认 |
 
 ### 3.3 软中断处理路径详细说明
 
@@ -344,39 +331,95 @@ static inline void read_fq_codel_qlen(struct Qdisc *sch,
 
 ## 5. 过滤机制实现
 
-### 5.1 过滤键定义
+### 5.1 设备过滤（基于ifindex，参考vm_network_latency.py）
 
 ```c
-// 过滤条件结构
-struct filter_key_t {
-    __be32 src_ip;      // 源IP（0表示任意）
-    __be32 dst_ip;      // 目标IP（0表示任意）
-    __be16 src_port;    // 源端口（0表示任意）
-    __be16 dst_port;    // 目标端口（0表示任意）
-    u8 protocol;        // 协议（0表示任意）
-    char dev_prefix[8]; // 设备名前缀（空表示任意）
+// 设备过滤配置（使用ifindex代替设备名比较）
+struct device_filter_t {
+    u32 vnet_ifindex;     // VM虚拟网卡ifindex（如vnet37）
+    u32 phys_ifindex;     // 物理网卡ifindex（如enp94s0f0np0）
+    u8 filter_enabled;    // 是否启用设备过滤
 };
-```
 
-### 5.2 过滤执行点
+// ifindex到设备名映射（用户态维护，供显示使用）
+struct ifindex_name_t {
+    u32 ifindex;
+    char name[16];
+};
 
-- **RX路径**：在`STG_RX_IN`（netif_receive_skb）解析包后立即过滤
-- **传递标记**：通过BPF map标记`pkt_id`为已通过过滤
-- **后续阶段**：检查`pkt_id`是否在通过列表中
-
-### 5.3 方向判定规则
-
-```c
-static inline u8 determine_direction(u8 stage, const char *dev) {
-    if (stage == STG_RX_IN) {
-        if (strncmp(dev, "vnet", 4) == 0)
-            return 0;  // VM→UP
-        else
-            return 1;  // UP→VM（待后续确认）
+// 高效的ifindex过滤函数
+static inline int ifindex_filter(u32 ifindex) {
+    struct device_filter_t *filter = device_filter_map.lookup(&zero);
+    if (!filter || !filter->filter_enabled) {
+        return 1;  // 未启用过滤，通过所有
     }
     
-    // 继承之前的方向
-    return get_cached_direction(pkt_id);
+    return (ifindex == filter->vnet_ifindex || 
+            ifindex == filter->phys_ifindex) ? 1 : 0;
+}
+```
+
+### 5.2 五元组过滤（基于vm_network_latency.py的实现）
+
+```c
+// 五元组过滤条件（与packet_key_t结构对应）
+struct tuple_filter_t {
+    __be32 saddr;       // 源IP（0表示任意）
+    __be32 daddr;       // 目标IP（0表示任意）
+    __be16 source;      // 源端口（0表示任意）
+    __be16 dest;        // 目标端口（0表示任意）
+    u8 protocol;        // 协议（0表示任意）
+    u8 enabled;         // 是否启用此过滤器
+};
+
+// 高效的五元组匹配函数
+static inline int tuple_filter_match(struct packet_key_t *key) {
+    struct tuple_filter_t *filter = tuple_filter_map.lookup(&zero);
+    if (!filter || !filter->enabled) {
+        return 1;  // 未启用过滤，通过所有
+    }
+    
+    // 逐字段检查，0表示匹配任意值
+    if (filter->saddr && filter->saddr != key->saddr) return 0;
+    if (filter->daddr && filter->daddr != key->daddr) return 0;
+    if (filter->protocol && filter->protocol != key->protocol) return 0;
+    
+    // 端口匹配（仅TCP/UDP）
+    if (key->protocol == IPPROTO_TCP) {
+        if (filter->source && filter->source != key->tcp.source) return 0;
+        if (filter->dest && filter->dest != key->tcp.dest) return 0;
+    } else if (key->protocol == IPPROTO_UDP) {
+        if (filter->source && filter->source != key->udp.source) return 0;
+        if (filter->dest && filter->dest != key->udp.dest) return 0;
+    }
+    
+    return 1;  // 所有条件匹配
+}
+```
+
+### 5.3 方向判定规则（基于ifindex）
+
+```c
+static inline u8 determine_direction(u32 ifindex, u8 stage) {
+    struct device_filter_t *filter = device_filter_map.lookup(&zero);
+    if (!filter) {
+        return 0;  // 默认direction
+    }
+    
+    // 基于ifindex准确判定方向
+    if (stage == STG_RX_IN) {
+        if (ifindex == filter->vnet_ifindex)
+            return 0;  // VM TX（host视角input）
+        else if (ifindex == filter->phys_ifindex)
+            return 1;  // VM RX（host视角output，待后续probe点确认）
+    } else if (stage == STG_TUN_XMIT) {
+        return 1;  // 明确的VM RX方向
+    }
+    
+    // 继承之前的方向缓存
+    u64 pkt_id = get_pkt_id();
+    u8 *cached_dir = direction_cache.lookup(&pkt_id);
+    return cached_dir ? *cached_dir : 0;
 }
 ```
 
@@ -426,41 +469,35 @@ static inline u64 get_unified_pkt_id(struct sk_buff *skb) {
 - **过滤结果缓存**：已通过过滤的pkt_id缓存，避免重复判断
 - **方向信息缓存**：包的方向确定后缓存，后续直接使用
 
-### 7.2 Map设计
+### 7.2 Map设计（基于vm_network_latency.py验证的方案）
 
 ```c
-// 核心数据缓存Map
-// Packet key缓存（LRU，10000条目）
-BPF_HASH(pkt_key_cache, u64, struct packet_key_t, 10000);
+// 核心数据缓存Map（优化尺寸，避免内存压力）
+// Packet key缓存（LRU，与vm_network_latency.py保持一致）
+BPF_HASH(packet_key_cache, u64, struct packet_key_t, 8192);
 
-// 过滤通过列表（LRU，5000条目）
-BPF_HASH(filter_passed, u64, u8, 5000);
+// 过滤配置Map
+BPF_ARRAY(device_filter_map, struct device_filter_t, 1);    // 设备过滤配置
+BPF_ARRAY(tuple_filter_map, struct tuple_filter_t, 1);      // 五元组过滤配置
+BPF_ARRAY(direction_filter_map, u8, 1);                     // 方向过滤：0=仅VM_TX, 1=仅VM_RX, 2=双向
 
-// 克隆映射表（LRU，1000条目）
-BPF_HASH(clone_map, u64, u64, 1000);
+// ifindex到设备名映射（用户态维护）
+BPF_HASH(ifindex_to_name, u32, struct ifindex_name_t, 64);  // 设备名查询
 
-// 方向缓存（LRU，5000条目）
-BPF_HASH(dir_cache, u64, u8, 5000);
+// 运行时缓存Map
+BPF_HASH(direction_cache, u64, u8, 4096);                   // 包方向缓存
+BPF_HASH(filter_passed, u64, u8, 4096);                     // 过滤通过标记
 
-// 性能测量相关Map
-// CT查表时间记录（用于计算耗时）
-BPF_HASH(ct_start_time, u64, u64, 1000);
-// OVS处理时间记录
-BPF_HASH(ovs_start_time, u64, u64, 1000);
-// Qdisc sojourn时间基准
-BPF_HASH(qdisc_enqueue_time, u64, u64, 2000);
+// 时间测量相关Map
+BPF_HASH(ct_enter_time, u64, u64, 1024);                    // CT查询开始时间
+BPF_HASH(qdisc_enqueue_time, u64, u64, 2048);               // Qdisc入队时间
 
-// 统计和监控Map
-// 各阶段事件计数
-BPF_ARRAY(stage_counters, u64, 20);
-// 丢包统计按原因分类
-BPF_HASH(drop_stats, u32, u64, 50);
+// 性能统计Map
+BPF_ARRAY(probe_stats, u64, 32);                            // 各probe点事件计数
+BPF_HASH(error_stats, u32, u64, 16);                        // 错误统计
 
-// 配置控制Map
-// 动态配置控制
-BPF_ARRAY(config_map, struct trace_config, 1);
-// probe点启用状态控制
-BPF_ARRAY(probe_enable_map, u8, 20);
+// 控制和配置Map
+BPF_ARRAY(trace_control, u8, 8);                            // 运行时控制开关
 ```
 
 ### 7.3 开销控制
@@ -488,17 +525,26 @@ BPF_ARRAY(probe_enable_map, u8, 20);
 
 ## 9. 使用示例
 
-### 9.1 命令行接口
+### 9.1 命令行接口（基于测试环境规格）
 ```bash
-# 追踪VM到外部的TCP流量
-./vm_net_trace --dir=tx --proto=tcp \
-               --src-ip=192.168.1.10 --dst-ip=10.0.0.1
+# 追踪指定VM的双向流量（测试环境：vnet37, VM IP: 192.168.76.198）
+./vm_net_perf_trace --vnet-dev=vnet37 --phys-dev=enp94s0f0np0 \
+                    --vm-ip=192.168.76.198
 
-# 追踪指定VM设备的所有流量
-./vm_net_trace --dev=vnet0 --verbose
+# 追踪VM到外部的TCP流量（host视角input方向）
+./vm_net_perf_trace --vnet-dev=vnet37 --direction=input \
+                    --proto=tcp --src-ip=192.168.76.198
 
-# 追踪带conntrack的流量
-./vm_net_trace --dev=vnet1 --enable-ct
+# 追踪外部到VM的流量（host视角output方向）
+./vm_net_perf_trace --vnet-dev=vnet37 --direction=output \
+                    --dst-ip=192.168.76.198
+
+# 追踪特定五元组流量（TCP SSH连接）
+./vm_net_perf_trace --vnet-dev=vnet37 --proto=tcp \
+                    --src-ip=192.168.76.198 --dst-port=22
+
+# 启用conntrack测量
+./vm_net_perf_trace --vnet-dev=vnet37 --enable-ct --verbose
 ```
 
 ### 9.2 输出解析工具

@@ -1,12 +1,12 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 """
-kfree_skb Stack Statistics - Track kernel packet drop locations
+kfree_skb Stack Statistics with Histogram - Track kernel packet drop locations
 
 This BCC program tracks kfree_skb calls and collects stack trace statistics
-to identify where packets are being dropped in the kernel.
+using BPF histograms to identify where packets are being dropped in the kernel.
 
-Usage: sudo python2 kfree_skb_stack_stats.py [-i INTERVAL] [-d DURATION] [-t TOP] [-n DEV] [--src IP] [--dst IP] [--src-port PORT] [--dst-port PORT] [--l4-protocol PROTO]
+Usage: sudo python2 kfree_skb_stack_stats_hist.py [-i INTERVAL] [-d DURATION] [-t TOP] [-n DEV] [--src IP] [--dst IP] [--src-port PORT] [--dst-port PORT] [--l4-protocol PROTO]
        -i INTERVAL: reporting interval in seconds (default: 10)
        -d DURATION: total duration in seconds (default: unlimited)
        -t TOP: number of top stacks to show (default: 5)
@@ -18,9 +18,9 @@ Usage: sudo python2 kfree_skb_stack_stats.py [-i INTERVAL] [-d DURATION] [-t TOP
        --l4-protocol PROTO: filter by L4 protocol (tcp/udp/icmp/all, default: all)
 
 Examples:
-  sudo python2 kfree_skb_stack_stats.py -i 5 -d 60 -n eth0
-  sudo python2 kfree_skb_stack_stats.py -t 10 -n br-int --src 192.168.1.10 --dst-port 80
-  sudo python2 kfree_skb_stack_stats.py --l4-protocol tcp --src-port 22
+  sudo python2 kfree_skb_stack_stats_hist.py -i 5 -d 60 -n eth0
+  sudo python2 kfree_skb_stack_stats_hist.py -t 10 -n br-int --src 192.168.1.10 --dst-port 80
+  sudo python2 kfree_skb_stack_stats_hist.py --l4-protocol tcp --src-port 22
 
 """
 
@@ -73,15 +73,15 @@ union name_buf{
     }name_int;
 };
 
-struct stack_key {
+// Histogram key combining stack_id and device name
+struct hist_key {
     int stack_id;
-    union name_buf devname;
+    char devname[IFNAMSIZ];
 };
 
 BPF_STACK_TRACE(stack_traces, 1024);
-BPF_HASH(stack_counts, struct stack_key, u64);
-BPF_HASH(failed_stacks, union name_buf, u64);  // Track stack failures by device
-BPF_HASH(total_drops, u32, u64);
+BPF_HISTOGRAM(drop_hist, struct hist_key);           // Main histogram for stack+device
+BPF_HISTOGRAM(failed_hist, union name_buf);         // Histogram for failed stack traces
 BPF_ARRAY(name_map, union name_buf, 1);
 
 static inline int name_filter(struct sk_buff* skb){
@@ -100,11 +100,12 @@ static inline int name_filter(struct sk_buff* skb){
     // Get device name from skb
     union name_buf real_devname;
     struct net_device *dev;
-    bpf_probe_read(&dev, sizeof(skb->dev), ((char *)skb + offsetof(struct sk_buff, dev)));
-    if (!dev) {
+    if (bpf_probe_read(&dev, sizeof(dev), &skb->dev) != 0 || !dev) {
         return 0;
     }
-    bpf_probe_read(&real_devname, IFNAMSIZ, dev->name);
+    if (bpf_probe_read(&real_devname, IFNAMSIZ, dev->name) != 0) {
+        return 0;
+    }
     
     // Compare device names
     if ((leaf->name_int).hi != real_devname.name_int.hi || 
@@ -246,9 +247,8 @@ int trace_kfree_skb(struct pt_regs *ctx, struct sk_buff *skb)
     }
     
     // Get device name
-    union name_buf devname;
+    union name_buf devname = {};
     struct net_device *dev;
-    // Use direct member access instead of offsetof for better compatibility
     if (bpf_probe_read(&dev, sizeof(dev), &skb->dev) != 0 || !dev) {
         return 0;
     }
@@ -256,26 +256,20 @@ int trace_kfree_skb(struct pt_regs *ctx, struct sk_buff *skb)
         return 0;
     }
     
-    u32 key = 0;
-    u64 zero = 0;
-    
-    // Increment total drop counter
-    u64 *total = total_drops.lookup_or_init(&key, &zero);
-    (*total)++;
-    
     // Get stack trace
     int stack_id = stack_traces.get_stackid(ctx, BPF_F_REUSE_STACKID);
     if (stack_id >= 0) {
-        // Success: count by stack + device
-        struct stack_key skey = {};
-        skey.stack_id = stack_id;
-        skey.devname = devname;
-        u64 *count = stack_counts.lookup_or_init(&skey, &zero);
-        (*count)++;
+        // Success: increment histogram for stack + device
+        struct hist_key key = {};
+        key.stack_id = stack_id;
+        #pragma unroll
+        for (int i = 0; i < IFNAMSIZ; i++) {
+            key.devname[i] = devname.name[i];
+        }
+        drop_hist.increment(key);
     } else {
-        // Failed: count failed stacks by device
-        u64 *failed_count = failed_stacks.lookup_or_init(&devname, &zero);
-        (*failed_count)++;
+        // Failed: increment failed histogram by device
+        failed_hist.increment(devname);
     }
     
     return 0;
@@ -289,62 +283,36 @@ def signal_handler(signal, frame):
     global exiting
     exiting = True
 
-def print_stack_stats(b, top_n=5, last_stacks=None, last_failed=None):
-    """Print current period stack statistics (incremental)"""
-    stack_counts = b["stack_counts"]
+def print_histogram_stats(b, top_n=5):
+    """Print current histogram statistics"""
+    drop_hist = b["drop_hist"]
+    failed_hist = b["failed_hist"]
     stack_traces = b["stack_traces"]
-    failed_stacks = b["failed_stacks"]
     
-    # Calculate incremental counts for this period
-    period_stack_counts = {}
-    period_failed_stacks = {}
+    # Print failed stacks if any
+    if len(failed_hist) > 0:
+        print("\n  Stack trace failures by device:")
+        for devname, count in failed_hist.items():
+            devname_str = devname.name.decode('utf-8', 'replace').rstrip('\x00')
+            print("    %s: %d failed" % (devname_str, count.value))
     
-    # Calculate incremental stack counts
-    for skey, count in stack_counts.items():
-        last_count = 0
-        key_str = "%d_%s" % (skey.stack_id, skey.devname.name.decode('utf-8', 'replace').rstrip('\x00'))
-        if last_stacks and key_str in last_stacks:
-            last_count = last_stacks[key_str].value
-        period_count = count.value - last_count
-        if period_count > 0:
-            period_stack_counts[key_str] = (skey, period_count)
-    
-    # Calculate incremental failed counts
-    for devname, count in failed_stacks.items():
-        last_count = 0
-        dev_str = devname.name.decode('utf-8', 'replace').rstrip('\x00')
-        if last_failed and dev_str in last_failed:
-            last_count = last_failed[dev_str].value
-        period_count = count.value - last_count
-        if period_count > 0:
-            period_failed_stacks[dev_str] = period_count
-    
-    if len(period_stack_counts) == 0 and len(period_failed_stacks) == 0:
-        print("  No stack traces collected in this period.")
-        return
-    
-    # Show failed stacks if any
-    if len(period_failed_stacks) > 0:
-        print("\n  Stack trace failures by device (this period):")
-        for dev_str, count in period_failed_stacks.items():
-            print("    %s: %d failed" % (dev_str, count))
-    
-    if len(period_stack_counts) == 0:
+    if len(drop_hist) == 0:
+        print("  No stack traces collected.")
         return
         
-    # Sort stacks by count (descending)
-    sorted_stacks = sorted(period_stack_counts.items(), 
-                          key=lambda x: x[1][1], reverse=True)
+    # Sort histogram by count (descending) 
+    sorted_hist = drop_hist.items()
+    sorted_hist = sorted(sorted_hist, key=lambda x: x[1].value, reverse=True)
     
-    print("  Found %d unique stacks in this period, showing top %d:" % (len(sorted_stacks), min(top_n, len(sorted_stacks))))
+    print("  Found %d unique stacks, showing top %d:" % (len(sorted_hist), min(top_n, len(sorted_hist))))
     
-    for i, (key_str, (skey, count)) in enumerate(sorted_stacks[:top_n]):
-        devname_str = skey.devname.name.decode('utf-8', 'replace').rstrip('\x00')
-        print("\n  #%d Count: %d calls [device: %s] [stack_id: %d]" % (i+1, count, devname_str, skey.stack_id))
+    for i, (key, count) in enumerate(sorted_hist[:top_n]):
+        devname_str = key.devname.decode('utf-8', 'replace').rstrip('\x00')
+        print("\n  #%d Count: %d calls [device: %s] [stack_id: %d]" % (i+1, count.value, devname_str, key.stack_id))
         print("  Stack trace:")
         
         try:
-            stack = list(stack_traces.walk(skey.stack_id))
+            stack = list(stack_traces.walk(key.stack_id))
             print("    Stack depth: %d frames" % len(stack))
             for j, addr in enumerate(stack[:5]):  # Show top 5 frames
                 sym = b.sym(addr, -1, show_module=True, show_offset=True)
@@ -365,7 +333,7 @@ def main():
     global exiting
     
     # Parse arguments
-    parser = argparse.ArgumentParser(description="Track kfree_skb call stack statistics with five-tuple filtering")
+    parser = argparse.ArgumentParser(description="Track kfree_skb call stack statistics with histograms and five-tuple filtering")
     parser.add_argument("-i", "--interval", type=int, default=10,
                         help="reporting interval in seconds (default: 10)")
     parser.add_argument("-d", "--duration", type=int, default=0,
@@ -410,7 +378,7 @@ def main():
         filters.append("protocol: %s" % args.l4_protocol.upper())
     
     filter_info = " (filters: %s)" % ", ".join(filters) if filters else " (no filters)"
-    print("Tracing kfree_skb calls with %ds intervals...%s" % (args.interval, filter_info))
+    print("Tracing kfree_skb calls with histograms, %ds intervals...%s" % (args.interval, filter_info))
     if args.duration > 0:
         print("Duration: %ds, Press Ctrl+C to stop early" % args.duration)
     else:
@@ -441,10 +409,7 @@ def main():
     
     # Initialize timing
     start_time = time()
-    last_total = 0
     cycle = 0
-    last_stack_counts = None
-    last_failed_stacks = None
     
     try:
         while not exiting:
@@ -455,93 +420,60 @@ def main():
             if args.duration > 0 and (time() - start_time) >= args.duration:
                 break
             
-            # Get current total
-            total_drops = b["total_drops"]
-            try:
-                key = b["total_drops"].Key(0)
-                current_total = total_drops[key].value
-            except KeyError:
-                current_total = 0
+            # Calculate total drops from histogram
+            drop_hist = b["drop_hist"]
+            total_drops = sum(count.value for count in drop_hist.values())
             
             # Print periodic statistics
             current_time = strftime("%Y-%m-%d %H:%M:%S")
-            new_drops = current_total - last_total
-            print("\n[%s] Cycle %d - Period drops: %d (Total: %d) [showing top %d]" % 
-                  (current_time, cycle, new_drops, current_total, args.top))
+            print("\n[%s] Cycle %d - Total drops: %d [showing top %d]" % 
+                  (current_time, cycle, total_drops, args.top))
             print("-" * 60)
             
-            # Print top stacks for this period
-            print_stack_stats(b, args.top, last_stack_counts, last_failed_stacks)
+            # Print histogram statistics
+            print_histogram_stats(b, args.top)
             print("=" * 60)
-            
-            # Save current state for next period
-            last_total = current_total
-            last_stack_counts = {}
-            last_failed_stacks = {}
-            
-            # Save stack counts with string keys to avoid hash issues
-            for skey, count in b["stack_counts"].items():
-                key_str = "%d_%s" % (skey.stack_id, skey.devname.name.decode('utf-8', 'replace').rstrip('\x00'))
-                last_stack_counts[key_str] = count
-            
-            # Save failed stacks  
-            for devname, count in b["failed_stacks"].items():
-                dev_str = devname.name.decode('utf-8', 'replace').rstrip('\x00')
-                last_failed_stacks[dev_str] = count
             
     except KeyboardInterrupt:
         exiting = True
     
     # Print final statistics
     print("\n" + "="*60)
-    print("%s kfree_skb Call Stack Statistics" % strftime("%Y-%m-%d %H:%M:%S"))
+    print("%s kfree_skb Call Stack Statistics (Histogram)" % strftime("%Y-%m-%d %H:%M:%S"))
     print("="*60)
     
-    # Get total drops
-    total_drops = b["total_drops"]
-    try:
-        key = b["total_drops"].Key(0)
-        total_count = total_drops[key].value
-        print("Total packet drops: %d\n" % total_count)
-    except KeyError:
-        print("Total packet drops: 0\n")
-        return
+    # Get final totals
+    drop_hist = b["drop_hist"]
+    failed_hist = b["failed_hist"]
     
-    # Get stack statistics
-    stack_counts = b["stack_counts"]
-    stack_traces = b["stack_traces"]
-    failed_stacks = b["failed_stacks"]
+    total_drops = sum(count.value for count in drop_hist.values())
+    total_failed = sum(count.value for count in failed_hist.values())
     
-    # Show failed stacks summary
-    if len(failed_stacks) > 0:
-        print("Stack trace failures by device:")
-        failed_total = 0
-        for devname, count in failed_stacks.items():
-            devname_str = devname.name.decode('utf-8', 'replace').rstrip('\x00')
-            print("  %s: %d failed" % (devname_str, count.value))
-            failed_total += count.value
+    print("Total packet drops: %d" % total_drops)
+    if total_failed > 0:
         print("Total failed stack traces: %d (%.1f%%)\n" % 
-              (failed_total, 100.0 * failed_total / (total_count + failed_total)))
+              (total_failed, 100.0 * total_failed / (total_drops + total_failed)))
     
-    if len(stack_counts) == 0:
+    if total_drops == 0:
         print("No successful stack traces collected.")
         return
     
     print("Top call stacks causing packet drops:")
     print("-" * 40)
     
-    # Sort stacks by count (descending)
-    sorted_stacks = sorted(stack_counts.items(), 
-                          key=lambda x: x[1].value, reverse=True)
+    # Sort histogram by count (descending)
+    sorted_hist = drop_hist.items()
+    sorted_hist = sorted(sorted_hist, key=lambda x: x[1].value, reverse=True)
     
-    for skey, count in sorted_stacks[:args.top * 2]:  # Show more in final summary
-        devname_str = skey.devname.name.decode('utf-8', 'replace').rstrip('\x00')
+    for key, count in sorted_hist[:args.top * 2]:  # Show more in final summary
+        devname_str = key.devname.decode('utf-8', 'replace').rstrip('\x00')
         print("\nCount: %d calls (%.1f%%) [device: %s] [stack_id: %d]" % 
-              (count.value, 100.0 * count.value / total_count, devname_str, skey.stack_id))
+              (count.value, 100.0 * count.value / total_drops, devname_str, key.stack_id))
         print("Stack trace:")
         
         try:
-            stack = stack_traces.walk(skey.stack_id)
+            stack_traces = b["stack_traces"]
+            stack = stack_traces.walk(key.stack_id)
             for addr in stack:
                 sym = b.sym(addr, -1, show_module=True, show_offset=True)
                 print("  %s" % sym.decode('utf-8', 'replace'))

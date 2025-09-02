@@ -77,10 +77,9 @@ bpf_text = """
 
 // Stage definitions - internal port perspective
 // TX direction probes (EXTENDED: socket -> network)
+// REMOVED: STG_SOCK_SEND and STG_TCP_UDP_SEND - socket and protocol layer probes removed
 #define STG_SOCK_SEND_SYSCALL 21  // sys_enter_sendto/sys_enter_send - syscall entry
-#define STG_SOCK_SEND        1   // tcp_sendmsg/udp_sendmsg - socket layer send  
-#define STG_TCP_UDP_SEND     22  // __tcp_transmit_skb/udp_send_skb - protocol layer send
-#define STG_IP_OUTPUT        2   // ip_output - IP output processing
+#define STG_IP_OUTPUT        2   // ip_output - IP output processing - FIRST STAGE for TCP/UDP TX
 #define STG_OVS_TX           3   // ovs_vport_receive (internal port)
 #define STG_FLOW_EXTRACT_TX  4   // ovs_ct_update_key (flow extract phase)
 #define STG_CT_TX            5   // nf_conntrack_in
@@ -439,6 +438,10 @@ static __always_inline int parse_packet_key(
     return 1;
 }
 
+// REMOVED: build_tcp_tx_packet_key function - no longer needed without socket probes
+
+// REMOVED: handle_tcp_tx_stage_event function - no longer needed without socket probes
+
 // Main event handling function - tracks packets through all stages
 static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u8 stage_id, u8 direction) {
     debug_inc(stage_id, CODE_HANDLE_ENTRY);
@@ -456,7 +459,7 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
     
     // Check if this is the first stage for this direction
     bool is_first_stage = false;
-    if ((direction == 1 && stage_id == STG_SOCK_SEND) ||    // system TX path starts with socket send
+    if ((direction == 1 && stage_id == STG_IP_OUTPUT) || // TCP TX path starts with ip_output
         (direction == 1 && stage_id == STG_IP_SEND_SKB) ||  // ICMP TX path starts with ip_send_skb
         (direction == 2 && stage_id == STG_PHY_RX)) {       // system RX path starts with physical RX
         is_first_stage = true;
@@ -727,10 +730,7 @@ static __always_inline int handle_socket_event(struct sock *sk, u8 stage_id, u8 
 
 
 // TX direction probes
-// System send probes - starting from application layer
-int kprobe__tcp_sendmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg, size_t size) {
-    return handle_socket_event(sk, STG_SOCK_SEND, 1);
-}
+// REMOVED: tcp_sendmsg probe - replaced by __tcp_transmit_skb as first stage
 
 int kprobe__ip_output(struct pt_regs *ctx, struct net *net, struct sock *sk, struct sk_buff *skb) {
     debug_inc(STG_IP_OUTPUT, CODE_PROBE_ENTRY);
@@ -986,20 +986,9 @@ int kprobe__ip_send_skb(struct pt_regs *ctx, struct net *net, struct sk_buff *sk
 
 // REMOVED: tcp/udp_recvmsg probe points - RX path ends at tcp_v4_rcv/udp_rcv
 
-// TX direction protocol layer probes
-int kprobe____tcp_transmit_skb(struct pt_regs *ctx, struct sock *sk, struct sk_buff *skb, int clone_it, gfp_t gfp_mask, u32 rcv_wnd) {
-    if (!skb) return 0;
-    
-    if (DIRECTION_FILTER == 2) return 0;  // Skip if system_rx only
-    handle_stage_event(ctx, skb, STG_TCP_UDP_SEND, 1);
-    return 0;
-}
-
-// NOTE: udp_send_skb doesn't exist in kernel 4.19.90, using ip_output for UDP TX protocol stage
-
-int kprobe__udp_sendmsg(struct pt_regs *ctx, struct sock *sk, struct msghdr *msg, size_t len) {
-    return handle_socket_event(sk, STG_SOCK_SEND, 1);
-}
+// TX direction protocol layer probes - TCP transmit starts here
+// REMOVED: __tcp_transmit_skb and udp_sendmsg probes - socket/protocol layer probes removed
+// TX direction now starts at ip_output
 """
 
 # Constants  
@@ -1105,8 +1094,7 @@ def get_stage_name(stage_id):
     stage_names = {
         # 系统 TX 路径（Local→Uplink，系统发送到外部） - EXTENDED
         21: "SOCK_SEND_SYSCALL",  # New: syscall entry
-        1: "SOCK_SEND",           # Socket layer send  
-        22: "TCP_UDP_SEND",       # New: protocol layer send
+        # REMOVED: 1: "SOCK_SEND" and 22: "TCP_UDP_SEND" - socket and protocol layer probes removed
         2: "IP_OUTPUT",           # IP output processing
         3: "OVS_TX",
         4: "FLOW_EXTRACT_TX", 
@@ -1165,8 +1153,7 @@ def print_debug_statistics(b):
     stage_names = {
         # TX direction (socket -> network)
         21: "SOCK_SEND_SYSCALL",
-        1: "SOCK_SEND",
-        22: "TCP_UDP_SEND",
+        # REMOVED: 1: "SOCK_SEND" and 22: "TCP_UDP_SEND"
         2: "IP_OUTPUT", 
         3: "OVS_TX",
         4: "FLOW_EXTRACT_TX",

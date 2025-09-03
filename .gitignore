@@ -11,3 +11,4 @@ __pycache__/
 claude_local*
 CLAUDE.md
 AGENTS.md
+bcc-program/*

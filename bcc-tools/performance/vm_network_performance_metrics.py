@@ -74,32 +74,53 @@ bpf_text = """
 #define PHY_IFINDEX %d
 #define DIRECTION_FILTER %d  // 0=both, 1=vnet_rx, 2=vnet_tx
 
-// Stage definitions - vnet perspective
+// Stage definitions - vnet perspective (reordered to match temporal sequence)
 // VNET RX path (VM TX, packets from VM to external)
 #define STG_VNET_RX         1   // netif_receive_skb (vnet) - FIRST POINT
 #define STG_OVS_RX          2   // ovs_vport_receive
-#define STG_FLOW_EXTRACT_END_RX  3   // ovs_ct_update_key (flow extract phase)
-#define STG_CT_RX           4   // nf_conntrack_in
-#define STG_CT_OUT_RX       5   // ovs_ct_update_key (conntrack action)
-#define STG_QDISC_ENQ       6   // qdisc_enqueue (physical dev)
-#define STG_QDISC_DEQ       7   // qdisc_dequeue (physical dev)
-#define STG_TX_QUEUE        8   // dev_queue_xmit (physical dev)
-#define STG_TX_XMIT         9   // dev_hard_start_xmit (physical dev) - LAST POINT
+#define STG_FLOW_EXTRACT_END_RX  3   // ovs_ct_update_key (flow extract phase) - before upcall
+#define STG_OVS_UPCALL_RX   4   // ovs_dp_upcall - upcall starts
+#define STG_OVS_USERSPACE_RX 5  // ovs_flow_key_extract_userspace - upcall processing
+#define STG_CT_RX           6   // nf_conntrack_in
+#define STG_CT_OUT_RX       7   // ovs_ct_update_key (conntrack action)
+#define STG_QDISC_ENQ       8   // qdisc_enqueue (physical dev)
+#define STG_QDISC_DEQ       9   // qdisc_dequeue (physical dev)
+#define STG_TX_QUEUE        10  // dev_queue_xmit (physical dev)
+#define STG_TX_XMIT         11  // dev_hard_start_xmit (physical dev) - LAST POINT
 
 // VNET TX path (VM RX, packets from external to VM)
-#define STG_PHY_RX          11  // netif_receive_skb (physical) - FIRST POINT
-#define STG_OVS_TX          12  // ovs_vport_receive
-#define STG_FLOW_EXTRACT_END_TX  13   // ovs_ct_update_key (flow extract phase)
-#define STG_CT_TX           14  // nf_conntrack_in
-#define STG_CT_OUT_TX       15  // ovs_ct_update_key (conntrack action)
-#define STG_TUN_XMIT        16  // tun_net_xmit
-#define STG_VNET_QDISC_ENQ  17  // qdisc_enqueue (vnet dev)
-#define STG_VNET_QDISC_DEQ  18  // qdisc_dequeue (vnet dev)
-#define STG_VNET_TX         19  // dev_hard_start_xmit (vnet) - LAST POINT
+#define STG_PHY_RX          13  // netif_receive_skb (physical) - FIRST POINT
+#define STG_OVS_TX          14  // ovs_vport_receive
+#define STG_FLOW_EXTRACT_END_TX  15   // ovs_ct_update_key (flow extract phase) - before upcall
+#define STG_OVS_UPCALL_TX   16  // ovs_dp_upcall - upcall starts
+#define STG_OVS_USERSPACE_TX 17 // ovs_flow_key_extract_userspace - upcall processing
+#define STG_CT_TX           18  // nf_conntrack_in
+#define STG_CT_OUT_TX       19  // ovs_ct_update_key (conntrack action)
+#define STG_TUN_XMIT        20  // tun_net_xmit
+#define STG_VNET_QDISC_ENQ  21  // qdisc_enqueue (vnet dev)
+#define STG_VNET_QDISC_DEQ  22  // qdisc_dequeue (vnet dev)
+#define STG_VNET_TX         23  // dev_hard_start_xmit (vnet) - LAST POINT
 
-#define MAX_STAGES          20
+#define MAX_STAGES          24
 #define IFNAMSIZ            16
 #define TASK_COMM_LEN       16
+
+// Debug framework definitions
+#define CODE_PROBE_ENTRY            1   // Probe function entry
+#define CODE_INTERFACE_FILTER       2   // Interface filtering
+#define CODE_DIRECTION_FILTER       3   // Direction filtering  
+#define CODE_HANDLE_CALLED          4   // Handle function called
+#define CODE_HANDLE_ENTRY           5   // Handle function entry
+#define CODE_PARSE_ENTRY            6   // Parse function entry
+#define CODE_PARSE_SUCCESS          7   // Parse success
+#define CODE_PARSE_IP_FILTER        8   // IP filtering
+#define CODE_PARSE_PROTO_FILTER     9   // Protocol filtering
+#define CODE_PARSE_PORT_FILTER     10   // Port filtering
+#define CODE_FLOW_CREATE           14   // Flow creation
+#define CODE_FLOW_LOOKUP           15   // Flow lookup
+#define CODE_FLOW_FOUND            16   // Flow found
+#define CODE_FLOW_NOT_FOUND        17   // Flow not found
+#define CODE_PERF_SUBMIT           19   // Performance event submit
 
 // Packet key structure for unique packet identification
 struct packet_key_t {
@@ -210,6 +231,15 @@ BPF_ARRAY(probe_stats, u64, 32);          // Event counters for each probe point
 
 // Events output
 BPF_PERF_OUTPUT(events);
+
+// Debug statistics framework
+BPF_HISTOGRAM(debug_stage_stats, u32);  // Key: (stage_id << 8) | code_point
+
+// Debug function
+static __always_inline void debug_inc(u8 stage_id, u8 code_point) {
+    u32 key = ((u32)stage_id << 8) | code_point;
+    debug_stage_stats.increment(key);
+}
 
 // Helper functions - reusing vm_network_latency.py proven logic
 static __always_inline bool is_target_vm_interface(const struct sk_buff *skb) {
@@ -394,15 +424,197 @@ static __always_inline int parse_packet_key(
     return 1;
 }
 
+// Specialized parsing function for userspace SKB (used in ovs_flow_key_extract_userspace)
+// Copied from vm_network_latency.py implementation
+static __always_inline int parse_packet_key_userspace(
+    struct sk_buff *skb, 
+    struct packet_key_t *key, 
+    u8 direction
+) {
+    if (skb == NULL) {
+        return 0;
+    }
+
+    unsigned char *skb_head;
+    if(bpf_probe_read_kernel(&skb_head, sizeof(skb_head), &skb->head) < 0) {
+        return 0;
+    }
+    if (!skb_head) {
+        return 0;
+    }
+    
+    unsigned long skb_data_ptr_val; 
+    if(bpf_probe_read_kernel(&skb_data_ptr_val, sizeof(skb_data_ptr_val), &skb->data) < 0) {
+        return 0;
+    }
+    
+    unsigned int data_offset = (unsigned int)(skb_data_ptr_val - (unsigned long)skb_head);
+    unsigned int mac_offset = data_offset; 
+    
+    struct ethhdr eth;
+    if (bpf_probe_read_kernel(&eth, sizeof(eth), skb_head + mac_offset) < 0) {
+        return 0;
+    }
+    
+    unsigned int net_offset = mac_offset + ETH_HLEN;
+    __be16 h_proto = eth.h_proto;
+    
+    // Handle VLAN tags - exactly like icmp_rtt_latency.py
+    if (h_proto == htons(ETH_P_8021Q) || h_proto == htons(ETH_P_8021AD)) {
+        net_offset += VLAN_HLEN; 
+        if (bpf_probe_read_kernel(&h_proto, sizeof(h_proto), skb_head + mac_offset + ETH_HLEN + 2) < 0) { 
+            return 0;
+        }
+        if (h_proto == htons(ETH_P_8021Q) || h_proto == htons(ETH_P_8021AD)) {
+             net_offset += VLAN_HLEN;
+             if (bpf_probe_read_kernel(&h_proto, sizeof(h_proto), skb_head + mac_offset + (2 * VLAN_HLEN) + 2) < 0) {
+                 return 0;
+             }
+        }
+    }
+    
+    if (h_proto != htons(ETH_P_IP)) {
+        return 0;
+    }
+    
+    struct iphdr ip;
+    if (bpf_probe_read_kernel(&ip, sizeof(ip), skb_head + net_offset) < 0) {
+        return 0;
+    }
+    
+    key->sip = ip.saddr;
+    key->dip = ip.daddr;
+    key->proto = ip.protocol;
+    
+    // Apply filters
+    if (PROTOCOL_FILTER != 0 && ip.protocol != PROTOCOL_FILTER) {
+        return 0;
+    }
+    
+    if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER && ip.daddr != SRC_IP_FILTER) {
+        return 0;
+    }
+    if (DST_IP_FILTER != 0 && ip.saddr != DST_IP_FILTER && ip.daddr != DST_IP_FILTER) {
+        return 0;
+    }
+
+    u8 ip_ihl = ip.ihl & 0x0F;  
+    if (ip_ihl < 5) {  
+        return 0;
+    }
+
+    unsigned int trans_offset = net_offset + (ip_ihl * 4);
+    
+    // Parse transport layer - match the regular parsing exactly
+    switch (ip.protocol) {
+        case IPPROTO_TCP: {
+            struct tcphdr tcp;
+            if (bpf_probe_read_kernel(&tcp, sizeof(tcp), skb_head + trans_offset) < 0) {
+                return 0;
+            }
+            
+            // Use current packet_key_t structure field names
+            key->tcp.source = tcp.source;
+            key->tcp.dest = tcp.dest;
+            key->tcp.seq = tcp.seq;
+            
+            if (SRC_PORT_FILTER != 0 && tcp.source != htons(SRC_PORT_FILTER) && tcp.dest != htons(SRC_PORT_FILTER)) {
+                return 0;
+            }
+            if (DST_PORT_FILTER != 0 && tcp.source != htons(DST_PORT_FILTER) && tcp.dest != htons(DST_PORT_FILTER)) {
+                return 0;
+            }
+            break;
+        }
+        case IPPROTO_UDP: {
+            // Set ip_id exactly like regular UDP parsing
+            key->udp.id = ip.id;
+            
+            // Fragment handling exactly like regular parsing
+            u16 frag_off_flags = ntohs(ip.frag_off);
+            u8 more_frag = (frag_off_flags & 0x2000) ? 1 : 0;  // More Fragments bit
+            u16 frag_offset = frag_off_flags & 0x1FFF;          // Fragment offset (8-byte units)
+            u8 is_fragment = (more_frag || frag_offset) ? 1 : 0;
+            
+            if (is_fragment) {
+                key->udp.len = frag_offset * 8;  // Store fragment offset in len field
+                
+                if (frag_offset == 0) {
+                    // First fragment - parse UDP header
+                    struct udphdr udp;
+                    if (bpf_probe_read_kernel(&udp, sizeof(udp), skb_head + trans_offset) == 0) {
+                        key->udp.source = udp.source;
+                        key->udp.dest = udp.dest;
+                    } else {
+                        key->udp.source = 0;
+                        key->udp.dest = 0;
+                    }
+                } else {
+                    // Subsequent fragments - no UDP header
+                    key->udp.source = 0;
+                    key->udp.dest = 0;
+                }
+            } else {
+                key->udp.len = 0;  // No fragmentation
+                struct udphdr udp;
+                if (bpf_probe_read_kernel(&udp, sizeof(udp), skb_head + trans_offset) < 0) {
+                    return 0;
+                }
+                key->udp.source = udp.source;
+                key->udp.dest = udp.dest;
+            }
+            
+            // Apply port filters only if not fragmented or is first fragment
+            if (!is_fragment || frag_offset == 0) {
+                if (SRC_PORT_FILTER != 0 && key->udp.source != htons(SRC_PORT_FILTER) && key->udp.dest != htons(SRC_PORT_FILTER)) {
+                    return 0;
+                }
+                if (DST_PORT_FILTER != 0 && key->udp.source != htons(DST_PORT_FILTER) && key->udp.dest != htons(DST_PORT_FILTER)) {
+                    return 0;
+                }
+            }
+            break;
+        }
+        case IPPROTO_ICMP: {
+            struct icmphdr icmp;
+            if (bpf_probe_read_kernel(&icmp, sizeof(icmp), skb_head + trans_offset) < 0) {
+                return 0;
+            }
+            
+            key->icmp.id = icmp.un.echo.id;
+            key->icmp.sequence = icmp.un.echo.sequence;
+            key->icmp.type = icmp.type;
+            key->icmp.code = icmp.code;
+            break;
+        }
+        default:
+            return 0;
+    }
+    
+    return 1;
+}
+
 // Main event handling function - tracks packets through all stages
 static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u8 stage_id, u8 direction) {
+    debug_inc(stage_id, CODE_HANDLE_ENTRY);  // Entry counter
+    
     struct packet_key_t key = {};
     u64 current_ts = bpf_ktime_get_ns();
     
     // Parse packet key for identification
-    if (!parse_packet_key(skb, &key, direction)) {
+    debug_inc(stage_id, CODE_PARSE_ENTRY);
+    int parse_success = 0;
+    // Use userspace parsing for OVS_USERSPACE stages, regular parsing for others
+    if (stage_id == STG_OVS_USERSPACE_RX || stage_id == STG_OVS_USERSPACE_TX) {
+        parse_success = parse_packet_key_userspace(skb, &key, direction);
+    } else {
+        parse_success = parse_packet_key(skb, &key, direction);
+    }
+    
+    if (!parse_success) {
         return;
     }
+    debug_inc(stage_id, CODE_PARSE_SUCCESS);
     
     // Check if this is the first stage for this direction
     bool is_first_stage = false;
@@ -414,6 +626,7 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
     struct flow_data_t *flow_ptr;
     
     if (is_first_stage) {
+        debug_inc(stage_id, CODE_FLOW_CREATE);
         // Initialize new flow tracking using per-cpu map
         flow_sessions.delete(&key);  // Clean any old entries
         
@@ -460,12 +673,15 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
         }
     } else {
         // Look up existing flow
+        debug_inc(stage_id, CODE_FLOW_LOOKUP);
         flow_ptr = flow_sessions.lookup(&key);
     }
     
     if (!flow_ptr) {
+        debug_inc(stage_id, CODE_FLOW_NOT_FOUND);
         return;
     }
+    debug_inc(stage_id, CODE_FLOW_FOUND);
     
     // Record detailed information for this stage
     if (stage_id < MAX_STAGES && !flow_ptr->stages[stage_id].valid) {
@@ -607,26 +823,65 @@ int kprobe__nf_conntrack_in(struct pt_regs *ctx, struct net *net, u_int8_t pf, u
     return 0;
 }
 
+// OVS upcall probe point - captures flow table miss events
+int kprobe__ovs_dp_upcall(struct pt_regs *ctx, void *dp, const struct sk_buff *skb_const) {
+    struct sk_buff *skb = (struct sk_buff *)skb_const;
+    if (!skb) return 0;
+    
+    // Upcall happens when flow table miss occurs
+    if (DIRECTION_FILTER != 2) {  // vnet_rx or both
+        handle_stage_event(ctx, skb, STG_OVS_UPCALL_RX, 1);
+    }
+    if (DIRECTION_FILTER != 1) {  // vnet_tx or both
+        handle_stage_event(ctx, skb, STG_OVS_UPCALL_TX, 2);
+    }
+    
+    return 0;
+}
+
+// OVS userspace flow key extraction - captures upcall processing completion
+int kprobe__ovs_flow_key_extract_userspace(struct pt_regs *ctx, struct net *net, const struct nlattr *attr, struct sk_buff *skb) {
+    if (!skb) return 0;
+    
+    // Userspace key extraction happens during upcall processing
+    if (DIRECTION_FILTER != 2) {  // vnet_rx or both
+        handle_stage_event(ctx, skb, STG_OVS_USERSPACE_RX, 1);
+    }
+    if (DIRECTION_FILTER != 1) {  // vnet_tx or both
+        handle_stage_event(ctx, skb, STG_OVS_USERSPACE_TX, 2);
+    }
+    
+    return 0;
+}
+
 int kprobe__ovs_ct_update_key(struct pt_regs *ctx, struct sk_buff *skb, void *info, void *key, bool post_ct, bool keep_nat_flags) {
+    debug_inc(STG_FLOW_EXTRACT_END_RX, CODE_PROBE_ENTRY);  // General entry counter
+    
     if (!skb) return 0;
     
     // Distinguish between flow extract and conntrack action calls
-    // post_ct=false indicates flow extract phase (ovs_ct_fill_key)  
-    // post_ct=true indicates conntrack action phase (__ovs_ct_lookup)
+    // post_ct=false indicates flow extract phase (ovs_ct_fill_key) - occurs BEFORE upcall
+    // post_ct=true indicates conntrack action phase (__ovs_ct_lookup) - occurs AFTER upcall
     if (post_ct) {
-        // Conntrack action phase
+        debug_inc(STG_CT_OUT_RX, CODE_PROBE_ENTRY);  // Post-CT phase entry
+        // Conntrack action phase - occurs after upcall processing
         if (DIRECTION_FILTER != 2) {  // vnet_rx or both
+            debug_inc(STG_CT_OUT_RX, CODE_HANDLE_CALLED);
             handle_stage_event(ctx, skb, STG_CT_OUT_RX, 1);
         }
         if (DIRECTION_FILTER != 1) {  // vnet_tx or both
+            debug_inc(STG_CT_OUT_TX, CODE_HANDLE_CALLED);
             handle_stage_event(ctx, skb, STG_CT_OUT_TX, 2);
         }
     } else {
-        // Flow extract phase
+        debug_inc(STG_FLOW_EXTRACT_END_RX, CODE_PROBE_ENTRY);  // Flow extract phase entry
+        // Flow extract phase - occurs BEFORE upcall (when flow table miss detected)
         if (DIRECTION_FILTER != 2) {  // vnet_rx or both
+            debug_inc(STG_FLOW_EXTRACT_END_RX, CODE_HANDLE_CALLED);
             handle_stage_event(ctx, skb, STG_FLOW_EXTRACT_END_RX, 1);
         }
         if (DIRECTION_FILTER != 1) {  // vnet_tx or both
+            debug_inc(STG_FLOW_EXTRACT_END_TX, CODE_HANDLE_CALLED);
             handle_stage_event(ctx, skb, STG_FLOW_EXTRACT_END_TX, 2);
         }
     }
@@ -707,7 +962,7 @@ int kprobe__tun_net_xmit(struct pt_regs *ctx, struct sk_buff *skb, struct net_de
 """
 
 # Constants
-MAX_STAGES = 20
+MAX_STAGES = 24
 IFNAMSIZ = 16
 TASK_COMM_LEN = 16
 
@@ -811,23 +1066,27 @@ def get_stage_name(stage_id):
         1: "VNET_RX",
         2: "OVS_RX", 
         3: "FLOW_EXTRACT_END_RX",
-        4: "CT_RX",
-        5: "CT_OUT_RX",
-        6: "QDISC_ENQ",
-        7: "QDISC_DEQ",
-        8: "TX_QUEUE",
-        9: "TX_XMIT",
+        4: "OVS_UPCALL_RX",
+        5: "OVS_USERSPACE_RX",
+        6: "CT_RX",
+        7: "CT_OUT_RX",
+        8: "QDISC_ENQ",
+        9: "QDISC_DEQ",
+        10: "TX_QUEUE",
+        11: "TX_XMIT",
         
         # VNET TX path (VM RX, packets from external to VM)
-        11: "PHY_RX",
-        12: "OVS_TX",
-        13: "FLOW_EXTRACT_END_TX",
-        14: "CT_TX",
-        15: "CT_OUT_TX",
-        16: "TUN_XMIT",
-        17: "VNET_QDISC_ENQ",
-        18: "VNET_QDISC_DEQ",
-        19: "VNET_TX"
+        13: "PHY_RX",
+        14: "OVS_TX",
+        15: "FLOW_EXTRACT_END_TX",
+        16: "OVS_UPCALL_TX",
+        17: "OVS_USERSPACE_TX",
+        18: "CT_TX",
+        19: "CT_OUT_TX",
+        20: "TUN_XMIT",
+        21: "VNET_QDISC_ENQ",
+        22: "VNET_QDISC_DEQ",
+        23: "VNET_TX"
     }
     return stage_names.get(stage_id, "Unknown_%d" % stage_id)
 
@@ -981,6 +1240,34 @@ def print_event(cpu, data, size):
         
     print("")
 
+def print_debug_statistics(b):
+    """Print debug statistics from the BPF program"""
+    # Stage name mapping
+    stage_names = {
+        1: "VNET_RX", 2: "OVS_RX", 3: "FLOW_EXTRACT_END_RX", 4: "OVS_UPCALL_RX", 5: "OVS_USERSPACE_RX",
+        6: "CT_RX", 7: "CT_OUT_RX", 8: "QDISC_ENQ", 9: "QDISC_DEQ", 10: "TX_QUEUE", 11: "TX_XMIT",
+        13: "PHY_RX", 14: "OVS_TX", 15: "FLOW_EXTRACT_END_TX", 16: "OVS_UPCALL_TX", 17: "OVS_USERSPACE_TX", 
+        18: "CT_TX", 19: "CT_OUT_TX", 20: "TUN_XMIT", 21: "VNET_QDISC_ENQ", 22: "VNET_QDISC_DEQ", 23: "VNET_TX"
+    }
+    
+    # Code point name mapping
+    code_names = {
+        1: "PROBE_ENTRY", 2: "INTERFACE_FILTER", 3: "DIRECTION_FILTER", 4: "HANDLE_CALLED", 5: "HANDLE_ENTRY",
+        6: "PARSE_ENTRY", 7: "PARSE_SUCCESS", 8: "PARSE_IP_FILTER", 9: "PARSE_PROTO_FILTER", 10: "PARSE_PORT_FILTER",
+        14: "FLOW_CREATE", 15: "FLOW_LOOKUP", 16: "FLOW_FOUND", 17: "FLOW_NOT_FOUND", 19: "PERF_SUBMIT"
+    }
+    
+    print("\n=== Debug Statistics ===")
+    stage_stats = b["debug_stage_stats"]
+    for k, v in sorted(stage_stats.items(), key=lambda x: x[0].value):
+        if v.value > 0:
+            stage_id = k.value >> 8
+            code_point = k.value & 0xFF
+            stage_name = stage_names.get(stage_id, "UNKNOWN_%d" % stage_id)
+            code_name = code_names.get(code_point, "CODE_%d" % code_point)
+            print("  %s.%s: %d" % (stage_name, code_name, v.value))
+    print("")
+
 if __name__ == "__main__":
     if os.geteuid() != 0:
         print("This program must be run as root")
@@ -1102,6 +1389,13 @@ Examples:
             b.perf_buffer_poll()
     except KeyboardInterrupt:
         print("\nDetaching...")
+        
+        # Print debug statistics first to diagnose missing stages
+        try:
+            print_debug_statistics(b)
+        except Exception as e:
+            print("Error in debug statistics: %s" % str(e))
+        
         print("\n=== Performance Statistics ===")
         
         print("Event counts by probe point:")

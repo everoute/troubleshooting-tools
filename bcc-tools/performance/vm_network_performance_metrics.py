@@ -89,19 +89,18 @@ bpf_text = """
 #define STG_TX_XMIT         11  // dev_hard_start_xmit (physical dev) - LAST POINT
 
 // VNET TX path (VM RX, packets from external to VM)
-#define STG_PHY_RX          13  // netif_receive_skb (physical) - FIRST POINT
-#define STG_OVS_TX          14  // ovs_vport_receive
-#define STG_FLOW_EXTRACT_END_TX  15   // ovs_ct_update_key (flow extract phase) - before upcall
-#define STG_OVS_UPCALL_TX   16  // ovs_dp_upcall - upcall starts
-#define STG_OVS_USERSPACE_TX 17 // ovs_flow_key_extract_userspace - upcall processing
-#define STG_CT_TX           18  // nf_conntrack_in
-#define STG_CT_OUT_TX       19  // ovs_ct_update_key (conntrack action)
-#define STG_TUN_XMIT        20  // tun_net_xmit
-#define STG_VNET_QDISC_ENQ  21  // qdisc_enqueue (vnet dev)
-#define STG_VNET_QDISC_DEQ  22  // qdisc_dequeue (vnet dev)
-#define STG_VNET_TX         23  // dev_hard_start_xmit (vnet) - LAST POINT
+#define STG_PHY_RX          12  // netif_receive_skb (physical) - FIRST POINT
+#define STG_OVS_TX          13  // ovs_vport_receive
+#define STG_FLOW_EXTRACT_END_TX  14   // ovs_ct_update_key (flow extract phase) - before upcall
+#define STG_OVS_UPCALL_TX   15  // ovs_dp_upcall - upcall starts
+#define STG_OVS_USERSPACE_TX 16 // ovs_flow_key_extract_userspace - upcall processing
+#define STG_CT_TX           17  // nf_conntrack_in
+#define STG_CT_OUT_TX       18  // ovs_ct_update_key (conntrack action)
+#define STG_VNET_QDISC_ENQ  19  // qdisc_enqueue (vnet dev)
+#define STG_VNET_QDISC_DEQ  20  // qdisc_dequeue (vnet dev)
+#define STG_VNET_TX         21  // dev_hard_start_xmit (vnet) - LAST POINT
 
-#define MAX_STAGES          24
+#define MAX_STAGES          22
 #define IFNAMSIZ            16
 #define TASK_COMM_LEN       16
 
@@ -951,18 +950,10 @@ int kprobe__dev_queue_xmit_nit(struct pt_regs *ctx, struct sk_buff *skb, struct 
     return 0;
 }
 
-// TUN transmit for vnet_tx path
-int kprobe__tun_net_xmit(struct pt_regs *ctx, struct sk_buff *skb, struct net_device *dev) {
-    if (!skb || !is_target_vm_interface(skb)) return 0;
-    if (DIRECTION_FILTER == 1) return 0;  // Skip if vnet_rx only
-    
-    handle_stage_event(ctx, skb, STG_TUN_XMIT, 2);
-    return 0;
-}
 """
 
 # Constants
-MAX_STAGES = 24
+MAX_STAGES = 22
 IFNAMSIZ = 16
 TASK_COMM_LEN = 16
 
@@ -1076,17 +1067,16 @@ def get_stage_name(stage_id):
         11: "TX_XMIT",
         
         # VNET TX path (VM RX, packets from external to VM)
-        13: "PHY_RX",
-        14: "OVS_TX",
-        15: "FLOW_EXTRACT_END_TX",
-        16: "OVS_UPCALL_TX",
-        17: "OVS_USERSPACE_TX",
-        18: "CT_TX",
-        19: "CT_OUT_TX",
-        20: "TUN_XMIT",
-        21: "VNET_QDISC_ENQ",
-        22: "VNET_QDISC_DEQ",
-        23: "VNET_TX"
+        12: "PHY_RX",
+        13: "OVS_TX",
+        14: "FLOW_EXTRACT_END_TX",
+        15: "OVS_UPCALL_TX",
+        16: "OVS_USERSPACE_TX",
+        17: "CT_TX",
+        18: "CT_OUT_TX",
+        19: "VNET_QDISC_ENQ",
+        20: "VNET_QDISC_DEQ",
+        21: "VNET_TX"
     }
     return stage_names.get(stage_id, "Unknown_%d" % stage_id)
 
@@ -1229,9 +1219,9 @@ def print_event(cpu, data, size):
     # Show metrics if available
     if event.flow.qdisc_enq_time > 0:
         for stage_id, stage_info in stages:
-            if stage_id == 7 or stage_id == 18:  # QDISC_DEQ or VNET_QDISC_DEQ
+            if stage_id == 9 or stage_id == 20:  # QDISC_DEQ or VNET_QDISC_DEQ
                 sojourn_time_ns = stage_info.timestamp - event.flow.qdisc_enq_time
-                qdisc_type = "QDISC" if stage_id == 7 else "VNET_QDISC"
+                qdisc_type = "QDISC" if stage_id == 9 else "VNET_QDISC"
                 print("  %s: sojourn=%.3fus qlen=%d" % (qdisc_type, sojourn_time_ns / 1000.0, event.flow.qdisc_qlen))
                 break
     
@@ -1246,8 +1236,8 @@ def print_debug_statistics(b):
     stage_names = {
         1: "VNET_RX", 2: "OVS_RX", 3: "FLOW_EXTRACT_END_RX", 4: "OVS_UPCALL_RX", 5: "OVS_USERSPACE_RX",
         6: "CT_RX", 7: "CT_OUT_RX", 8: "QDISC_ENQ", 9: "QDISC_DEQ", 10: "TX_QUEUE", 11: "TX_XMIT",
-        13: "PHY_RX", 14: "OVS_TX", 15: "FLOW_EXTRACT_END_TX", 16: "OVS_UPCALL_TX", 17: "OVS_USERSPACE_TX", 
-        18: "CT_TX", 19: "CT_OUT_TX", 20: "TUN_XMIT", 21: "VNET_QDISC_ENQ", 22: "VNET_QDISC_DEQ", 23: "VNET_TX"
+        12: "PHY_RX", 13: "OVS_TX", 14: "FLOW_EXTRACT_END_TX", 15: "OVS_UPCALL_TX", 16: "OVS_USERSPACE_TX", 
+        17: "CT_TX", 18: "CT_OUT_TX", 19: "VNET_QDISC_ENQ", 20: "VNET_QDISC_DEQ", 21: "VNET_TX"
     }
     
     # Code point name mapping

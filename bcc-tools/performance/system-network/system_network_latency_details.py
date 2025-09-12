@@ -14,7 +14,7 @@ Based on:
 
 Usage:
     sudo ./system_tcp_udp_latency.py --src-ip 70.0.0.33 --dst-ip 70.0.0.34 \
-                                     --protocol tcp --direction outgoing \
+                                     --protocol tcp --direction tx \
                                      --phy-interface enp94s0f0np0
 """
 
@@ -44,7 +44,7 @@ import datetime
 import fcntl
 
 # Global variable for direction filter
-direction_filter = 0  # 0=both, 1=outgoing, 2=incoming
+direction_filter = 0  # 1=tx, 2=rx
 
 # BPF Program - comprehensive implementation based on design document
 bpf_text = """
@@ -77,7 +77,7 @@ bpf_text = """
 #define PROTOCOL_FILTER %d  // 0=all, 6=TCP, 17=UDP
 #define TARGET_IFINDEX1 %d
 #define TARGET_IFINDEX2 %d
-#define DIRECTION_FILTER %d  // 0=both, 1=outgoing, 2=incoming
+#define DIRECTION_FILTER %d  // 1=tx, 2=rx
 
 // TX direction stages (System -> Physical)
 #define TX_STAGE_0    0  // ip_send_skb
@@ -133,12 +133,12 @@ struct flow_data_t {
     u64 skb_ptr[MAX_STAGES];
     int kstack_id[MAX_STAGES];
     
-    // Path1 info (TX for outgoing, RX for incoming)
+    // Path1 info (TX for tx, RX for rx)
     u32 p1_pid;
     char p1_comm[TASK_COMM_LEN];
     char p1_ifname[IFNAMSIZ];
     
-    // Path2 info (RX for outgoing, TX for incoming)  
+    // Path2 info (RX for tx, TX for rx)  
     u32 p2_pid;
     char p2_comm[TASK_COMM_LEN];
     char p2_ifname[IFNAMSIZ];
@@ -897,7 +897,7 @@ int kprobe____tcp_transmit_skb(struct pt_regs *ctx, struct sock *sk, struct sk_b
                                int clone_it, gfp_t gfp_mask, u32 rcv_nxt) {
     debug_inc(TX_STAGE_0, CODE_PROBE_ENTRY);
     
-    if (DIRECTION_FILTER == 2) { // incoming only
+    if (DIRECTION_FILTER == 2) { // rx only
         debug_inc(TX_STAGE_0, CODE_DIRECTION_FILTER);
         return 0;
     }
@@ -953,7 +953,7 @@ int kprobe____tcp_transmit_skb(struct pt_regs *ctx, struct sock *sk, struct sk_b
 
 // TX Stage 1: internal_dev_xmit - Internal device transmission
 int kprobe__internal_dev_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
-    if (DIRECTION_FILTER == 2) return 0; // incoming only
+    if (DIRECTION_FILTER == 2) return 0; // rx only
     handle_stage_event(ctx, skb, TX_STAGE_1);
     return 0;
 }
@@ -961,10 +961,10 @@ int kprobe__internal_dev_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
 // OVS processing stages (common for TX/RX) - from icmp_rtt_latency.py
 int kprobe__ovs_dp_process_packet(struct pt_regs *ctx, const struct sk_buff *skb_const) {
     struct sk_buff *skb = (struct sk_buff *)skb_const;
-    if (DIRECTION_FILTER != 2) { // outgoing or both
+    if (DIRECTION_FILTER != 2) { // tx
         handle_stage_event(ctx, skb, TX_STAGE_2);
     }
-    if (DIRECTION_FILTER != 1) { // incoming or both
+    if (DIRECTION_FILTER != 1) { // rx
         handle_stage_event(ctx, skb, RX_STAGE_2);
     }
     return 0;
@@ -972,10 +972,10 @@ int kprobe__ovs_dp_process_packet(struct pt_regs *ctx, const struct sk_buff *skb
 
 int kprobe__ovs_dp_upcall(struct pt_regs *ctx, void *dp, const struct sk_buff *skb_const) {
     struct sk_buff *skb = (struct sk_buff *)skb_const;
-    if (DIRECTION_FILTER != 2) { // outgoing or both
+    if (DIRECTION_FILTER != 2) { // tx
         handle_stage_event(ctx, skb, TX_STAGE_3);
     }
-    if (DIRECTION_FILTER != 1) { // incoming or both
+    if (DIRECTION_FILTER != 1) { // rx
         handle_stage_event(ctx, skb, RX_STAGE_3);
     }
     return 0;
@@ -983,20 +983,20 @@ int kprobe__ovs_dp_upcall(struct pt_regs *ctx, void *dp, const struct sk_buff *s
 
 int kprobe__ovs_flow_key_extract_userspace(struct pt_regs *ctx, struct net *net, const struct nlattr *attr, struct sk_buff *skb) {
     if (!skb) return 0;
-    if (DIRECTION_FILTER != 2) { // outgoing or both
+    if (DIRECTION_FILTER != 2) { // tx
         handle_stage_event_userspace(ctx, skb, TX_STAGE_4);
     }
-    if (DIRECTION_FILTER != 1) { // incoming or both
+    if (DIRECTION_FILTER != 1) { // rx
         handle_stage_event_userspace(ctx, skb, RX_STAGE_4);
     }
     return 0;
 }
 
 int kprobe__ovs_vport_send(struct pt_regs *ctx, const void *vport, struct sk_buff *skb) {
-    if (DIRECTION_FILTER != 2) { // outgoing or both
+    if (DIRECTION_FILTER != 2) { // tx
         handle_stage_event(ctx, skb, TX_STAGE_5);
     }
-    if (DIRECTION_FILTER != 1) { // incoming or both
+    if (DIRECTION_FILTER != 1) { // rx
         handle_stage_event(ctx, skb, RX_STAGE_5);
     }
     return 0;
@@ -1005,7 +1005,7 @@ int kprobe__ovs_vport_send(struct pt_regs *ctx, const void *vport, struct sk_buf
 // TX Stage 6: dev_queue_xmit - Physical interface transmission
 int kprobe__dev_queue_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
     if (!is_target_ifindex(skb)) return 0;
-    if (DIRECTION_FILTER == 2) return 0; // incoming only
+    if (DIRECTION_FILTER == 2) return 0; // rx only
     handle_stage_event(ctx, skb, TX_STAGE_6);
     return 0;
 }
@@ -1015,7 +1015,7 @@ int kprobe__dev_queue_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
 // RX Stage 0: __netif_receive_skb - Physical interface reception
 int kprobe____netif_receive_skb(struct pt_regs *ctx, struct sk_buff *skb) {
     if (!is_target_ifindex(skb)) return 0;
-    if (DIRECTION_FILTER == 1) return 0; // outgoing only
+    if (DIRECTION_FILTER == 1) return 0; // tx only
     handle_stage_event(ctx, skb, RX_STAGE_0);
     return 0;
 }
@@ -1027,7 +1027,7 @@ int kprobe__netdev_frame_hook(struct pt_regs *ctx, struct sk_buff **pskb) {
         return 0;
     }
     
-    if (DIRECTION_FILTER != 1) { // incoming or both
+    if (DIRECTION_FILTER != 1) { // rx
         handle_stage_event(ctx, skb, RX_STAGE_1);
     }
     return 0;
@@ -1035,7 +1035,7 @@ int kprobe__netdev_frame_hook(struct pt_regs *ctx, struct sk_buff **pskb) {
 
 // RX Stage 6: Protocol-specific reception - tcp_v4_rcv for TCP
 int kprobe__tcp_v4_rcv(struct pt_regs *ctx, struct sk_buff *skb) {
-    if (DIRECTION_FILTER == 1) return 0; // outgoing only
+    if (DIRECTION_FILTER == 1) return 0; // tx only
     if (PROTOCOL_FILTER != 0 && PROTOCOL_FILTER != IPPROTO_TCP) return 0;
     handle_stage_event(ctx, skb, RX_STAGE_6);
     return 0;
@@ -1043,7 +1043,7 @@ int kprobe__tcp_v4_rcv(struct pt_regs *ctx, struct sk_buff *skb) {
 
 // RX Stage 6: Protocol-specific reception - udp_rcv for UDP  
 int kprobe____udp4_lib_rcv(struct pt_regs *ctx, struct sk_buff *skb, struct udp_table *udptable) {
-    if (DIRECTION_FILTER == 1) return 0; // outgoing only
+    if (DIRECTION_FILTER == 1) return 0; // tx only
     if (PROTOCOL_FILTER != 0 && PROTOCOL_FILTER != IPPROTO_UDP) return 0;
     handle_stage_event(ctx, skb, RX_STAGE_6);
     return 0;
@@ -1210,7 +1210,7 @@ def print_event(cpu, data, size):
     protocol_names = {6: "TCP", 17: "UDP"}
     protocol_name = protocol_names.get(key.protocol, "Unknown")
     
-    direction_str = "Outgoing (System -> Remote)" if args.direction == "outgoing" else "Incoming (Remote -> System)"
+    direction_str = "TX (System -> Remote)" if args.direction == "tx" else "RX (Remote -> System)"
     
     print("=== System Network %s Latency Trace: %s ===" % (protocol_name, time_str))
     print("Direction: %s" % direction_str)
@@ -1259,21 +1259,21 @@ def print_event(cpu, data, size):
             flow.p2_ifname.decode('utf-8', 'replace')
         ))
     
-    # Show TX path if direction is outgoing or both
-    if direction_filter in [0, 1]:  # both or outgoing
+    # Show TX path if direction is tx
+    if direction_filter == 1:  # tx
         print("\nTX Path Latencies (us):")
         print_path_latencies(flow, 0, 6, "TX")
     
-    # Show RX path if direction is incoming or both  
-    if direction_filter in [0, 2]:  # both or incoming
+    # Show RX path if direction is rx
+    if direction_filter == 2:  # rx
         print("\nRX Path Latencies (us):")
         print_path_latencies(flow, 7, 13, "RX")
     
-    # Show total one-way latency if both paths are available
+    # Show total one-way latency for selected direction
     if (flow.ts[0] > 0 and flow.ts[13] > 0):  # TX start to RX end
         total_latency = format_latency(flow.ts[0], flow.ts[13])
         print("\nTotal One-Way Latency: %s us" % total_latency)
-    elif (flow.ts[7] > 0 and flow.ts[6] > 0):  # RX start to TX end (for incoming)
+    elif (flow.ts[7] > 0 and flow.ts[6] > 0):  # RX start to TX end (for rx)
         total_latency = format_latency(flow.ts[7], flow.ts[6])
         print("\nTotal One-Way Latency: %s us" % total_latency)
     
@@ -1445,18 +1445,18 @@ if __name__ == "__main__":
 Examples:
   Monitor TCP traffic (most reliable packet-level tracking):
     sudo %(prog)s --src-ip 70.0.0.33 --dst-ip 70.0.0.34 \\
-                  --protocol tcp --direction outgoing \\
+                  --protocol tcp --direction tx \\
                   --phy-interface enp94s0f0np0
 
   Monitor UDP traffic (including fragmentation handling):
     sudo %(prog)s --src-ip 70.0.0.33 --dst-port 53 \\
-                  --protocol udp --direction both \\
+                  --protocol udp --direction rx \\
                   --phy-interface enp94s0f0np0
 
   Monitor specific TCP connection packet-level latency:
     sudo %(prog)s --src-ip 70.0.0.33 --dst-ip 70.0.0.34 \\
                   --src-port 12345 --dst-port 80 \\
-                  --protocol tcp --direction both \\
+                  --protocol tcp --direction tx \\
                   --phy-interface enp94s0f0np0
 
   Monitor all TCP/UDP protocols:
@@ -1476,8 +1476,8 @@ Examples:
                         help='Destination port filter (TCP/UDP)')
     parser.add_argument('--protocol', type=str, choices=['tcp', 'udp', 'all'], 
                         default='all', help='Protocol filter (default: all)')
-    parser.add_argument('--direction', type=str, choices=['outgoing', 'incoming', 'both'], 
-                        default='both', help='Direction filter (default: both)')
+    parser.add_argument('--direction', type=str, choices=['tx', 'rx'], 
+                        required=True, help='Direction filter (tx or rx)')
     parser.add_argument('--phy-interface', type=str, required=True,
                         help='Physical interface to monitor (e.g., enp94s0f0np0)')
     
@@ -1492,7 +1492,7 @@ Examples:
     protocol_map = {'tcp': 6, 'udp': 17, 'all': 0}
     protocol_filter = protocol_map[args.protocol]
     
-    direction_map = {'outgoing': 1, 'incoming': 2, 'both': 0}
+    direction_map = {'tx': 1, 'rx': 2}
     direction_filter = direction_map[args.direction]
     
     # Support multiple interfaces (split by comma)

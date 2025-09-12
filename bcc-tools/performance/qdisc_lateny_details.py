@@ -497,7 +497,7 @@ def get_protocol_identifier(key, protocol):
     elif protocol == 1:  # ICMP
         icmp_id = struct.unpack("!H", data[0:2])[0]
         seq = struct.unpack("!H", data[2:4])[0]
-        icmp_type = data[4] if len(data) > 4 else 0
+        icmp_type = ord(data[4]) if len(data) > 4 else 0
         return "ICMP id=%u seq=%u type=%u" % (icmp_id, seq, icmp_type)
     else:
         return "Proto%d" % protocol

@@ -11,7 +11,7 @@ through OVS to physical interfaces.
 
 Usage:
     sudo ./vm_network_latency.py --src-ip 192.168.76.198 --dst-ip 192.168.64.1 \
-                                 --protocol tcp --direction both \
+                                 --protocol tcp --direction rx \
                                  --vm-interface vnet0 --phy-interface enp94s0f0np0
 
 """
@@ -78,23 +78,23 @@ bpf_text = """
 #define PHY_IFINDEX %d
 #define DIRECTION_FILTER %d  // 0=both, 1=tx, 2=rx
 
-// TX direction stages (VM -> Physical)
-#define TX_STAGE_0    0  // netif_receive_skb (vnet)
-#define TX_STAGE_1    1  // netdev_frame_hook
-#define TX_STAGE_2    2  // ovs_dp_process_packet
-#define TX_STAGE_3    3  // ovs_dp_upcall
-#define TX_STAGE_4    4  // ovs_flow_key_extract_userspace
-#define TX_STAGE_5    5  // ovs_vport_send
-#define TX_STAGE_6    6  // __dev_queue_xmit (physical)
+// RX direction stages (VM -> Physical)
+#define RX_STAGE_0    0  // netif_receive_skb (vnet)
+#define RX_STAGE_1    1  // netdev_frame_hook
+#define RX_STAGE_2    2  // ovs_dp_process_packet
+#define RX_STAGE_3    3  // ovs_dp_upcall
+#define RX_STAGE_4    4  // ovs_flow_key_extract_userspace
+#define RX_STAGE_5    5  // ovs_vport_send
+#define RX_STAGE_6    6  // __dev_queue_xmit (physical)
 
-// RX direction stages (Physical -> VM)
-#define RX_STAGE_0    7  // __netif_receive_skb (physical)
-#define RX_STAGE_1    8  // netdev_frame_hook
-#define RX_STAGE_2    9  // ovs_dp_process_packet
-#define RX_STAGE_3    10 // ovs_dp_upcall
-#define RX_STAGE_4    11 // ovs_flow_key_extract_userspace
-#define RX_STAGE_5    12 // ovs_vport_send
-#define RX_STAGE_6    13 // tun_net_xmit (vnet)
+// TX direction stages (Physical -> VM)
+#define TX_STAGE_0    7  // __netif_receive_skb (physical)
+#define TX_STAGE_1    8  // netdev_frame_hook
+#define TX_STAGE_2    9  // ovs_dp_process_packet
+#define TX_STAGE_3    10 // ovs_dp_upcall
+#define TX_STAGE_4    11 // ovs_flow_key_extract_userspace
+#define TX_STAGE_5    12 // ovs_vport_send
+#define TX_STAGE_6    13 // tun_net_xmit (vnet)
 
 #define MAX_STAGES               14
 #define IFNAMSIZ                 16
@@ -139,11 +139,11 @@ struct flow_data_t {
     
     u32 tx_pid;
     char tx_comm[TASK_COMM_LEN];
-    char tx_vnet_ifname[IFNAMSIZ];
+    char tx_pnic_ifname[IFNAMSIZ];
     
     u32 rx_pid;
     char rx_comm[TASK_COMM_LEN];
-    char rx_pnic_ifname[IFNAMSIZ];
+    char rx_vnet_ifname[IFNAMSIZ];
     
     u8 tx_start:1;
     u8 tx_end:1;
@@ -646,7 +646,7 @@ static __always_inline void handle_stage_event(struct pt_regs *ctx, struct sk_bu
     
     struct flow_data_t *flow_ptr;
     
-    if (stage_id == TX_STAGE_0 || stage_id == RX_STAGE_0) {
+    if (stage_id == RX_STAGE_0 || stage_id == TX_STAGE_0) {
         debug_inc(stage_id, CODE_FLOW_CREATE);
         struct flow_data_t zero = {};
         flow_sessions.delete(&key);
@@ -658,26 +658,26 @@ static __always_inline void handle_stage_event(struct pt_regs *ctx, struct sk_bu
         
         flow_ptr->first_seen_ns = current_ts;
         
-        if (stage_id == TX_STAGE_0) {
-            flow_ptr->tx_pid = bpf_get_current_pid_tgid() >> 32;
-            bpf_get_current_comm(&flow_ptr->tx_comm, sizeof(flow_ptr->tx_comm));
-            
-            struct net_device *dev;
-            if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) == 0 && dev != NULL) {
-                bpf_probe_read_kernel_str(flow_ptr->tx_vnet_ifname, IFNAMSIZ, dev->name);
-            }
-            
-            flow_ptr->tx_start = 1;
-        } else if (stage_id == RX_STAGE_0) {
+        if (stage_id == RX_STAGE_0) {
             flow_ptr->rx_pid = bpf_get_current_pid_tgid() >> 32;
             bpf_get_current_comm(&flow_ptr->rx_comm, sizeof(flow_ptr->rx_comm));
             
             struct net_device *dev;
             if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) == 0 && dev != NULL) {
-                bpf_probe_read_kernel_str(flow_ptr->rx_pnic_ifname, IFNAMSIZ, dev->name);
+                bpf_probe_read_kernel_str(flow_ptr->rx_vnet_ifname, IFNAMSIZ, dev->name);
             }
             
             flow_ptr->rx_start = 1;
+        } else if (stage_id == TX_STAGE_0) {
+            flow_ptr->tx_pid = bpf_get_current_pid_tgid() >> 32;
+            bpf_get_current_comm(&flow_ptr->tx_comm, sizeof(flow_ptr->tx_comm));
+            
+            struct net_device *dev;
+            if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) == 0 && dev != NULL) {
+                bpf_probe_read_kernel_str(flow_ptr->tx_pnic_ifname, IFNAMSIZ, dev->name);
+            }
+            
+            flow_ptr->tx_start = 1;
         }
     } else {
         debug_inc(stage_id, CODE_FLOW_LOOKUP);
@@ -695,27 +695,27 @@ static __always_inline void handle_stage_event(struct pt_regs *ctx, struct sk_bu
         flow_ptr->skb_ptr[stage_id] = (u64)skb;
         flow_ptr->kstack_id[stage_id] = stack_id;
         
-        if (stage_id == TX_STAGE_6) {
-            flow_ptr->tx_end = 1;
-        } else if (stage_id == RX_STAGE_0) {
-            flow_ptr->rx_pid = bpf_get_current_pid_tgid() >> 32;
-            bpf_get_current_comm(&flow_ptr->rx_comm, sizeof(flow_ptr->rx_comm));
+        if (stage_id == RX_STAGE_6) {
+            flow_ptr->rx_end = 1;
+        } else if (stage_id == TX_STAGE_0) {
+            flow_ptr->tx_pid = bpf_get_current_pid_tgid() >> 32;
+            bpf_get_current_comm(&flow_ptr->tx_comm, sizeof(flow_ptr->tx_comm));
             
             struct net_device *dev;
             if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) == 0 && dev != NULL) {
-                bpf_probe_read_kernel_str(flow_ptr->rx_pnic_ifname, IFNAMSIZ, dev->name);
+                bpf_probe_read_kernel_str(flow_ptr->tx_pnic_ifname, IFNAMSIZ, dev->name);
             }
             
-            flow_ptr->rx_start = 1;
-        } else if (stage_id == RX_STAGE_6) {
-            flow_ptr->rx_end = 1;
+            flow_ptr->tx_start = 1;
+        } else if (stage_id == TX_STAGE_6) {
+            flow_ptr->tx_end = 1;
         }
         
         flow_sessions.update(&key, flow_ptr);
     }
     
-    bool tx_complete = (stage_id == TX_STAGE_6 && flow_ptr->tx_start && flow_ptr->tx_end);
     bool rx_complete = (stage_id == RX_STAGE_6 && flow_ptr->rx_start && flow_ptr->rx_end);
+    bool tx_complete = (stage_id == TX_STAGE_6 && flow_ptr->tx_start && flow_ptr->tx_end);
     
     if (tx_complete || rx_complete) {
         u32 map_key_zero = 0;
@@ -751,7 +751,7 @@ static __always_inline void handle_stage_event_userspace(struct pt_regs *ctx, st
     
     struct flow_data_t *flow_ptr;
     
-    if (stage_id == TX_STAGE_0 || stage_id == RX_STAGE_0) {
+    if (stage_id == RX_STAGE_0 || stage_id == TX_STAGE_0) {
         debug_inc(stage_id, CODE_FLOW_CREATE);
         struct flow_data_t zero = {};
         flow_sessions.delete(&key);
@@ -763,26 +763,26 @@ static __always_inline void handle_stage_event_userspace(struct pt_regs *ctx, st
         
         flow_ptr->first_seen_ns = current_ts;
         
-        if (stage_id == TX_STAGE_0) {
-            flow_ptr->tx_pid = bpf_get_current_pid_tgid() >> 32;
-            bpf_get_current_comm(&flow_ptr->tx_comm, sizeof(flow_ptr->tx_comm));
-            
-            struct net_device *dev;
-            if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) == 0 && dev != NULL) {
-                bpf_probe_read_kernel_str(flow_ptr->tx_vnet_ifname, IFNAMSIZ, dev->name);
-            }
-            
-            flow_ptr->tx_start = 1;
-        } else if (stage_id == RX_STAGE_0) {
+        if (stage_id == RX_STAGE_0) {
             flow_ptr->rx_pid = bpf_get_current_pid_tgid() >> 32;
             bpf_get_current_comm(&flow_ptr->rx_comm, sizeof(flow_ptr->rx_comm));
             
             struct net_device *dev;
             if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) == 0 && dev != NULL) {
-                bpf_probe_read_kernel_str(flow_ptr->rx_pnic_ifname, IFNAMSIZ, dev->name);
+                bpf_probe_read_kernel_str(flow_ptr->rx_vnet_ifname, IFNAMSIZ, dev->name);
             }
             
             flow_ptr->rx_start = 1;
+        } else if (stage_id == TX_STAGE_0) {
+            flow_ptr->tx_pid = bpf_get_current_pid_tgid() >> 32;
+            bpf_get_current_comm(&flow_ptr->tx_comm, sizeof(flow_ptr->tx_comm));
+            
+            struct net_device *dev;
+            if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) == 0 && dev != NULL) {
+                bpf_probe_read_kernel_str(flow_ptr->tx_pnic_ifname, IFNAMSIZ, dev->name);
+            }
+            
+            flow_ptr->tx_start = 1;
         }
         
         debug_inc(stage_id, CODE_FLOW_FOUND);
@@ -803,18 +803,18 @@ static __always_inline void handle_stage_event_userspace(struct pt_regs *ctx, st
         flow_ptr->kstack_id[stage_id] = stack_id;
         
         // Mark end points for complete flows
-        if (stage_id == TX_STAGE_6) {
-            flow_ptr->tx_end = 1;
-        } else if (stage_id == RX_STAGE_6) {
+        if (stage_id == RX_STAGE_6) {
             flow_ptr->rx_end = 1;
+        } else if (stage_id == TX_STAGE_6) {
+            flow_ptr->tx_end = 1;
         }
         
         flow_sessions.update(&key, flow_ptr);
     }
     
     // Submit complete flows
-    if ((stage_id == TX_STAGE_6 && flow_ptr->tx_start && flow_ptr->tx_end) ||
-        (stage_id == RX_STAGE_6 && flow_ptr->rx_start && flow_ptr->rx_end)) {
+    if ((stage_id == RX_STAGE_6 && flow_ptr->rx_start && flow_ptr->rx_end) ||
+        (stage_id == TX_STAGE_6 && flow_ptr->tx_start && flow_ptr->tx_end)) {
         
         u32 map_key_zero = 0;
         struct event_data_t *event_data_ptr = event_scratch_map.lookup(&map_key_zero);
@@ -835,22 +835,22 @@ static __always_inline void handle_stage_event_userspace(struct pt_regs *ctx, st
     }
 }
 
-// TX Direction Probes (VM -> Physical)
+// RX Direction Probes (VM -> Physical)
 int kprobe__netif_receive_skb(struct pt_regs *ctx, struct sk_buff *skb) {
-    debug_inc(TX_STAGE_0, CODE_PROBE_ENTRY);
+    debug_inc(RX_STAGE_0, CODE_PROBE_ENTRY);
     
     if (!is_target_vm_interface(skb)) {
-        debug_inc(TX_STAGE_0, CODE_INTERFACE_FILTER);
+        debug_inc(RX_STAGE_0, CODE_INTERFACE_FILTER);
         return 0;
     }
     
-    if (DIRECTION_FILTER == 2) {
-        debug_inc(TX_STAGE_0, CODE_DIRECTION_FILTER);
+    if (DIRECTION_FILTER == 1) {
+        debug_inc(RX_STAGE_0, CODE_DIRECTION_FILTER);
         return 0;
     }
     
-    debug_inc(TX_STAGE_0, CODE_HANDLE_CALLED);
-    handle_stage_event(ctx, skb, TX_STAGE_0);
+    debug_inc(RX_STAGE_0, CODE_HANDLE_CALLED);
+    handle_stage_event(ctx, skb, RX_STAGE_0);
     return 0;
 }
 
@@ -860,18 +860,18 @@ int kprobe__netdev_frame_hook(struct pt_regs *ctx, struct sk_buff **pskb) {
         return 0;
     }
     
-    // Handle TX direction
-    if (DIRECTION_FILTER != 2) { // tx or both
-        debug_inc(TX_STAGE_1, CODE_PROBE_ENTRY);
-        debug_inc(TX_STAGE_1, CODE_HANDLE_CALLED);
-        handle_stage_event(ctx, skb, TX_STAGE_1);
-    }
-    
-    // Handle RX direction  
+    // Handle RX direction
     if (DIRECTION_FILTER != 1) { // rx or both
         debug_inc(RX_STAGE_1, CODE_PROBE_ENTRY);
         debug_inc(RX_STAGE_1, CODE_HANDLE_CALLED);
         handle_stage_event(ctx, skb, RX_STAGE_1);
+    }
+    
+    // Handle TX direction  
+    if (DIRECTION_FILTER != 2) { // tx or both
+        debug_inc(TX_STAGE_1, CODE_PROBE_ENTRY);
+        debug_inc(TX_STAGE_1, CODE_HANDLE_CALLED);
+        handle_stage_event(ctx, skb, TX_STAGE_1);
     }
     
     return 0;
@@ -879,66 +879,66 @@ int kprobe__netdev_frame_hook(struct pt_regs *ctx, struct sk_buff **pskb) {
 
 int kprobe__ovs_dp_process_packet(struct pt_regs *ctx, const struct sk_buff *skb_const) {
     struct sk_buff *skb = (struct sk_buff *)skb_const;
-    if (DIRECTION_FILTER != 2) { // tx or both
-        handle_stage_event(ctx, skb, TX_STAGE_2);
-    }
     if (DIRECTION_FILTER != 1) { // rx or both
         handle_stage_event(ctx, skb, RX_STAGE_2);
+    }
+    if (DIRECTION_FILTER != 2) { // tx or both
+        handle_stage_event(ctx, skb, TX_STAGE_2);
     }
     return 0;
 }
 
 int kprobe__ovs_dp_upcall(struct pt_regs *ctx, void *dp, const struct sk_buff *skb_const) {
     struct sk_buff *skb = (struct sk_buff *)skb_const;
-    if (DIRECTION_FILTER != 2) { // tx or both
-        handle_stage_event(ctx, skb, TX_STAGE_3);
-    }
     if (DIRECTION_FILTER != 1) { // rx or both
         handle_stage_event(ctx, skb, RX_STAGE_3);
+    }
+    if (DIRECTION_FILTER != 2) { // tx or both
+        handle_stage_event(ctx, skb, TX_STAGE_3);
     }
     return 0;
 }
 
 int kprobe__ovs_flow_key_extract_userspace(struct pt_regs *ctx, struct net *net, const struct nlattr *attr, struct sk_buff *skb) {
     if (!skb) return 0;
-    if (DIRECTION_FILTER != 2) { // tx or both
-        handle_stage_event_userspace(ctx, skb, TX_STAGE_4);
-    }
     if (DIRECTION_FILTER != 1) { // rx or both
         handle_stage_event_userspace(ctx, skb, RX_STAGE_4);
+    }
+    if (DIRECTION_FILTER != 2) { // tx or both
+        handle_stage_event_userspace(ctx, skb, TX_STAGE_4);
     }
     return 0;
 }
 
 int kprobe__ovs_vport_send(struct pt_regs *ctx, const void *vport, struct sk_buff *skb) {
-    if (DIRECTION_FILTER != 2) { // tx or both
-        handle_stage_event(ctx, skb, TX_STAGE_5);
-    }
     if (DIRECTION_FILTER != 1) { // rx or both
         handle_stage_event(ctx, skb, RX_STAGE_5);
+    }
+    if (DIRECTION_FILTER != 2) { // tx or both
+        handle_stage_event(ctx, skb, TX_STAGE_5);
     }
     return 0;
 }
 
 int kprobe____dev_queue_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
     if (!is_target_phy_interface(skb)) return 0;
-    if (DIRECTION_FILTER == 2) return 0;
-    handle_stage_event(ctx, skb, TX_STAGE_6);
+    if (DIRECTION_FILTER == 1) return 0;
+    handle_stage_event(ctx, skb, RX_STAGE_6);
     return 0;
 }
 
-// RX Direction Probes (Physical -> VM)
+// TX Direction Probes (Physical -> VM)
 int kprobe____netif_receive_skb(struct pt_regs *ctx, struct sk_buff *skb) {
     if (!is_target_phy_interface(skb)) return 0;
-    if (DIRECTION_FILTER == 1) return 0;
-    handle_stage_event(ctx, skb, RX_STAGE_0);
+    if (DIRECTION_FILTER == 2) return 0;
+    handle_stage_event(ctx, skb, TX_STAGE_0);
     return 0;
 }
 
 int kprobe__tun_net_xmit(struct pt_regs *ctx, struct sk_buff *skb, struct net_device *dev) {
     if (!is_target_vm_interface(skb)) return 0;
-    if (DIRECTION_FILTER == 1) return 0;
-    handle_stage_event(ctx, skb, RX_STAGE_6);
+    if (DIRECTION_FILTER == 2) return 0;
+    handle_stage_event(ctx, skb, TX_STAGE_6);
     return 0;
 }
 """
@@ -996,10 +996,10 @@ class FlowData(ctypes.Structure):
         ("kstack_id", ctypes.c_int * MAX_STAGES),
         ("tx_pid", ctypes.c_uint32),
         ("tx_comm", ctypes.c_char * TASK_COMM_LEN),
-        ("tx_vnet_ifname", ctypes.c_char * IFNAMSIZ),
+        ("tx_pnic_ifname", ctypes.c_char * IFNAMSIZ),
         ("rx_pid", ctypes.c_uint32),
         ("rx_comm", ctypes.c_char * TASK_COMM_LEN),
-        ("rx_pnic_ifname", ctypes.c_char * IFNAMSIZ),
+        ("rx_vnet_ifname", ctypes.c_char * IFNAMSIZ),
         ("tx_start", ctypes.c_uint8, 1),
         ("tx_end", ctypes.c_uint8, 1),
         ("rx_start", ctypes.c_uint8, 1),
@@ -1084,14 +1084,14 @@ def print_path_latencies(flow, start_stage, end_stage, path_type):
 def get_stage_name(stage_id):
     """Get human-readable stage name"""
     stage_names = {
-        0: "TX_S0_netif_receive_skb",    1: "TX_S1_netdev_frame_hook",
-        2: "TX_S2_ovs_dp_process",       3: "TX_S3_ovs_dp_upcall",
-        4: "TX_S4_ovs_flow_key_extract", 5: "TX_S5_ovs_vport_send",
-        6: "TX_S6_dev_queue_xmit",
-        7: "RX_S0_netif_receive_skb",    8: "RX_S1_netdev_frame_hook",
-        9: "RX_S2_ovs_dp_process",       10: "RX_S3_ovs_dp_upcall",
-        11: "RX_S4_ovs_flow_key_extract", 12: "RX_S5_ovs_vport_send",
-        13: "RX_S6_tun_net_xmit"
+        0: "RX_S0_netif_receive_skb",    1: "RX_S1_netdev_frame_hook",
+        2: "RX_S2_ovs_dp_process",       3: "RX_S3_ovs_dp_upcall",
+        4: "RX_S4_ovs_flow_key_extract", 5: "RX_S5_ovs_vport_send",
+        6: "RX_S6_dev_queue_xmit",
+        7: "TX_S0_netif_receive_skb",    8: "TX_S1_netdev_frame_hook",
+        9: "TX_S2_ovs_dp_process",       10: "TX_S3_ovs_dp_upcall",
+        11: "TX_S4_ovs_flow_key_extract", 12: "TX_S5_ovs_vport_send",
+        13: "TX_S6_tun_net_xmit"
     }
     return stage_names.get(stage_id, "Unknown_%d" % stage_id)
 
@@ -1132,28 +1132,28 @@ def print_event(cpu, data, size):
         ))
     
     print("VM Interface: %s -> Physical Interface: %s" % (
-        flow.tx_vnet_ifname.decode('utf-8', 'replace'),
-        flow.rx_pnic_ifname.decode('utf-8', 'replace')
+        flow.rx_vnet_ifname.decode('utf-8', 'replace'),
+        flow.tx_pnic_ifname.decode('utf-8', 'replace')
     ))
     # Show process info only for relevant direction
-    if direction_filter in [0, 1] and flow.tx_pid > 0:  # both or tx
+    if direction_filter == 1 and flow.tx_pid > 0:  # tx
         print("TX Process: PID=%d COMM=%s" % (
             flow.tx_pid, flow.tx_comm.decode('utf-8', 'replace')
         ))
-    if direction_filter in [0, 2] and flow.rx_pid > 0:  # both or rx
+    if direction_filter == 2 and flow.rx_pid > 0:  # rx
         print("RX Process: PID=%d COMM=%s" % (
             flow.rx_pid, flow.rx_comm.decode('utf-8', 'replace')
         ))
     
-    # Show TX path if direction is tx or both
-    if direction_filter in [0, 1]:  # both or tx
-        print("\nTX Path Latencies (us):")
-        print_path_latencies(flow, 0, 6, "TX")
-    
-    # Show RX path if direction is rx or both  
-    if direction_filter in [0, 2]:  # both or rx
+    # Show RX path if direction is rx  
+    if direction_filter == 2:  # rx
         print("\nRX Path Latencies (us):")
-        print_path_latencies(flow, 7, 13, "RX")
+        print_path_latencies(flow, 0, 6, "RX")
+    
+    # Show TX path if direction is tx
+    if direction_filter == 1:  # tx
+        print("\nTX Path Latencies (us):")
+        print_path_latencies(flow, 7, 13, "TX")
     
     print("\n" + "="*80 + "\n")
 
@@ -1167,19 +1167,19 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  Monitor TCP flow from VM to host:
+  Monitor TCP flow from VM to host (rx direction):
     sudo %(prog)s --src-ip 192.168.76.198 --dst-ip 192.168.64.1 \\
-                  --protocol tcp --direction both \\
+                  --protocol tcp --direction rx \\
                   --vm-interface vnet0 --phy-interface enp94s0f0np0
 
-  Monitor UDP flow:
+  Monitor UDP flow from VM to host (rx direction):
     sudo %(prog)s --src-ip 192.168.76.198 --dst-port 53 \\
-                  --protocol udp --direction both \\
+                  --protocol udp --direction rx \\
                   --vm-interface vnet0 --phy-interface enp94s0f0np0
 
-  Monitor ICMP flow:
-    sudo %(prog)s --src-ip 192.168.76.198 --dst-ip 192.168.64.1 \\
-                  --protocol icmp --direction both \\
+  Monitor ICMP flow from host to VM (tx direction):
+    sudo %(prog)s --src-ip 192.168.64.1 --dst-ip 192.168.76.198 \\
+                  --protocol icmp --direction tx \\
                   --vm-interface vnet0 --phy-interface enp94s0f0np0
 """
     )
@@ -1194,8 +1194,8 @@ Examples:
                         help='Destination port filter (TCP/UDP)')
     parser.add_argument('--protocol', type=str, choices=['tcp', 'udp', 'icmp', 'all'], 
                         default='all', help='Protocol filter (default: all)')
-    parser.add_argument('--direction', type=str, choices=['tx', 'rx', 'both'], 
-                        default='both', help='Direction filter (default: both)')
+    parser.add_argument('--direction', type=str, choices=['tx', 'rx'], 
+                        required=True, help='Direction filter: tx=host->VM, rx=VM->host')
     parser.add_argument('--vm-interface', type=str, required=True,
                         help='VM interface to monitor (e.g., vnet0)')
     parser.add_argument('--phy-interface', type=str, required=True,
@@ -1212,7 +1212,7 @@ Examples:
     protocol_map = {'tcp': 6, 'udp': 17, 'icmp': 1, 'all': 0}
     protocol_filter = protocol_map[args.protocol]
     
-    direction_map = {'tx': 1, 'rx': 2, 'both': 0}
+    direction_map = {'tx': 1, 'rx': 2}
     direction_filter = direction_map[args.direction]
     
     try:
@@ -1259,20 +1259,20 @@ Examples:
         
         # Define stage names
         stage_names = {
-            0: "TX0_netif_receive_skb",
-            1: "TX1_netdev_frame_hook", 
-            2: "TX2_ovs_dp_process_packet",
-            3: "TX3_ovs_dp_upcall",
-            4: "TX4_ovs_flow_key_extract_userspace",
-            5: "TX5_ovs_vport_send",
-            6: "TX6___dev_queue_xmit",
-            7: "RX0___netif_receive_skb",
-            8: "RX1_netdev_frame_hook",
-            9: "RX2_ovs_dp_process_packet", 
-            10: "RX3_ovs_dp_upcall",
-            11: "RX4_ovs_flow_key_extract_userspace",
-            12: "RX5_ovs_vport_send",
-            13: "RX6_tun_net_xmit"
+            0: "RX0_netif_receive_skb",
+            1: "RX1_netdev_frame_hook", 
+            2: "RX2_ovs_dp_process_packet",
+            3: "RX3_ovs_dp_upcall",
+            4: "RX4_ovs_flow_key_extract_userspace",
+            5: "RX5_ovs_vport_send",
+            6: "RX6___dev_queue_xmit",
+            7: "TX0___netif_receive_skb",
+            8: "TX1_netdev_frame_hook",
+            9: "TX2_ovs_dp_process_packet", 
+            10: "TX3_ovs_dp_upcall",
+            11: "TX4_ovs_flow_key_extract_userspace",
+            12: "TX5_ovs_vport_send",
+            13: "TX6_tun_net_xmit"
         }
         
         # Define code point names

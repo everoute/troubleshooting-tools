@@ -8,7 +8,7 @@ Measures latency distribution between adjacent network stack stages using BPF_HI
 Only tracks latencies between consecutive processing stages in the actual packet path.
 
 Usage:
-    sudo ./vm_network_latency_adjacent_hist.py --vnet-dev vnet37 --phys-dev enp94s0f0np0 \
+    sudo ./vm_network_latency_adjacent_hist.py --vm-interface vnet37 --phy-interface enp94s0f0np0 \
                                 --src-ip 192.168.76.198 --direction rx --interval 5
 
 """
@@ -49,7 +49,7 @@ class stage_pair_key_t(ctypes.Structure):
     ]
 
 # Global configuration
-direction_filter = 0  # 0=both, 1=vnet_rx(vm_tx), 2=vnet_tx(vm_rx)
+direction_filter = 1  # 1=vnet_rx(vm_tx), 2=vnet_tx(vm_rx)
 
 # BPF Program
 bpf_text = """
@@ -75,7 +75,7 @@ bpf_text = """
 #define PROTOCOL_FILTER %d  // 0=all, 6=TCP, 17=UDP, 1=ICMP
 #define VM_IFINDEX %d
 #define PHY_IFINDEX %d
-#define DIRECTION_FILTER %d  // 0=both, 1=vnet_rx, 2=vnet_tx
+#define DIRECTION_FILTER %d  // 1=vnet_rx, 2=vnet_tx
 
 // Stage definitions - vnet perspective
 // VNET RX path (VM TX, packets from VM to external)
@@ -282,14 +282,6 @@ static __always_inline int parse_packet_key(
             return 0;
         }
         if (DST_IP_FILTER != 0 && ip.daddr != DST_IP_FILTER) {
-            return 0;
-        }
-    } else {
-        // For both directions, use OR logic
-        if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER && ip.daddr != SRC_IP_FILTER) {
-            return 0;
-        }
-        if (DST_IP_FILTER != 0 && ip.saddr != DST_IP_FILTER && ip.daddr != DST_IP_FILTER) {
             return 0;
         }
     }
@@ -1013,20 +1005,20 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  Monitor VM bidirectional traffic:
-    sudo %(prog)s --vnet-dev vnet37 --phys-dev enp94s0f0np0 --vm-ip 192.168.76.198
+  Monitor VNET RX traffic (VM TX):
+    sudo %(prog)s --vm-interface vnet37 --phy-interface enp94s0f0np0 --direction rx --src-ip 192.168.76.198
     
-  Monitor only VNET RX traffic (VM TX):
-    sudo %(prog)s --vnet-dev vnet37 --phys-dev enp94s0f0np0 --direction rx --src-ip 192.168.76.198
+  Monitor VNET TX traffic (VM RX):
+    sudo %(prog)s --vm-interface vnet37 --phy-interface enp94s0f0np0 --direction tx --dst-ip 192.168.76.198
     
   Monitor TCP SSH traffic with 10 second intervals:
-    sudo %(prog)s --vnet-dev vnet37 --phys-dev enp94s0f0np0 --proto tcp --dst-port 22 --interval 10
+    sudo %(prog)s --vm-interface vnet37 --phy-interface enp94s0f0np0 --protocol tcp --dst-port 22 --direction rx --interval 10
 """
     )
     
-    parser.add_argument('--vnet-dev', type=str, required=True,
+    parser.add_argument('--vm-interface', type=str, required=True,
                         help='VM virtual interface to monitor (e.g., vnet37)')
-    parser.add_argument('--phys-dev', type=str, required=True,
+    parser.add_argument('--phy-interface', type=str, required=True,
                         help='Physical interface to monitor (e.g., enp94s0f0np0)')
     parser.add_argument('--vm-ip', type=str, required=False,
                         help='VM IP address filter')
@@ -1038,10 +1030,10 @@ Examples:
                         help='Source port filter (TCP/UDP)')
     parser.add_argument('--dst-port', type=int, required=False,
                         help='Destination port filter (TCP/UDP)')
-    parser.add_argument('--proto', type=str, choices=['tcp', 'udp', 'icmp', 'all'], 
+    parser.add_argument('--protocol', type=str, choices=['tcp', 'udp', 'icmp', 'all'], 
                         default='all', help='Protocol filter (default: all)')
-    parser.add_argument('--direction', type=str, choices=['rx', 'tx', 'both'], 
-                        default='both', help='Direction filter: rx=VNET_RX(VM_TX), tx=VNET_TX(VM_RX) (default: both)')
+    parser.add_argument('--direction', type=str, choices=['rx', 'tx'], 
+                        required=True, help='Direction filter: rx=VNET_RX(VM_TX), tx=VNET_TX(VM_RX)')
     parser.add_argument('--interval', type=int, default=5,
                         help='Statistics output interval in seconds (default: 5)')
     parser.add_argument('--enable-ct', action='store_true',
@@ -1061,20 +1053,20 @@ Examples:
     dst_port = args.dst_port if args.dst_port else 0
     
     protocol_map = {'tcp': 6, 'udp': 17, 'icmp': 1, 'all': 0}
-    protocol_filter = protocol_map[args.proto]
+    protocol_filter = protocol_map[args.protocol]
     
-    direction_map = {'rx': 1, 'tx': 2, 'both': 0}
+    direction_map = {'rx': 1, 'tx': 2}
     direction_filter = direction_map[args.direction]
     
     try:
-        vm_ifindex = get_if_index(args.vnet_dev)
-        phy_ifindex = get_if_index(args.phys_dev)
+        vm_ifindex = get_if_index(args.vm_interface)
+        phy_ifindex = get_if_index(args.phy_interface)
     except OSError as e:
         print("Error getting interface index: %s" % e)
         sys.exit(1)
     
     print("=== VM Network Adjacent Stage Latency Histogram Tool ===")
-    print("Protocol filter: %s" % args.proto.upper())
+    print("Protocol filter: %s" % args.protocol.upper())
     print("Direction filter: %s (1=VNET_RX/VM_TX, 2=VNET_TX/VM_RX)" % args.direction.upper())
     if args.vm_ip:
         print("VM IP filter: %s" % args.vm_ip)
@@ -1087,8 +1079,8 @@ Examples:
         print("Source port filter: %d" % src_port)
     if dst_port:
         print("Destination port filter: %d" % dst_port)
-    print("VM interface: %s (ifindex %d)" % (args.vnet_dev, vm_ifindex))
-    print("Physical interface: %s (ifindex %d)" % (args.phys_dev, phy_ifindex))
+    print("VM interface: %s (ifindex %d)" % (args.vm_interface, vm_ifindex))
+    print("Physical interface: %s (ifindex %d)" % (args.phy_interface, phy_ifindex))
     print("Statistics interval: %d seconds" % args.interval)
     print("Conntrack measurement: ENABLED")
     print("Mode: Adjacent stage latency tracking only")

@@ -2,7 +2,7 @@
 1. 测试环境
 主机： smartx@172.21.152.82 , ssh 免密登录。   
 代码目录：系统网络，虚拟机网络分别在
- /home/smartx/bcc-tools/performance/system-network  && /home/smartx/bcc-tools/performance/vm-network 
+ /home/smartx/ebpf-tools/performance/system-network  && /home/smartx/ebpf-tools/performance/vm-network 
 
  2. 测试参数
 
@@ -35,8 +35,9 @@ a. 需要测试以上两个文件夹中的 6 个工具, 首先根据说明生成
 
 虚拟机网络三个工具都需要测试 tcp rx && tx 方向的情况。 
 
-b. 记录需要的所有用例到临时文件，然后逐个开始测试，并记录每个测试的结果到测试结果文件。
-c. 每个测试完，相应的程序需要停止掉。 
+b. 记录需要的所有用例到临时文件;
+c. 使用 test/tools/bpf_remote_executor.py 执行远端测试，逐个开始测试，并记录每个测试的结果到测试结果文件。 注意每个测试的总时长不能太短，记录没有输出任何结果的情况。 
+
 
 
 

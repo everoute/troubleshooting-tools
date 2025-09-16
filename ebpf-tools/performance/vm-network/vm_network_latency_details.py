@@ -708,6 +708,11 @@ static __always_inline void handle_stage_event(struct pt_regs *ctx, struct sk_bu
             
             flow_ptr->tx_start = 1;
         } else if (stage_id == TX_STAGE_6) {
+            // Capture VM interface name for TX direction at final stage
+            struct net_device *dev;
+            if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) == 0 && dev != NULL) {
+                bpf_probe_read_kernel_str(flow_ptr->rx_vnet_ifname, IFNAMSIZ, dev->name);
+            }
             flow_ptr->tx_end = 1;
         }
         
@@ -806,6 +811,11 @@ static __always_inline void handle_stage_event_userspace(struct pt_regs *ctx, st
         if (stage_id == RX_STAGE_6) {
             flow_ptr->rx_end = 1;
         } else if (stage_id == TX_STAGE_6) {
+            // Capture VM interface name for TX direction at final stage
+            struct net_device *dev;
+            if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) == 0 && dev != NULL) {
+                bpf_probe_read_kernel_str(flow_ptr->rx_vnet_ifname, IFNAMSIZ, dev->name);
+            }
             flow_ptr->tx_end = 1;
         }
         
@@ -835,24 +845,7 @@ static __always_inline void handle_stage_event_userspace(struct pt_regs *ctx, st
     }
 }
 
-// RX Direction Probes (VM -> Physical)
-int kprobe__netif_receive_skb(struct pt_regs *ctx, struct sk_buff *skb) {
-    debug_inc(RX_STAGE_0, CODE_PROBE_ENTRY);
-    
-    if (!is_target_vm_interface(skb)) {
-        debug_inc(RX_STAGE_0, CODE_INTERFACE_FILTER);
-        return 0;
-    }
-    
-    if (DIRECTION_FILTER == 1) {
-        debug_inc(RX_STAGE_0, CODE_DIRECTION_FILTER);
-        return 0;
-    }
-    
-    debug_inc(RX_STAGE_0, CODE_HANDLE_CALLED);
-    handle_stage_event(ctx, skb, RX_STAGE_0);
-    return 0;
-}
+// RX Direction Probes (VM -> Physical) - Now handled by unified probe above
 
 int kprobe__netdev_frame_hook(struct pt_regs *ctx, struct sk_buff **pskb) {
     struct sk_buff *skb = NULL;
@@ -927,11 +920,44 @@ int kprobe____dev_queue_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
     return 0;
 }
 
-// TX Direction Probes (Physical -> VM)
-int kprobe____netif_receive_skb(struct pt_regs *ctx, struct sk_buff *skb) {
-    if (!is_target_phy_interface(skb)) return 0;
-    if (DIRECTION_FILTER == 2) return 0;
-    handle_stage_event(ctx, skb, TX_STAGE_0);
+// Use tracepoint for both RX and TX direction
+RAW_TRACEPOINT_PROBE(netif_receive_skb) {
+    // Get skb from tracepoint args
+    struct sk_buff *skb = (struct sk_buff *)ctx->args[0];
+    if (!skb) return 0;
+
+    // Debug: log all interface indices we see at this probe point
+    struct net_device *dev = NULL;
+    int ifindex = 0;
+    if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) == 0 && dev != NULL) {
+        if (bpf_probe_read_kernel(&ifindex, sizeof(ifindex), &dev->ifindex) == 0) {
+            u32 idx = (u32)ifindex;
+            ifindex_seen.increment(idx);
+        }
+    }
+
+    // TX Direction: Physical interface receives packets for VM
+    if (is_target_phy_interface(skb)) {
+        debug_inc(TX_STAGE_0, CODE_PROBE_ENTRY);
+        if (DIRECTION_FILTER == 2) {  // Skip if RX-only mode
+            debug_inc(TX_STAGE_0, CODE_DIRECTION_FILTER);
+            return 0;
+        }
+        debug_inc(TX_STAGE_0, CODE_HANDLE_CALLED);
+        handle_stage_event(ctx, skb, TX_STAGE_0);
+    }
+
+    // RX Direction: VM interface sends packets to physical
+    if (is_target_vm_interface(skb)) {
+        debug_inc(RX_STAGE_0, CODE_PROBE_ENTRY);
+        if (DIRECTION_FILTER == 1) {  // Skip if TX-only mode
+            debug_inc(RX_STAGE_0, CODE_DIRECTION_FILTER);
+            return 0;
+        }
+        debug_inc(RX_STAGE_0, CODE_HANDLE_CALLED);
+        handle_stage_event(ctx, skb, RX_STAGE_0);
+    }
+
     return 0;
 }
 
@@ -1131,10 +1157,16 @@ def print_event(cpu, data, size):
             key.proto_data.icmp.id, key.proto_data.icmp.seq, key.proto_data.icmp.type
         ))
     
-    print("VM Interface: %s -> Physical Interface: %s" % (
-        flow.rx_vnet_ifname.decode('utf-8', 'replace'),
-        flow.tx_pnic_ifname.decode('utf-8', 'replace')
-    ))
+    if direction_filter == 1:  # tx: uplink -> VM
+        print("Physical Interface: %s -> VM Interface: %s" % (
+            flow.tx_pnic_ifname.decode('utf-8', 'replace'),
+            flow.rx_vnet_ifname.decode('utf-8', 'replace')
+        ))
+    else:  # rx: VM -> uplink
+        print("VM Interface: %s -> Physical Interface: %s" % (
+            flow.rx_vnet_ifname.decode('utf-8', 'replace'),
+            flow.tx_pnic_ifname.decode('utf-8', 'replace')
+        ))
     # Show process info only for relevant direction
     if direction_filter == 1 and flow.tx_pid > 0:  # tx
         print("TX Process: PID=%d COMM=%s" % (

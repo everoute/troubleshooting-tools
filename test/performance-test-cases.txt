@@ -1,0 +1,77 @@
+# Performance Test Cases
+# Generated from test/performance-test-spec.md
+
+# ===========================================
+# System Network Test Cases
+# ===========================================
+
+# System Network Tool 1: system_network_perfomance_metrics.py
+# Test with TCP protocol
+sudo python3 /home/smartx/ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-storage --phy-interface ens11 --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --direction rx --protocol tcp
+sudo python3 /home/smartx/ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-storage --phy-interface ens11 --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --direction tx --protocol tcp
+
+# Test with UDP protocol
+sudo python3 /home/smartx/ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-storage --phy-interface ens11 --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --direction rx --protocol udp
+sudo python3 /home/smartx/ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-storage --phy-interface ens11 --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --direction tx --protocol udp
+
+# System Network Tool 2: system_network_latency_details.py
+# Test with TCP protocol
+sudo python3 /home/smartx/ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface ens11 --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --direction rx --protocol tcp
+sudo python3 /home/smartx/ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface ens11 --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --direction tx --protocol tcp
+
+# Test with UDP protocol
+sudo python3 /home/smartx/ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface ens11 --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --direction rx --protocol udp
+sudo python3 /home/smartx/ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface ens11 --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --direction tx --protocol udp
+
+# System Network Tool 3: system_network_icmp_rtt.py (ICMP only)
+sudo python3 /home/smartx/ebpf-tools/performance/system-network/system_network_icmp_rtt.py --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --direction rx --phy-iface1 ens11
+sudo python3 /home/smartx/ebpf-tools/performance/system-network/system_network_icmp_rtt.py --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --direction tx --phy-iface1 ens11
+
+# ===========================================
+# VM Network Test Cases
+# ===========================================
+
+# VM Network Tool 1: vm_network_latency_summary.py
+# Test with TCP protocol
+sudo python3 /home/smartx/ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet0 --phy-interface ens4 --direction rx --src-ip 172.21.153.114 --dst-ip 172.21.153.113 --protocol tcp
+sudo python3 /home/smartx/ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet0 --phy-interface ens4 --direction tx --src-ip 172.21.153.113 --dst-ip 172.21.153.114 --protocol tcp
+
+# Test with UDP protocol
+sudo python3 /home/smartx/ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet0 --phy-interface ens4 --direction rx --src-ip 172.21.153.114 --dst-ip 172.21.153.113 --protocol udp
+sudo python3 /home/smartx/ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet0 --phy-interface ens4 --direction tx --src-ip 172.21.153.113 --dst-ip 172.21.153.114 --protocol udp
+
+# Test with ICMP protocol
+sudo python3 /home/smartx/ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet0 --phy-interface ens4 --direction rx --src-ip 172.21.153.114 --dst-ip 172.21.153.113 --protocol icmp
+sudo python3 /home/smartx/ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet0 --phy-interface ens4 --direction tx --src-ip 172.21.153.113 --dst-ip 172.21.153.114 --protocol icmp
+
+# VM Network Tool 2: vm_network_latency_details.py
+# Test with TCP protocol
+sudo python3 /home/smartx/ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet0 --phy-interface ens4 --direction rx --src-ip 172.21.153.114 --dst-ip 172.21.153.113 --protocol tcp
+sudo python3 /home/smartx/ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet0 --phy-interface ens4 --direction tx --src-ip 172.21.153.113 --dst-ip 172.21.153.114 --protocol tcp
+
+# Test with UDP protocol
+sudo python3 /home/smartx/ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet0 --phy-interface ens4 --direction rx --src-ip 172.21.153.114 --dst-ip 172.21.153.113 --protocol udp
+sudo python3 /home/smartx/ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet0 --phy-interface ens4 --direction tx --src-ip 172.21.153.113 --dst-ip 172.21.153.114 --protocol udp
+
+# Test with ICMP protocol
+sudo python3 /home/smartx/ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet0 --phy-interface ens4 --direction rx --src-ip 172.21.153.114 --dst-ip 172.21.153.113 --protocol icmp
+sudo python3 /home/smartx/ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet0 --phy-interface ens4 --direction tx --src-ip 172.21.153.113 --dst-ip 172.21.153.114 --protocol icmp
+
+# VM Network Tool 3: vm_network_performance_metrics.py
+# Test with TCP protocol
+sudo python3 /home/smartx/ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet0 --phy-interface ens4 --direction rx --src-ip 172.21.153.114 --dst-ip 172.21.153.113 --protocol tcp
+sudo python3 /home/smartx/ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet0 --phy-interface ens4 --direction tx --src-ip 172.21.153.113 --dst-ip 172.21.153.114 --protocol tcp
+
+# Test with UDP protocol
+sudo python3 /home/smartx/ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet0 --phy-interface ens4 --direction rx --src-ip 172.21.153.114 --dst-ip 172.21.153.113 --protocol udp
+sudo python3 /home/smartx/ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet0 --phy-interface ens4 --direction tx --src-ip 172.21.153.113 --dst-ip 172.21.153.114 --protocol udp
+
+# Test with ICMP protocol
+sudo python3 /home/smartx/ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet0 --phy-interface ens4 --direction rx --src-ip 172.21.153.114 --dst-ip 172.21.153.113 --protocol icmp
+sudo python3 /home/smartx/ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet0 --phy-interface ens4 --direction tx --src-ip 172.21.153.113 --dst-ip 172.21.153.114 --protocol icmp
+
+# ===========================================
+# Total: 26 test cases
+# System Network: 10 test cases (4 TCP, 4 UDP, 2 ICMP)
+# VM Network: 16 test cases (6 TCP, 6 UDP, 6 ICMP)
+# ===========================================

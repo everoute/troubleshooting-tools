@@ -61,6 +61,8 @@ bpf_text = """
 #include <linux/netdevice.h>
 #include <net/flow.h>
 
+struct net;
+
 // IP fragment flags constants
 #ifndef IP_MF
 #define IP_MF 0x2000    // More Fragments flag
@@ -678,7 +680,7 @@ static __always_inline void submit_event(struct pt_regs *ctx, struct packet_key_
 }
 
 // Common event handling function
-static __always_inline void handle_stage_event(struct pt_regs *ctx, struct sk_buff *skb, u8 stage_id) {
+static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u8 stage_id) {
     debug_inc(stage_id, CODE_HANDLE_ENTRY);
     
     struct packet_key_t key = {};
@@ -777,7 +779,7 @@ static __always_inline void handle_stage_event(struct pt_regs *ctx, struct sk_bu
 }
 
 // Specialized event handling function for userspace SKB parsing
-static __always_inline void handle_stage_event_userspace(struct pt_regs *ctx, struct sk_buff *skb, u8 stage_id) {
+static __always_inline void handle_stage_event_userspace(void *ctx, struct sk_buff *skb, u8 stage_id) {
     debug_inc(stage_id, CODE_HANDLE_ENTRY);
     
     struct packet_key_t key = {};
@@ -958,6 +960,40 @@ int kprobe__internal_dev_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
     return 0;
 }
 
+// TX Stage 0 fallback for UDP (and non-TCP) using ip_send_skb
+int kprobe__ip_send_skb(struct pt_regs *ctx, void *net, struct sk_buff *skb) {
+    if (DIRECTION_FILTER == 2) {
+        return 0; // rx-only mode
+    }
+
+    unsigned char *head = NULL;
+    u16 network_header_offset = 0;
+    if (bpf_probe_read_kernel(&head, sizeof(head), &skb->head) != 0 ||
+        bpf_probe_read_kernel(&network_header_offset, sizeof(network_header_offset), &skb->network_header) != 0) {
+        return 0;
+    }
+
+    if (network_header_offset == (u16)~0U || network_header_offset > 2048) {
+        return 0;
+    }
+
+    u8 proto = 0;
+    if (bpf_probe_read_kernel(&proto, sizeof(proto), head + network_header_offset + offsetof(struct iphdr, protocol)) != 0) {
+        return 0;
+    }
+
+    if (proto != IPPROTO_UDP) {
+        return 0;
+    }
+
+    if (PROTOCOL_FILTER != 0 && PROTOCOL_FILTER != IPPROTO_UDP) {
+        return 0;
+    }
+
+    handle_stage_event(ctx, skb, TX_STAGE_0);
+    return 0;
+}
+
 // OVS processing stages (common for TX/RX) - from icmp_rtt_latency.py
 int kprobe__ovs_dp_process_packet(struct pt_regs *ctx, const struct sk_buff *skb_const) {
     struct sk_buff *skb = (struct sk_buff *)skb_const;
@@ -1012,11 +1048,26 @@ int kprobe__dev_queue_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
 
 // RX Direction Probes (Physical -> System)
 
-// RX Stage 0: __netif_receive_skb - Physical interface reception
-int kprobe____netif_receive_skb(struct pt_regs *ctx, struct sk_buff *skb) {
-    if (!is_target_ifindex(skb)) return 0;
-    if (DIRECTION_FILTER == 1) return 0; // tx only
-    handle_stage_event(ctx, skb, RX_STAGE_0);
+// RX Stage 0: netif_receive_skb tracepoint - Physical interface reception
+TRACEPOINT_PROBE(net, netif_receive_skb) {
+    struct sk_buff *skb = (struct sk_buff *)args->skbaddr;
+    if (!skb) {
+        return 0;
+    }
+
+    debug_inc(RX_STAGE_0, CODE_PROBE_ENTRY);
+
+    if (!is_target_ifindex(skb)) {
+        return 0;
+    }
+
+    if (DIRECTION_FILTER == 1) { // tx only
+        debug_inc(RX_STAGE_0, CODE_DIRECTION_FILTER);
+        return 0;
+    }
+
+    debug_inc(RX_STAGE_0, CODE_HANDLE_CALLED);
+    handle_stage_event(args, skb, RX_STAGE_0);
     return 0;
 }
 
@@ -1186,7 +1237,7 @@ def print_path_latencies(flow, start_stage, end_stage, path_type):
 def get_stage_name(stage_id):
     """Get human-readable stage name"""
     stage_names = {
-        0: "TX_S0_ip_send_skb",           1: "TX_S1_internal_dev_xmit",
+        0: "TX_S0_transport_entry",       1: "TX_S1_internal_dev_xmit",
         2: "TX_S2_ovs_dp_process",        3: "TX_S3_ovs_dp_upcall",
         4: "TX_S4_ovs_flow_key_extract",  5: "TX_S5_ovs_vport_send",
         6: "TX_S6_dev_queue_xmit",
@@ -1359,7 +1410,7 @@ def print_debug_statistics(b):
     
     # Define stage names
     stage_names = {
-        0: "TX0___tcp_transmit_skb",
+        0: "TX0___transport_entry",
         1: "TX1_internal_dev_xmit", 
         2: "TX2_ovs_dp_process_packet",
         3: "TX3_ovs_dp_upcall",
@@ -1526,7 +1577,7 @@ Examples:
     except Exception as e:
         print("Error loading BPF program: %s" % e)
         sys.exit(1)
-    
+
     b["events"].open_perf_buffer(print_event)
     # b["key_debug_events"].open_perf_buffer(print_key_debug)  # Temporarily disabled
     

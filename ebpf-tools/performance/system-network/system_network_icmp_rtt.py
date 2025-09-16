@@ -9,7 +9,7 @@
 # usage: icmp_rtt_latency.py [-h] --src-ip SRC_IP --dst-ip DST_IP --phy-iface1
 #                            PHY_IFACE1 [--phy-iface2 PHY_IFACE2]
 #                            [--latency-ms LATENCY_MS]
-#                            [--direction {outgoing,incoming}]
+#                            [--direction {tx,rx}]
 #                            [--disable-kernel-stacks]
 
 # Trace full round-trip ICMP latency through the Linux network stack and OVS.
@@ -36,20 +36,20 @@
 #   --latency-ms LATENCY_MS
 #                         Minimum round-trip latency threshold in ms to report
 #                         (default: 0, report all).
-#   --direction {outgoing,incoming}
-#                         Direction of ICMP trace: "outgoing" (local host pings
-#                         remote) or "incoming" (remote host pings local).
-#                         Default: outgoing.
+#   --direction {tx,rx}
+#                         Direction of ICMP trace: "tx" (local host pings
+#                         remote) or "rx" (remote host pings local).
+#                         Default: tx.
 #   --disable-kernel-stacks
 #                         Disable printing of kernel stack traces for each
 #                         stage.
 
 # Examples:
-#   Outgoing ping from 192.168.1.10 to 192.168.1.20, interfaces eth0, eth1:
-#     sudo ./icmp_rtt_latency.py --src-ip 192.168.1.10 --dst-ip 192.168.1.20                                --phy-iface1 eth0 --phy-iface2 eth1 --direction outgoing
+#   TX ping from 192.168.1.10 to 192.168.1.20, interfaces eth0, eth1:
+#     sudo ./icmp_rtt_latency.py --src-ip 192.168.1.10 --dst-ip 192.168.1.20                                --phy-iface1 eth0 --phy-iface2 eth1 --direction tx
 
-#   Incoming ping to 192.168.1.10 from 192.168.1.20, interfaces eth0, eth1:
-#     sudo ./icmp_rtt_latency.py --src-ip 192.168.1.10 --dst-ip 192.168.1.20                                --phy-iface1 eth0 --phy-iface2 eth1 --direction incoming
+#   RX ping to 192.168.1.10 from 192.168.1.20, interfaces eth0, eth1:
+#     sudo ./icmp_rtt_latency.py --src-ip 192.168.1.10 --dst-ip 192.168.1.20                                --phy-iface1 eth0 --phy-iface2 eth1 --direction rx
 #                                 (Note: src-ip is still the local IP being traced)
 # 
 # This tool traces the complete round-trip latency of ICMP packets:
@@ -57,15 +57,15 @@
 # - RX path: External -> Physical NIC -> OVS Kernel Module -> OVS Internal Port -> Protocol Stack -> Application
 #
 # It identifies matching ICMP request/reply pairs and reports segment latencies for both paths.
-# Supports "outgoing" (local host initiates ping) and "incoming" (remote host initiates ping to local host) traces.
+# Supports "tx" (local host initiates ping) and "rx" (remote host initiates ping to local host) traces.
 #
 #    sudo ./icmp_rtt_latency.py --src-ip 192.168.1.10 --dst-ip 192.168.1.20 \
 #                               --phy-iface1 eth0 --phy-iface2 eth1 \
-#                               [--latency-ms 10] [--direction outgoing]
-#    
+#                               [--latency-ms 10] [--direction tx]
+#
 #    sudo ./icmp_rtt_latency.py --src-ip 192.168.1.10 --dst-ip 192.168.1.20 \
 #                               --phy-iface1 eth0 --phy-iface2 eth1 \
-#                               [--latency-ms 2] [--direction incoming]
+#                               [--latency-ms 2] [--direction rx]
 #    
 
 
@@ -113,9 +113,9 @@ bpf_text = """
 #define LATENCY_THRESHOLD_NS %d
 #define TARGET_IFINDEX1 %d
 #define TARGET_IFINDEX2 %d
-#define TRACE_DIRECTION %d // 0 for Outgoing (default), 1 for Incoming
+#define TRACE_DIRECTION %d // 0 for TX (default), 1 for RX
 
-// Define stages for Path 1 (e.g., TX Request for Outgoing, RX Request for Incoming)
+// Define stages for Path 1 (e.g., TX Request for TX, RX Request for RX)
 #define PATH1_STAGE_0    0
 #define PATH1_STAGE_1    1
 #define PATH1_STAGE_2    2
@@ -124,7 +124,7 @@ bpf_text = """
 #define PATH1_STAGE_5    5
 #define PATH1_STAGE_6    6
 
-// Define stages for Path 2 (e.g., RX Reply for Outgoing, TX Reply for Incoming)
+// Define stages for Path 2 (e.g., RX Reply for TX, TX Reply for RX)
 #define PATH2_STAGE_0    7
 #define PATH2_STAGE_1    8
 #define PATH2_STAGE_2    9
@@ -135,6 +135,7 @@ bpf_text = """
 
 #define MAX_STAGES               14
 #define IFNAMSIZ                 16
+
 #define TASK_COMM_LEN            16
 
 
@@ -154,12 +155,12 @@ struct flow_data_t {
     u64 skb_ptr[MAX_STAGES];
     int kstack_id[MAX_STAGES];
     
-    // Tracking info for Path 1 (TX for Outgoing, RX for Incoming)
+    // Tracking info for Path 1 (TX for TX, RX for RX)
     u32 p1_pid; // PID associated with start of Path 1
     char p1_comm[TASK_COMM_LEN]; // Comm for Path 1
     char p1_ifname[IFNAMSIZ]; // Interface for Path 1 start
-    
-    // Tracking info for Path 2 (RX for Outgoing, TX for Incoming)
+
+    // Tracking info for Path 2 (RX for TX, TX for RX)
     u32 p2_pid; // PID associated with start of Path 2
     char p2_comm[TASK_COMM_LEN]; // Comm for Path 2
     char p2_ifname[IFNAMSIZ]; // Interface for Path 2 start
@@ -204,7 +205,7 @@ static __always_inline bool is_target_ifindex(const struct sk_buff *skb) {
 }
 
 // Function to manually parse SKB data coming from userspace (different structure)
-static __always_inline int parse_packet_key_userspace(struct sk_buff *skb, struct packet_key_t *key, 
+static __always_inline int parse_packet_key_userspace(struct sk_buff *skb, struct packet_key_t *key,
                                                      u8 *icmp_type_out, int path_is_primary) {
     if (skb == NULL) {
         return 0;
@@ -264,10 +265,14 @@ static __always_inline int parse_packet_key_userspace(struct sk_buff *skb, struc
     u8 expected_icmp_type_val;
 
     if (path_is_primary) { 
-        if (!(actual_sip == SRC_IP_FILTER && actual_dip == DST_IP_FILTER)) return 0;
+        if (!(actual_sip == SRC_IP_FILTER && actual_dip == DST_IP_FILTER)) {
+        return 0;
+    }
         expected_icmp_type_val = ICMP_ECHO;
     } else { 
-        if (!(actual_sip == DST_IP_FILTER && actual_dip == SRC_IP_FILTER)) return 0;
+        if (!(actual_sip == DST_IP_FILTER && actual_dip == SRC_IP_FILTER)) {
+        return 0;
+    }
         expected_icmp_type_val = ICMP_ECHOREPLY;
     }
     
@@ -308,9 +313,9 @@ static __always_inline int parse_packet_key_userspace(struct sk_buff *skb, struc
     return 1;
 }
 
-static __always_inline int parse_packet_key(struct sk_buff *skb, struct packet_key_t *key, 
-                                           u8 *icmp_type_out, int path_is_primary, u8 stage_id_for_log_only) {
-    if (stage_id_for_log_only == PATH1_STAGE_4 || stage_id_for_log_only == PATH2_STAGE_4) {
+static __always_inline int parse_packet_key(struct sk_buff *skb, struct packet_key_t *key,
+                                           u8 *icmp_type_out, int path_is_primary, u8 stage_id) {
+    if (stage_id == PATH1_STAGE_4 || stage_id == PATH2_STAGE_4) {
          return parse_packet_key_userspace(skb, key, icmp_type_out, path_is_primary);
     }
     
@@ -346,10 +351,14 @@ static __always_inline int parse_packet_key(struct sk_buff *skb, struct packet_k
     }
 
     if (path_is_primary) { 
-        if (!(actual_sip == SRC_IP_FILTER && actual_dip == DST_IP_FILTER)) return 0;
+        if (!(actual_sip == SRC_IP_FILTER && actual_dip == DST_IP_FILTER)) {
+        return 0;
+    }
         expected_icmp_type_val = ICMP_ECHO;
     } else { 
-        if (!(actual_sip == DST_IP_FILTER && actual_dip == SRC_IP_FILTER)) return 0;
+        if (!(actual_sip == DST_IP_FILTER && actual_dip == SRC_IP_FILTER)) {
+        return 0;
+    }
         expected_icmp_type_val = ICMP_ECHOREPLY;
     }
 
@@ -358,8 +367,8 @@ static __always_inline int parse_packet_key(struct sk_buff *skb, struct packet_k
         return 0;
     }
 
-    //bpf_trace_printk("ParsePktKey: Stg=%%d, actual_sip=%%x, actual_dip=%%x", stage_id_for_log_only, actual_sip, actual_dip);
-    //bpf_trace_printk("ParsePktKey: Stg=%%d, net_hdr_off=%%d, trans_hdr_off=%%d", stage_id_for_log_only, network_header_offset, transport_header_offset);
+    //bpf_trace_printk("ParsePktKey: Stg=%%d, actual_sip=%%x, actual_dip=%%x", stage_id, actual_sip, actual_dip);
+    //bpf_trace_printk("ParsePktKey: Stg=%%d, net_hdr_off=%%d, trans_hdr_off=%%d", stage_id, network_header_offset, transport_header_offset);
     if (transport_header_offset == 0 || transport_header_offset == (u16)~0U || transport_header_offset == network_header_offset) {
         transport_header_offset = network_header_offset + (ip_ihl * 4);
     }
@@ -372,8 +381,8 @@ static __always_inline int parse_packet_key(struct sk_buff *skb, struct packet_k
     if (icmph.type != expected_icmp_type_val) {
         return 0;
     }
-    //bpf_trace_printk("ParsePktKey: Stg=%%d, icmp_type=%%d", stage_id_for_log_only, icmph.type);
-    //bpf_trace_printk("ParsePktKey: Stg=%%d, icmp_seq=%%d, icmp_id=%%d", stage_id_for_log_only, icmph.un.echo.sequence, icmph.un.echo.id);
+    //bpf_trace_printk("ParsePktKey: Stg=%%d, icmp_type=%%d", stage_id, icmph.type);
+    //bpf_trace_printk("ParsePktKey: Stg=%%d, icmp_seq=%%d, icmp_id=%%d", stage_id, icmph.un.echo.sequence, icmph.un.echo.id);
 
     *icmp_type_out = icmph.type;
     key->sip = SRC_IP_FILTER; 
@@ -411,7 +420,7 @@ static __always_inline void handle_event(struct pt_regs *ctx, struct sk_buff *sk
     struct flow_data_t *flow_ptr;
 
     if (current_stage_global_id == PATH1_STAGE_0) {
-        struct flow_data_t zero = {}; 
+        struct flow_data_t zero = {};
         flow_sessions.delete(parsed_packet_key);
         flow_ptr = flow_sessions.lookup_or_try_init(parsed_packet_key, &zero);
         if (flow_ptr) {
@@ -478,8 +487,10 @@ static __always_inline void handle_event(struct pt_regs *ctx, struct sk_buff *sk
 
     u64 rtt_start_ts = 0;
     u64 rtt_end_ts = 0;
-    if (current_stage_global_id == PATH2_STAGE_6 && 
-        flow_ptr->saw_path1_start && flow_ptr->saw_path1_end && 
+
+
+    if (current_stage_global_id == PATH2_STAGE_6 &&
+        flow_ptr->saw_path1_start && flow_ptr->saw_path1_end &&
         flow_ptr->saw_path2_start && flow_ptr->saw_path2_end) {
         rtt_start_ts = flow_ptr->ts[PATH1_STAGE_0]; 
         rtt_end_ts = flow_ptr->ts[PATH2_STAGE_6];   
@@ -515,12 +526,12 @@ static __always_inline void handle_event(struct pt_regs *ctx, struct sk_buff *sk
 int kprobe__ip_send_skb(struct pt_regs *ctx, struct net *net, struct sk_buff *skb) {
     struct packet_key_t key = {};
     u8 icmp_type = 0;
-    
-    if (TRACE_DIRECTION == 0) { 
+
+    if (TRACE_DIRECTION == 0) {
         if (parse_packet_key(skb, &key, &icmp_type, 1, PATH1_STAGE_0)) {
             handle_event(ctx, skb, PATH1_STAGE_0, &key, icmp_type);
         }
-    } else { 
+    } else {
         if (parse_packet_key(skb, &key, &icmp_type, 0, PATH2_STAGE_0)) {
             handle_event(ctx, skb, PATH2_STAGE_0, &key, icmp_type);
         }
@@ -544,15 +555,18 @@ int kprobe__internal_dev_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
     return 0;
 }
 
-int kprobe____netif_receive_skb(struct pt_regs *ctx, struct sk_buff *skb) {
+RAW_TRACEPOINT_PROBE(netif_receive_skb) {
+    struct sk_buff *skb = (struct sk_buff *)ctx->args[0];
+    if (!skb) return 0;
+
     struct packet_key_t key = {};
     u8 icmp_type = 0;
-    
-    if (TRACE_DIRECTION == 0) { 
+
+    if (TRACE_DIRECTION == 0) {
         if (parse_packet_key(skb, &key, &icmp_type, 0, PATH2_STAGE_0)) {
             handle_event(ctx, skb, PATH2_STAGE_0, &key, icmp_type);
         }
-    } else { 
+    } else {
         if (parse_packet_key(skb, &key, &icmp_type, 1, PATH1_STAGE_0)) {
             handle_event(ctx, skb, PATH1_STAGE_0, &key, icmp_type);
         }
@@ -755,6 +769,7 @@ def format_ip(addr):
     """Format integer IP address to string"""
     return socket.inet_ntop(socket.AF_INET, struct.pack("=I", addr))
 
+
 def format_latency(ts_start, ts_end):
     """Format latency value in microseconds"""
     if ts_start == 0 or ts_end == 0: # Only return N/A if one of the timestamps is actually zero
@@ -778,7 +793,7 @@ def get_detailed_stage_name(stage_id, direction):
         13: "P2:S6_FINAL"
     }
     
-    probe_map_outgoing = {
+    probe_map_tx = {
         0: "ip_send_skb",       1: "internal_dev_xmit",  2: "ovs_dp_process_packet",
         3: "ovs_dp_upcall",     4: "ovs_flow_key_extract_userspace", 5: "ovs_vport_send",
         6: "dev_queue_xmit",
@@ -786,8 +801,8 @@ def get_detailed_stage_name(stage_id, direction):
         10: "ovs_dp_upcall",    11: "ovs_flow_key_extract_userspace",12: "ovs_vport_send",
         13: "icmp_rcv"
     }
-    
-    probe_map_incoming = {
+
+    probe_map_rx = {
         0: "__netif_receive_skb", 1: "netdev_frame_hook",  2: "ovs_dp_process_packet",
         3: "ovs_dp_upcall",     4: "ovs_flow_key_extract_userspace", 5: "ovs_vport_send",
         6: "icmp_rcv",
@@ -799,10 +814,10 @@ def get_detailed_stage_name(stage_id, direction):
     base_name = base_names.get(stage_id, "Unknown Stage")
     probe_name = ""
 
-    if direction == "outgoing":
-        probe_name = probe_map_outgoing.get(stage_id, "N/A")
-    elif direction == "incoming":
-        probe_name = probe_map_incoming.get(stage_id, "N/A")
+    if direction == "tx":
+        probe_name = probe_map_tx.get(stage_id, "N/A")
+    elif direction == "rx":
+        probe_name = probe_map_rx.get(stage_id, "N/A")
     else: # Should not happen
         probe_name = "N/A"
         
@@ -878,13 +893,13 @@ def print_event(cpu, data, size):
     now = datetime.datetime.now()
     time_str = now.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
     
-    trace_dir_str = "Outgoing (Local -> Remote)" if args.direction == "outgoing" else "Incoming (Remote -> Local)"
+    trace_dir_str = "TX (Local -> Remote)" if args.direction == "tx" else "RX (Remote -> Local)"
     
     print("=== ICMP RTT Trace: %s (%s) ===" % (time_str, trace_dir_str))
     print("Session: %s (%s) -> %s (%s) (ID: %d, Seq: %d)" % (
-        args.src_ip if args.direction == "outgoing" else args.dst_ip, 
-        format_ip(key.sip), 
-        args.dst_ip if args.direction == "outgoing" else args.src_ip,   
+        args.src_ip if args.direction == "tx" else args.dst_ip,
+        format_ip(key.sip),
+        args.dst_ip if args.direction == "tx" else args.src_ip,
         format_ip(key.dip),   
         socket.ntohs(key.id), 
         socket.ntohs(key.seq)
@@ -894,11 +909,11 @@ def print_event(cpu, data, size):
     path2_desc_detail = ""
     path_desc_padding_width = 45 # Define padding for path description
 
-    if args.direction == "incoming":
-        path1_desc_detail = "Path 1 (Request: RX from %s)" % args.src_ip 
+    if args.direction == "rx":
+        path1_desc_detail = "Path 1 (Request: RX from %s)" % args.src_ip
         path2_desc_detail = "Path 2 (Reply:   TX to %s)" % args.src_ip
-    else: 
-        path1_desc_detail = "Path 1 (Request: TX to %s)" % args.dst_ip 
+    else:
+        path1_desc_detail = "Path 1 (Request: TX to %s)" % args.dst_ip
         path2_desc_detail = "Path 2 (Reply:   RX from %s)" % args.dst_ip
 
     print("%-*s: PID=%-6d COMM=%-12s IF=%-10s ICMP_Type=%d" % (
@@ -1008,35 +1023,35 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  Outgoing ping from 192.168.1.10 to 192.168.1.20, interfaces eth0, eth1:
+  TX ping from 192.168.1.10 to 192.168.1.20, interfaces eth0, eth1:
     sudo ./icmp_rtt_latency.py --src-ip 192.168.1.10 --dst-ip 192.168.1.20 \
-                               --phy-iface1 eth0 --phy-iface2 eth1 --direction outgoing
+                               --phy-iface1 eth0 --phy-iface2 eth1 --direction tx
 
-  Incoming ping to 192.168.1.10 from 192.168.1.20, interfaces eth0, eth1:
+  RX ping to 192.168.1.10 from 192.168.1.20, interfaces eth0, eth1:
     sudo ./icmp_rtt_latency.py --src-ip 192.168.1.10 --dst-ip 192.168.1.20 \
-                               --phy-iface1 eth0 --phy-iface2 eth1 --direction incoming
+                               --phy-iface1 eth0 --phy-iface2 eth1 --direction rx
                                 (Note: src-ip is still the local IP being traced)
 """
     )
     
     parser.add_argument('--src-ip', type=str, required=True, 
-                      help='Primary IP of the host where this script runs. This IP is used as SRC_IP_FILTER in BPF. For "outgoing" trace, this is the ICMP request source. For "incoming" trace, this is the local IP that receives the request and sends the reply.')
+                      help='Primary IP of the host where this script runs. This IP is used as SRC_IP_FILTER in BPF. For "tx" trace, this is the ICMP request source. For "rx" trace, this is the local IP that receives the request and sends the reply.')
     parser.add_argument('--dst-ip', type=str, required=True,
-                      help='Secondary IP involved in the trace. This IP is used as DST_IP_FILTER in BPF. For "outgoing" trace, this is the ICMP request destination. For "incoming" trace, this is the remote IP sending the request.')
+                      help='Secondary IP involved in the trace. This IP is used as DST_IP_FILTER in BPF. For "tx" trace, this is the ICMP request destination. For "rx" trace, this is the remote IP sending the request.')
     parser.add_argument('--phy-iface1', type=str, required=True,
                       help='First physical interface to monitor (e.g., for dev_queue_xmit on request path, or __netif_receive_skb on reply path).')
     parser.add_argument('--phy-iface2', type=str, required=False, default=None,
                       help='Second physical interface to monitor. If not provided, phy-iface1 will be used for both checks (effectively monitoring a single interface).')
     parser.add_argument('--latency-ms', type=float, default=0,
                       help='Minimum round-trip latency threshold in ms to report (default: 0, report all).')
-    parser.add_argument('--direction', type=str, choices=["outgoing", "incoming"], default="outgoing",
-                      help='Direction of ICMP trace: "outgoing" (local host pings remote) or "incoming" (remote host pings local). Default: outgoing.')
+    parser.add_argument('--direction', type=str, choices=["tx", "rx"], default="tx",
+                      help='Direction of ICMP trace: "tx" (local host pings remote) or "rx" (remote host pings local). Default: tx.')
     parser.add_argument('--disable-kernel-stacks', action='store_true', default=False,
                       help='Disable printing of kernel stack traces for each stage.')
     
     args = parser.parse_args()
     
-    direction_val = 0 if args.direction == "outgoing" else 1 
+    direction_val = 0 if args.direction == "tx" else 1 
     
     try:
         ifindex1 = get_if_index(args.phy_iface1)
@@ -1084,7 +1099,6 @@ Examples:
     probe_functions = [
         ("ip_send_skb", "kprobe__ip_send_skb"),
         ("internal_dev_xmit", "kprobe__internal_dev_xmit"),
-        ("__netif_receive_skb", "kprobe____netif_receive_skb"),
         ("netdev_frame_hook", "kprobe__netdev_frame_hook"),
         ("ovs_dp_process_packet", "kprobe__ovs_dp_process_packet"),
         ("ovs_dp_upcall", "kprobe__ovs_dp_upcall"),

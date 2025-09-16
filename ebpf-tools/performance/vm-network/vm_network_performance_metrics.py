@@ -233,6 +233,7 @@ BPF_PERF_OUTPUT(events);
 
 // Debug statistics framework
 BPF_HISTOGRAM(debug_stage_stats, u32);  // Key: (stage_id << 8) | code_point
+BPF_HISTOGRAM(ifindex_seen, u32);       // Track which ifindex values we see
 
 // Debug function
 static __always_inline void debug_inc(u8 stage_id, u8 code_point) {
@@ -766,26 +767,34 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
     }
 }
 
-// VNET RX Path Probes (VM TX, packets from VM to external)
-int kprobe__netif_receive_skb(struct pt_regs *ctx, struct sk_buff *skb) {
+// Use tracepoint for both RX and TX direction - unified probe for first stage
+RAW_TRACEPOINT_PROBE(netif_receive_skb) {
+    // Get skb from tracepoint args
+    struct sk_buff *skb = (struct sk_buff *)ctx->args[0];
     if (!skb) return 0;
-    
-    if (is_target_vm_interface(skb)) {
-        if (DIRECTION_FILTER == 2) return 0;  // Skip if vnet_tx only
-        handle_stage_event(ctx, skb, STG_VNET_RX, 1);  // direction=1 (vnet_rx)
-    }
-    
-    return 0;
-}
 
-int kprobe____netif_receive_skb(struct pt_regs *ctx, struct sk_buff *skb) {
-    if (!skb) return 0;
-    
+    // Debug: log all interface indices we see at this probe point
+    struct net_device *dev = NULL;
+    int ifindex = 0;
+    if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) == 0 && dev != NULL) {
+        if (bpf_probe_read_kernel(&ifindex, sizeof(ifindex), &dev->ifindex) == 0) {
+            u32 idx = (u32)ifindex;
+            ifindex_seen.increment(idx);
+        }
+    }
+
+    // TX Direction: Physical interface receives packets for VM
     if (is_target_phy_interface(skb)) {
         if (DIRECTION_FILTER == 1) return 0;  // Skip if vnet_rx only
         handle_stage_event(ctx, skb, STG_PHY_RX, 2);  // direction=2 (vnet_tx)
     }
-    
+
+    // RX Direction: VM interface sends packets to physical
+    if (is_target_vm_interface(skb)) {
+        if (DIRECTION_FILTER == 2) return 0;  // Skip if vnet_tx only
+        handle_stage_event(ctx, skb, STG_VNET_RX, 1);  // direction=1 (vnet_rx)
+    }
+
     return 0;
 }
 

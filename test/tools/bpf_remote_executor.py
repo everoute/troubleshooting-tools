@@ -84,12 +84,15 @@ class BPFRemoteExecutor:
                 full_command = f"cd {workspace} && sudo {command}"
             else:
                 full_command = f"cd {workspace} && {command}"
-            
+
+            # Escape quotes for expect script
+            escaped_command = full_command.replace('\\', '\\\\').replace('"', '\\"').replace('$', '\\$')
+
             # Use expect script for proper Ctrl+C handling
             expect_script = f'''#!/usr/bin/expect -f
 set timeout {duration + 5}
 log_file {output_file}
-spawn bash -c "{full_command}"
+spawn bash -c "{escaped_command}"
 
 # Start timer immediately, regardless of output
 after [expr {duration} * 1000] {{

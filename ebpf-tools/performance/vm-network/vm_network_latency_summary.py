@@ -165,6 +165,9 @@ BPF_HISTOGRAM(adjacent_latency_hist, struct stage_pair_key_t, 1024);
 // BPF Histogram for total end-to-end latency - simple u8 key for direction
 BPF_HISTOGRAM(total_latency_hist, u8, 256);
 
+// Debug histogram to track interface indices seen
+BPF_HISTOGRAM(ifindex_seen, u32);
+
 // Performance statistics
 BPF_ARRAY(packet_counters, u64, 4);  // 0=total, 1=vnet_rx, 2=vnet_tx, 3=dropped
 BPF_ARRAY(stage_pair_counters, u64, 32);  // Count of stage pairs seen
@@ -590,26 +593,34 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
 }
 
 
-// Probe functions for each stage - same as before
-int kprobe__netif_receive_skb(struct pt_regs *ctx, struct sk_buff *skb) {
+// Use tracepoint for both RX and TX direction
+RAW_TRACEPOINT_PROBE(netif_receive_skb) {
+    // Get skb from tracepoint args
+    struct sk_buff *skb = (struct sk_buff *)ctx->args[0];
     if (!skb) return 0;
-    
-    if (is_target_vm_interface(skb)) {
-        if (DIRECTION_FILTER == 2) return 0;
-        handle_stage_event(ctx, skb, STG_VNET_RX, 1);
-    }
-    
-    return 0;
-}
 
-int kprobe____netif_receive_skb(struct pt_regs *ctx, struct sk_buff *skb) {
-    if (!skb) return 0;
-    
+    // Debug: log all interface indices we see at this probe point
+    struct net_device *dev = NULL;
+    int ifindex = 0;
+    if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) == 0 && dev != NULL) {
+        if (bpf_probe_read_kernel(&ifindex, sizeof(ifindex), &dev->ifindex) == 0) {
+            u32 idx = (u32)ifindex;
+            ifindex_seen.increment(idx);
+        }
+    }
+
+    // TX Direction: Physical interface receives packets for VM
     if (is_target_phy_interface(skb)) {
-        if (DIRECTION_FILTER == 1) return 0;
+        if (DIRECTION_FILTER == 1) return 0;  // Skip if RX-only mode
         handle_stage_event(ctx, skb, STG_PHY_RX, 2);
     }
-    
+
+    // RX Direction: VM interface sends packets to physical
+    if (is_target_vm_interface(skb)) {
+        if (DIRECTION_FILTER == 2) return 0;  // Skip if TX-only mode
+        handle_stage_event(ctx, skb, STG_VNET_RX, 1);
+    }
+
     return 0;
 }
 

@@ -83,7 +83,7 @@ struct inet_cork;
 #define DIRECTION_FILTER %d  // 1=tx, 2=rx
 
 // TX direction stages (System -> Physical)
-#define TX_STAGE_0    0  // ip_send_skb
+#define TX_STAGE_0    0  // ip_output
 #define TX_STAGE_1    1  // internal_dev_xmit
 #define TX_STAGE_2    2  // ovs_dp_process_packet
 #define TX_STAGE_3    3  // ovs_dp_upcall
@@ -109,23 +109,24 @@ struct packet_key_t {
     __be32 src_ip;
     __be32 dst_ip;
     u8 protocol;
-    
+    u8 pad[3];
+
     union {
         struct {
             __be16 src_port;
             __be16 dst_port;
-            // Remove seq and payload_len - they vary per packet
-            // Flow tracking should use only connection 5-tuple
+            __be32 seq;          // TCP sequence number (packet identifier)
         } tcp;
-        
+
         struct {
             __be16 src_port;
             __be16 dst_port;
-            __be16 ip_id;       // IP identification field (packet identifier)
-            __be16 frag_off;    // Fragment offset (distinguish fragments)
+            __be16 ip_id;        // IP identification
+            __be16 udp_len;      // UDP length field
+            __be16 frag_off;     // Fragment offset
         } udp;
     };
-    
+
     u64 first_seen_ns;  // First capture timestamp (handle retransmissions)
 };
 
@@ -328,26 +329,7 @@ static __always_inline int parse_tcp_key(
     
     key->tcp.src_port = tcp.source;
     key->tcp.dst_port = tcp.dest;
-    
-    // Sequence number removed from key structure
-    // Flow tracking uses only connection 5-tuple
-    
-    // Use a simplified payload length calculation to avoid inconsistencies
-    // For flow tracking, we only need to distinguish major packet types
-    struct iphdr ip;
-    u16 payload_len = 0;
-    if (get_ip_header(skb, &ip, stage_id) == 0) {
-        u16 ip_len = ntohs(ip.tot_len);
-        u16 ip_hdr_len = (ip.ihl & 0x0F) * 4;
-        u16 tcp_hdr_len = (tcp.doff & 0x0F) * 4;
-        if (tcp_hdr_len < 20) tcp_hdr_len = 20; // Minimum TCP header size
-        if (ip_len > ip_hdr_len + tcp_hdr_len) {
-            payload_len = ip_len - ip_hdr_len - tcp_hdr_len;
-        }
-    }
-    
-    // Payload length removed from key structure
-    // Different stages calculate it differently causing mismatch
+    key->tcp.seq = tcp.seq;
     
     return 1;
 }
@@ -364,36 +346,15 @@ static __always_inline int parse_udp_key(
     key->udp.ip_id = ip.id;
     
     // Get fragmentation information
-    u16 frag_off_flags = ntohs(ip.frag_off);
-    u8 more_frag = (frag_off_flags & 0x2000) ? 1 : 0;  // More Fragments bit
-    u16 frag_offset = frag_off_flags & 0x1FFF;          // Fragment offset (8-byte units)
-    
-    u8 is_fragment = (more_frag || frag_offset) ? 1 : 0;
-    
-    if (is_fragment) {
-        // Fragment packet: use frag_offset to distinguish different fragments
-        key->udp.frag_off = frag_offset * 8;  // Convert to byte offset
-        
-        // Only first fragment has UDP header
-        if (frag_offset == 0) {
-            struct udphdr udp;
-            if (get_transport_header(skb, &udp, sizeof(udp), stage_id) == 0) {
-                key->udp.src_port = udp.source;
-                key->udp.dst_port = udp.dest;
-            }
-        } else {
-            // Subsequent fragments: port information not available
-            key->udp.src_port = 0;
-            key->udp.dst_port = 0;
-        }
+    struct udphdr udp = {};
+    if (get_transport_header(skb, &udp, sizeof(udp), stage_id) == 0) {
+        key->udp.src_port = udp.source;
+        key->udp.dst_port = udp.dest;
+        key->udp.udp_len = udp.len;
     } else {
-        // Non-fragment packet: frag_off = 0, parse UDP header normally
-        key->udp.frag_off = 0;
-        struct udphdr udp;
-        if (get_transport_header(skb, &udp, sizeof(udp), stage_id) == 0) {
-            key->udp.src_port = udp.source;
-            key->udp.dst_port = udp.dest;
-        }
+        key->udp.src_port = 0;
+        key->udp.dst_port = 0;
+        key->udp.udp_len = 0;
     }
     
     return 1;
@@ -813,144 +774,18 @@ static __always_inline void handle_stage_event_userspace(void *ctx, struct sk_bu
 
 // TX Direction Probes (System -> Physical) - based on design document
 
-// Special parsing function for __tcp_transmit_skb stage using sock info
-static __always_inline int parse_tcp_transmit_skb(
-    struct sock *sk,
-    struct sk_buff *skb, 
-    struct packet_key_t *key, 
-    u8 stage_id
-) {
-    debug_inc(stage_id, CODE_PARSE_ENTRY);
-    
-    if (!sk || !skb) {
-        return 0;
-    }
-    
-    // Get IP info from inet_sock structure
-    struct inet_sock *inet = inet_sk(sk);
-    if (!inet) {
-        return 0;
-    }
-    
-    // Read source and destination IPs from sock
-    __be32 src_ip, dst_ip;
-    if (bpf_probe_read_kernel(&src_ip, sizeof(src_ip), &inet->inet_saddr) != 0 ||
-        bpf_probe_read_kernel(&dst_ip, sizeof(dst_ip), &inet->inet_daddr) != 0) {
-        return 0;
-    }
-    
-    key->src_ip = src_ip;
-    key->dst_ip = dst_ip;
-    key->protocol = IPPROTO_TCP;  // We know it's TCP
-    
-    // Apply IP filters
-    if (SRC_IP_FILTER != 0 && src_ip != SRC_IP_FILTER && dst_ip != SRC_IP_FILTER) {
-        debug_inc(stage_id, CODE_PARSE_IP_FILTER);
-        return 0;
-    }
-    if (DST_IP_FILTER != 0 && src_ip != DST_IP_FILTER && dst_ip != DST_IP_FILTER) {
-        debug_inc(stage_id, CODE_PARSE_IP_FILTER);
-        return 0;
-    }
-    
-    // Get TCP port info from inet_sock
-    __be16 src_port, dst_port;
-    if (bpf_probe_read_kernel(&src_port, sizeof(src_port), &inet->inet_sport) != 0 ||
-        bpf_probe_read_kernel(&dst_port, sizeof(dst_port), &inet->inet_dport) != 0) {
-        return 0;
-    }
-    
-    key->tcp.src_port = src_port;
-    key->tcp.dst_port = dst_port;
-    
-    // Apply port filters
-    if (SRC_PORT_FILTER != 0 && src_port != htons(SRC_PORT_FILTER) && dst_port != htons(SRC_PORT_FILTER)) {
-        debug_inc(stage_id, CODE_PARSE_PORT_FILTER);
-        return 0;
-    }
-    if (DST_PORT_FILTER != 0 && src_port != htons(DST_PORT_FILTER) && dst_port != htons(DST_PORT_FILTER)) {
-        debug_inc(stage_id, CODE_PARSE_PORT_FILTER);
-        return 0;
-    }
-    
-    // TCP sequence number removed from key structure
-    // Flow tracking uses only connection 5-tuple for consistency
-    
-    // Get payload length from skb
-    __u32 skb_len = 0;
-    if (bpf_probe_read_kernel(&skb_len, sizeof(skb_len), &skb->len) == 0) {
-        // Estimate TCP header size (typically 20-60 bytes)
-        __u32 estimated_tcp_header = 20;  // Minimum TCP header size
-        __u32 payload_len = (skb_len > estimated_tcp_header) ? (skb_len - estimated_tcp_header) : 0;
-        
-        // Payload length removed from key structure
-        // TX0 uses estimation while other stages use exact calculation
-    } else {
-        // Payload length removed from key structure
-    }
-    
-    debug_inc(stage_id, CODE_PARSE_TCP_SUCCESS);
-    debug_inc(stage_id, CODE_PARSE_SUCCESS);
-    return 1;
-}
 
-// TX Stage 0: __tcp_transmit_skb - TCP transmission entry point  
-// At this stage, use sock structure info instead of SKB headers
-int kprobe____tcp_transmit_skb(struct pt_regs *ctx, struct sock *sk, struct sk_buff *skb, 
-                               int clone_it, gfp_t gfp_mask, u32 rcv_nxt) {
+// TX Stage 0: ip_output - IP layer transmission entry point
+int kprobe__ip_output(struct pt_regs *ctx, struct net *net, struct sock *sk, struct sk_buff *skb) {
     debug_inc(TX_STAGE_0, CODE_PROBE_ENTRY);
-    
+
     if (DIRECTION_FILTER == 2) { // rx only
         debug_inc(TX_STAGE_0, CODE_DIRECTION_FILTER);
         return 0;
     }
-    
-    // Only handle TCP protocol
-    if (PROTOCOL_FILTER != 0 && PROTOCOL_FILTER != IPPROTO_TCP) {
-        return 0;
-    }
-    
+
     debug_inc(TX_STAGE_0, CODE_HANDLE_CALLED);
-    debug_inc(TX_STAGE_0, CODE_HANDLE_ENTRY);
-    
-    struct packet_key_t key = {};
-    if (!parse_tcp_transmit_skb(sk, skb, &key, TX_STAGE_0)) {
-        return 0;
-    }
-    
-    u64 current_ts = bpf_ktime_get_ns();
-    int stack_id = stack_traces.get_stackid(ctx, BPF_F_REUSE_STACKID);
-    
-    // Flow creation for TX stage 0
-    debug_inc(TX_STAGE_0, CODE_FLOW_CREATE);
-    // debug_key(ctx, &key, TX_STAGE_0);  // Temporarily disabled - too many events
-    struct flow_data_t zero = {};
-    flow_sessions.delete(&key);
-    struct flow_data_t *flow_ptr = flow_sessions.lookup_or_try_init(&key, &zero);
-    if (!flow_ptr) {
-        debug_inc(TX_STAGE_0, CODE_FLOW_NOT_FOUND);
-        return 0;
-    }
-    
-    debug_inc(TX_STAGE_0, CODE_FLOW_FOUND);
-    
-    flow_ptr->first_seen_ns = current_ts;
-    flow_ptr->p1_pid = bpf_get_current_pid_tgid() >> 32;
-    bpf_get_current_comm(&flow_ptr->p1_comm, sizeof(flow_ptr->p1_comm));
-    flow_ptr->saw_path1_start = 1;
-    
-    // Record interface name from sock
-    if (sk->sk_bound_dev_if) {
-        // Try to get interface name - this is more complex, for now just record ifindex if needed
-    }
-    
-    // Record timestamp
-    flow_ptr->ts[TX_STAGE_0] = current_ts;
-    flow_ptr->skb_ptr[TX_STAGE_0] = (u64)skb;
-    flow_ptr->kstack_id[TX_STAGE_0] = stack_id;
-    
-    flow_sessions.update(&key, flow_ptr);
-    
+    handle_stage_event(ctx, skb, TX_STAGE_0);
     return 0;
 }
 
@@ -961,23 +796,6 @@ int kprobe__internal_dev_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
     return 0;
 }
 
-// TX Stage 0: udp_send_skb - UDP transmission entry point
-int udp_send_skb_stage0(struct pt_regs *ctx, struct sk_buff *skb, struct flowi4 *fl4, struct inet_cork *cork) {
-    debug_inc(TX_STAGE_0, CODE_PROBE_ENTRY);
-
-    if (DIRECTION_FILTER == 2) { // rx only
-        debug_inc(TX_STAGE_0, CODE_DIRECTION_FILTER);
-        return 0;
-    }
-
-    if (PROTOCOL_FILTER != 0 && PROTOCOL_FILTER != IPPROTO_UDP) {
-        return 0;
-    }
-
-    debug_inc(TX_STAGE_0, CODE_HANDLE_CALLED);
-    handle_stage_event(ctx, skb, TX_STAGE_0);
-    return 0;
-}
 
 // OVS processing stages (common for TX/RX) - from icmp_rtt_latency.py
 int kprobe__ovs_dp_process_packet(struct pt_regs *ctx, const struct sk_buff *skb_const) {
@@ -1106,6 +924,7 @@ class UDPData(ctypes.Structure):
         ("src_port", ctypes.c_uint16),
         ("dst_port", ctypes.c_uint16),
         ("ip_id", ctypes.c_uint16),
+        ("udp_len", ctypes.c_uint16),
         ("frag_off", ctypes.c_uint16)
     ]
 
@@ -1560,33 +1379,6 @@ Examples:
         ))
         print("BPF program loaded successfully")
 
-        if direction_filter != 2 and (protocol_filter == 0 or protocol_filter == 17):
-            # Attach UDP transport stage kprobe (symbol may be optimized with suffixes)
-            udp_attached = False
-            candidate_syms = []
-            try:
-                candidate_syms = b.get_kprobe_functions(b"udp_send_skb")
-            except Exception:
-                candidate_syms = []
-
-            for sym in candidate_syms:
-                sym_name = sym.decode('utf-8') if isinstance(sym, bytes) else sym
-                try:
-                    b.attach_kprobe(event=sym_name, fn_name="udp_send_skb_stage0")
-                    udp_attached = True
-                    break
-                except Exception:
-                    continue
-
-            if not udp_attached:
-                try:
-                    b.attach_kprobe(event="udp_send_skb", fn_name="udp_send_skb_stage0")
-                    udp_attached = True
-                except Exception:
-                    pass
-
-            if not udp_attached:
-                print("Warning: failed to attach udp_send_skb kprobe; UDP TX stage 0 data will be missing.")
     except Exception as e:
         print("Error loading BPF program: %s" % e)
         sys.exit(1)

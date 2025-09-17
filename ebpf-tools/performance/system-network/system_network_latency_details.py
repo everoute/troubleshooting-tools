@@ -62,6 +62,7 @@ bpf_text = """
 #include <net/flow.h>
 
 struct net;
+struct inet_cork;
 
 // IP fragment flags constants
 #ifndef IP_MF
@@ -960,29 +961,12 @@ int kprobe__internal_dev_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
     return 0;
 }
 
-// TX Stage 0 fallback for UDP (and non-TCP) using ip_send_skb
-int kprobe__ip_send_skb(struct pt_regs *ctx, void *net, struct sk_buff *skb) {
-    if (DIRECTION_FILTER == 2) {
-        return 0; // rx-only mode
-    }
+// TX Stage 0: udp_send_skb - UDP transmission entry point
+int udp_send_skb_stage0(struct pt_regs *ctx, struct sk_buff *skb, struct flowi4 *fl4, struct inet_cork *cork) {
+    debug_inc(TX_STAGE_0, CODE_PROBE_ENTRY);
 
-    unsigned char *head = NULL;
-    u16 network_header_offset = 0;
-    if (bpf_probe_read_kernel(&head, sizeof(head), &skb->head) != 0 ||
-        bpf_probe_read_kernel(&network_header_offset, sizeof(network_header_offset), &skb->network_header) != 0) {
-        return 0;
-    }
-
-    if (network_header_offset == (u16)~0U || network_header_offset > 2048) {
-        return 0;
-    }
-
-    u8 proto = 0;
-    if (bpf_probe_read_kernel(&proto, sizeof(proto), head + network_header_offset + offsetof(struct iphdr, protocol)) != 0) {
-        return 0;
-    }
-
-    if (proto != IPPROTO_UDP) {
+    if (DIRECTION_FILTER == 2) { // rx only
+        debug_inc(TX_STAGE_0, CODE_DIRECTION_FILTER);
         return 0;
     }
 
@@ -990,6 +974,7 @@ int kprobe__ip_send_skb(struct pt_regs *ctx, void *net, struct sk_buff *skb) {
         return 0;
     }
 
+    debug_inc(TX_STAGE_0, CODE_HANDLE_CALLED);
     handle_stage_event(ctx, skb, TX_STAGE_0);
     return 0;
 }
@@ -1574,6 +1559,34 @@ Examples:
             protocol_filter, ifindex1, ifindex2, direction_filter
         ))
         print("BPF program loaded successfully")
+
+        if direction_filter != 2 and (protocol_filter == 0 or protocol_filter == 17):
+            # Attach UDP transport stage kprobe (symbol may be optimized with suffixes)
+            udp_attached = False
+            candidate_syms = []
+            try:
+                candidate_syms = b.get_kprobe_functions(b"udp_send_skb")
+            except Exception:
+                candidate_syms = []
+
+            for sym in candidate_syms:
+                sym_name = sym.decode('utf-8') if isinstance(sym, bytes) else sym
+                try:
+                    b.attach_kprobe(event=sym_name, fn_name="udp_send_skb_stage0")
+                    udp_attached = True
+                    break
+                except Exception:
+                    continue
+
+            if not udp_attached:
+                try:
+                    b.attach_kprobe(event="udp_send_skb", fn_name="udp_send_skb_stage0")
+                    udp_attached = True
+                except Exception:
+                    pass
+
+            if not udp_attached:
+                print("Warning: failed to attach udp_send_skb kprobe; UDP TX stage 0 data will be missing.")
     except Exception as e:
         print("Error loading BPF program: %s" % e)
         sys.exit(1)

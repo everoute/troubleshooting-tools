@@ -60,6 +60,8 @@ bpf_text = """
 #include <linux/sched.h>
 #include <linux/netdevice.h>
 #include <net/flow.h>
+#include <net/inet_sock.h>
+#include <net/tcp.h>
 
 struct net;
 struct inet_cork;
@@ -83,7 +85,7 @@ struct inet_cork;
 #define DIRECTION_FILTER %d  // 1=tx, 2=rx
 
 // TX direction stages (System -> Physical)
-#define TX_STAGE_0    0  // ip_output
+#define TX_STAGE_0    0  // ip_queue_xmit (TCP) / ip_send_skb (UDP)
 #define TX_STAGE_1    1  // internal_dev_xmit
 #define TX_STAGE_2    2  // ovs_dp_process_packet
 #define TX_STAGE_3    3  // ovs_dp_upcall
@@ -658,7 +660,7 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
     // Flow creation for start stages
     if (stage_id == TX_STAGE_0 || stage_id == RX_STAGE_0) {
         debug_inc(stage_id, CODE_FLOW_CREATE);
-        // debug_key(ctx, &key, stage_id);  // Temporarily disabled - too many events
+        debug_key(ctx, &key, stage_id);  // Enable key debugging for TCP flow mismatch investigation
         struct flow_data_t zero = {};
         flow_sessions.delete(&key);
         flow_ptr = flow_sessions.lookup_or_try_init(&key, &zero);
@@ -704,7 +706,7 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
         
     } else {
         debug_inc(stage_id, CODE_FLOW_LOOKUP);
-        // debug_key(ctx, &key, stage_id);  // Temporarily disabled - too many events
+        debug_key(ctx, &key, stage_id);  // Enable key debugging for TCP flow mismatch investigation
         flow_ptr = flow_sessions.lookup(&key);
         if (!flow_ptr) {
             debug_inc(stage_id, CODE_FLOW_NOT_FOUND);
@@ -775,12 +777,173 @@ static __always_inline void handle_stage_event_userspace(void *ctx, struct sk_bu
 // TX Direction Probes (System -> Physical) - based on design document
 
 
-// TX Stage 0: ip_output - IP layer transmission entry point
-int kprobe__ip_output(struct pt_regs *ctx, struct net *net, struct sock *sk, struct sk_buff *skb) {
+// Special packet key extraction for TCP at __ip_queue_xmit - must match standard format exactly
+static __always_inline int parse_packet_key_tcp_early(
+    struct sk_buff *skb,
+    struct sock *sk,
+    struct packet_key_t *key,
+    u8 stage_id
+) {
+    debug_inc(stage_id, CODE_PARSE_ENTRY);
+
+    if (!sk) return 0;
+
+    // Get from socket - this is reliable at __ip_queue_xmit
+    struct inet_sock *inet = (struct inet_sock *)sk;
+    bpf_probe_read_kernel(&key->src_ip, sizeof(key->src_ip), &inet->inet_saddr);
+    bpf_probe_read_kernel(&key->dst_ip, sizeof(key->dst_ip), &inet->inet_daddr);
+    bpf_probe_read_kernel(&key->tcp.src_port, sizeof(key->tcp.src_port), &inet->inet_sport);
+    bpf_probe_read_kernel(&key->tcp.dst_port, sizeof(key->tcp.dst_port), &inet->inet_dport);
+
+    key->protocol = IPPROTO_TCP;
+
+    // Apply same filters as standard function
+    if (PROTOCOL_FILTER != 0 && key->protocol != PROTOCOL_FILTER) {
+        debug_inc(stage_id, CODE_PARSE_PROTO_FILTER);
+        return 0;
+    }
+
+    if (SRC_IP_FILTER != 0 && key->src_ip != SRC_IP_FILTER && key->dst_ip != SRC_IP_FILTER) {
+        debug_inc(stage_id, CODE_PARSE_IP_FILTER);
+        return 0;
+    }
+    if (DST_IP_FILTER != 0 && key->src_ip != DST_IP_FILTER && key->dst_ip != DST_IP_FILTER) {
+        debug_inc(stage_id, CODE_PARSE_IP_FILTER);
+        return 0;
+    }
+
+    // Use tcp_sock method for reliable sequence number extraction
+    struct tcp_sock *tp = (struct tcp_sock *)sk;
+    u32 tcp_snd_nxt = 0;
+    u32 tcp_write_seq = 0;
+
+    // Try to read both values for reliability
+    int snd_nxt_ret = bpf_probe_read_kernel(&tcp_snd_nxt, sizeof(tcp_snd_nxt), &tp->snd_nxt);
+    int write_seq_ret = bpf_probe_read_kernel(&tcp_write_seq, sizeof(tcp_write_seq), &tp->write_seq);
+
+    // Use snd_nxt if it's non-zero and read successfully
+    if (snd_nxt_ret >= 0 && tcp_snd_nxt != 0) {
+        key->tcp.seq = htonl(tcp_snd_nxt);
+    } else if (write_seq_ret >= 0 && tcp_write_seq != 0) {
+        // Fallback to write_seq if snd_nxt is 0 or failed
+        key->tcp.seq = htonl(tcp_write_seq);
+    } else {
+        // Last resort: try to get from SKB data (might not be ready yet)
+        unsigned char *data;
+        if (bpf_probe_read_kernel(&data, sizeof(data), &skb->data) >= 0 && data) {
+            struct iphdr ip;
+            if (bpf_probe_read_kernel(&ip, sizeof(ip), data) >= 0) {
+                u8 ip_ihl = (ip.ihl & 0x0F);
+                if (ip_ihl >= 5) {
+                    struct tcphdr tcp;
+                    if (bpf_probe_read_kernel(&tcp, sizeof(tcp), data + (ip_ihl * 4)) >= 0) {
+                        key->tcp.seq = tcp.seq;
+                    }
+                }
+            }
+        }
+    }
+
+    // Apply port filters
+    if (SRC_PORT_FILTER != 0 && key->tcp.src_port != htons(SRC_PORT_FILTER) && key->tcp.dst_port != htons(SRC_PORT_FILTER)) {
+        debug_inc(stage_id, CODE_PARSE_PORT_FILTER);
+        return 0;
+    }
+    if (DST_PORT_FILTER != 0 && key->tcp.src_port != htons(DST_PORT_FILTER) && key->tcp.dst_port != htons(DST_PORT_FILTER)) {
+        debug_inc(stage_id, CODE_PARSE_PORT_FILTER);
+        return 0;
+    }
+
+    debug_inc(stage_id, CODE_PARSE_TCP_SUCCESS);
+    debug_inc(stage_id, CODE_PARSE_SUCCESS);
+    return 1;
+}
+
+// TX Stage 0: TCP __ip_queue_xmit - TCP IP layer transmission entry point
+int kprobe____ip_queue_xmit(struct pt_regs *ctx, struct sock *sk, struct sk_buff *skb, struct flowi *fl) {
     debug_inc(TX_STAGE_0, CODE_PROBE_ENTRY);
 
     if (DIRECTION_FILTER == 2) { // rx only
         debug_inc(TX_STAGE_0, CODE_DIRECTION_FILTER);
+        return 0;
+    }
+
+    // TCP protocol filter
+    if (PROTOCOL_FILTER != 0 && PROTOCOL_FILTER != IPPROTO_TCP) {
+        return 0;
+    }
+
+    debug_inc(TX_STAGE_0, CODE_HANDLE_CALLED);
+    debug_inc(TX_STAGE_0, CODE_HANDLE_ENTRY);
+
+    struct packet_key_t key = {};
+    if (!parse_packet_key_tcp_early(skb, sk, &key, TX_STAGE_0)) {
+        return 0;
+    }
+
+    u64 current_ts = bpf_ktime_get_ns();
+    int stack_id = stack_traces.get_stackid(ctx, BPF_F_REUSE_STACKID);
+
+    // Create flow for TX_STAGE_0
+    debug_inc(TX_STAGE_0, CODE_FLOW_CREATE);
+    struct flow_data_t zero = {};
+    flow_sessions.delete(&key);
+    struct flow_data_t *flow_ptr = flow_sessions.lookup_or_try_init(&key, &zero);
+    if (!flow_ptr) {
+        debug_inc(TX_STAGE_0, CODE_FLOW_NOT_FOUND);
+        return 0;
+    }
+
+    flow_ptr->first_seen_ns = current_ts;
+    flow_ptr->p1_pid = bpf_get_current_pid_tgid() >> 32;
+    bpf_get_current_comm(&flow_ptr->p1_comm, sizeof(flow_ptr->p1_comm));
+    flow_ptr->saw_path1_start = 1;
+
+    // Record interface name
+    struct net_device *dev;
+    if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) == 0 && dev != NULL) {
+        bpf_probe_read_kernel_str(flow_ptr->p1_ifname, IFNAMSIZ, dev->name);
+    }
+
+    // Record TCP flags
+    struct tcphdr tcp;
+    unsigned char *data;
+    if (bpf_probe_read_kernel(&data, sizeof(data), &skb->data) == 0 && data) {
+        struct iphdr ip;
+        if (bpf_probe_read_kernel(&ip, sizeof(ip), data) == 0) {
+            u8 ip_ihl = (ip.ihl & 0x0F);
+            if (ip_ihl >= 5) {
+                if (bpf_probe_read_kernel(&tcp, sizeof(tcp), data + (ip_ihl * 4)) == 0) {
+                    flow_ptr->tcp_flags = tcp.rst << 2 | tcp.syn << 1 | tcp.fin;
+                }
+            }
+        }
+    }
+
+    flow_ptr->ts[TX_STAGE_0] = current_ts;
+    flow_ptr->skb_ptr[TX_STAGE_0] = (u64)skb;
+    flow_ptr->kstack_id[TX_STAGE_0] = stack_id;
+
+    flow_sessions.update(&key, flow_ptr);
+    debug_inc(TX_STAGE_0, CODE_FLOW_FOUND);
+
+    // Debug the key we created at TCP TX0
+    debug_key(ctx, &key, TX_STAGE_0);
+
+    return 0;
+}
+
+// TX Stage 0: UDP ip_send_skb - UDP IP layer transmission entry point
+int kprobe__ip_send_skb(struct pt_regs *ctx, struct net *net, struct sk_buff *skb) {
+    debug_inc(TX_STAGE_0, CODE_PROBE_ENTRY);
+
+    if (DIRECTION_FILTER == 2) { // rx only
+        debug_inc(TX_STAGE_0, CODE_DIRECTION_FILTER);
+        return 0;
+    }
+
+    // UDP protocol filter
+    if (PROTOCOL_FILTER != 0 && PROTOCOL_FILTER != IPPROTO_UDP) {
         return 0;
     }
 
@@ -1041,7 +1204,7 @@ def print_path_latencies(flow, start_stage, end_stage, path_type):
 def get_stage_name(stage_id):
     """Get human-readable stage name"""
     stage_names = {
-        0: "TX_S0_transport_entry",       1: "TX_S1_internal_dev_xmit",
+        0: "TX_S0_ip_layer_entry",       1: "TX_S1_internal_dev_xmit",
         2: "TX_S2_ovs_dp_process",        3: "TX_S3_ovs_dp_upcall",
         4: "TX_S4_ovs_flow_key_extract",  5: "TX_S5_ovs_vport_send",
         6: "TX_S6_dev_queue_xmit",
@@ -1214,7 +1377,7 @@ def print_debug_statistics(b):
     
     # Define stage names
     stage_names = {
-        0: "TX0___transport_entry",
+        0: "TX0___ip_layer_entry",
         1: "TX1_internal_dev_xmit", 
         2: "TX2_ovs_dp_process_packet",
         3: "TX3_ovs_dp_upcall",
@@ -1384,7 +1547,7 @@ Examples:
         sys.exit(1)
 
     b["events"].open_perf_buffer(print_event)
-    # b["key_debug_events"].open_perf_buffer(print_key_debug)  # Temporarily disabled
+    # b["key_debug_events"].open_perf_buffer(print_key_debug)  # Temporarily disabled for testing
     
     print("\nTracing system network TCP/UDP latency... Hit Ctrl-C to end.")
     print("Generate some TCP/UDP traffic to see results...\n")

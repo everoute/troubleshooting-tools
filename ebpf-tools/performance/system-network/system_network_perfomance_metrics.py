@@ -64,6 +64,8 @@ bpf_text = """
 #include <linux/sched.h>
 #include <linux/netdevice.h>
 #include <net/flow.h>
+#include <net/inet_sock.h>
+#include <net/tcp.h>
 
 // User-defined filters
 #define SRC_IP_FILTER 0x%x
@@ -79,7 +81,8 @@ bpf_text = """
 // TX direction probes (EXTENDED: socket -> network)
 // REMOVED: STG_SOCK_SEND and STG_TCP_UDP_SEND - socket and protocol layer probes removed
 #define STG_SOCK_SEND_SYSCALL 21  // sys_enter_sendto/sys_enter_send - syscall entry
-#define STG_IP_OUTPUT        2   // ip_output - IP output processing - FIRST STAGE for TCP/UDP TX
+#define STG_IP_QUEUE_XMIT    1   // __ip_queue_xmit - FIRST STAGE for TCP TX
+// REMOVED: STG_IP_OUTPUT - not needed, TCP uses __ip_queue_xmit, UDP/ICMP use ip_send_skb
 #define STG_OVS_TX           3   // ovs_vport_receive (internal port)
 #define STG_FLOW_EXTRACT_TX  4   // ovs_ct_update_key (flow extract phase)
 #define STG_CT_TX            5   // nf_conntrack_in
@@ -438,6 +441,80 @@ static __always_inline int parse_packet_key(
     return 1;
 }
 
+// TCP packet key parsing for early stage (__ip_queue_xmit) - with tcp_sock fix
+static __always_inline int parse_packet_key_tcp_early(
+    struct sk_buff *skb,
+    struct sock *sk,
+    struct packet_key_t *key,
+    u8 stage_id
+) {
+    debug_inc(stage_id, CODE_PARSE_ENTRY);
+    if (!sk) return 0;
+
+    // Get from socket - this is reliable at __ip_queue_xmit
+    struct inet_sock *inet = (struct inet_sock *)sk;
+    bpf_probe_read_kernel(&key->sip, sizeof(key->sip), &inet->inet_saddr);
+    bpf_probe_read_kernel(&key->dip, sizeof(key->dip), &inet->inet_daddr);
+    bpf_probe_read_kernel(&key->tcp.source, sizeof(key->tcp.source), &inet->inet_sport);
+    bpf_probe_read_kernel(&key->tcp.dest, sizeof(key->tcp.dest), &inet->inet_dport);
+    key->proto = IPPROTO_TCP;
+
+    // Apply same filters as standard function
+    if (PROTOCOL_FILTER != 0 && key->proto != PROTOCOL_FILTER) {
+        debug_inc(stage_id, CODE_PARSE_PROTO_FILTER);
+        return 0;
+    }
+
+    // Direction-specific IP filtering (direction 1 = system_tx)
+    if (SRC_IP_FILTER != 0 && key->sip != SRC_IP_FILTER) {
+        debug_inc(stage_id, CODE_PARSE_IP_FILTER);
+        return 0;
+    }
+    if (DST_IP_FILTER != 0 && key->dip != DST_IP_FILTER) {
+        debug_inc(stage_id, CODE_PARSE_IP_FILTER);
+        return 0;
+    }
+
+    // Use tcp_sock method for reliable sequence number extraction
+    struct tcp_sock *tp = (struct tcp_sock *)sk;
+    u32 tcp_snd_nxt = 0;
+    u32 tcp_write_seq = 0;
+
+    // Try to read both values for reliability
+    int snd_nxt_ret = bpf_probe_read_kernel(&tcp_snd_nxt, sizeof(tcp_snd_nxt), &tp->snd_nxt);
+    int write_seq_ret = bpf_probe_read_kernel(&tcp_write_seq, sizeof(tcp_write_seq), &tp->write_seq);
+
+    // Use snd_nxt if it's non-zero and read successfully
+    if (snd_nxt_ret >= 0 && tcp_snd_nxt != 0) {
+        key->tcp.seq = htonl(tcp_snd_nxt);
+    } else if (write_seq_ret >= 0 && tcp_write_seq != 0) {
+        // Fallback to write_seq if snd_nxt is 0 or failed
+        key->tcp.seq = htonl(tcp_write_seq);
+    } else {
+        // Last resort: try to get from SKB data (might not be ready yet)
+        struct iphdr ip;
+        if (get_ip_header(skb, &ip) == 0 && ip.protocol == IPPROTO_TCP) {
+            struct tcphdr tcp;
+            if (get_transport_header(skb, &tcp, sizeof(tcp)) == 0) {
+                key->tcp.seq = tcp.seq;
+            }
+        }
+    }
+
+    // Apply port filters
+    if (SRC_PORT_FILTER != 0 && key->tcp.source != htons(SRC_PORT_FILTER) && key->tcp.dest != htons(SRC_PORT_FILTER)) {
+        debug_inc(stage_id, CODE_PARSE_PORT_FILTER);
+        return 0;
+    }
+    if (DST_PORT_FILTER != 0 && key->tcp.source != htons(DST_PORT_FILTER) && key->tcp.dest != htons(DST_PORT_FILTER)) {
+        debug_inc(stage_id, CODE_PARSE_PORT_FILTER);
+        return 0;
+    }
+
+    debug_inc(stage_id, CODE_PARSE_SUCCESS);
+    return 1;
+}
+
 // REMOVED: build_tcp_tx_packet_key function - no longer needed without socket probes
 
 // REMOVED: handle_tcp_tx_stage_event function - no longer needed without socket probes
@@ -459,9 +536,9 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
     
     // Check if this is the first stage for this direction
     bool is_first_stage = false;
-    if ((direction == 1 && stage_id == STG_IP_OUTPUT) || // TCP TX path starts with ip_output
-        (direction == 1 && stage_id == STG_IP_SEND_SKB) ||  // ICMP TX path starts with ip_send_skb
-        (direction == 2 && stage_id == STG_PHY_RX)) {       // system RX path starts with physical RX
+    if ((direction == 1 && stage_id == STG_IP_QUEUE_XMIT) || // TCP TX path starts with __ip_queue_xmit
+        (direction == 1 && stage_id == STG_IP_SEND_SKB) ||   // UDP/ICMP TX path starts with ip_send_skb
+        (direction == 2 && stage_id == STG_PHY_RX)) {        // system RX path starts with physical RX
         is_first_stage = true;
         debug_inc(stage_id, CODE_IS_FIRST_STAGE);
     }
@@ -730,21 +807,128 @@ static __always_inline int handle_socket_event(struct sock *sk, u8 stage_id, u8 
 
 
 // TX direction probes
-// REMOVED: tcp_sendmsg probe - replaced by __tcp_transmit_skb as first stage
+// TCP first stage: __ip_queue_xmit - use tcp_sock for reliable packet key, handle directly
+int kprobe____ip_queue_xmit(struct pt_regs *ctx, struct sock *sk, struct sk_buff *skb, void *fl) {
+    debug_inc(STG_IP_QUEUE_XMIT, CODE_PROBE_ENTRY);
+    if (!skb || !sk) {
+        debug_inc(STG_IP_QUEUE_XMIT, CODE_PARSE_FAILED);
+        return 0;
+    }
 
-int kprobe__ip_output(struct pt_regs *ctx, struct net *net, struct sock *sk, struct sk_buff *skb) {
-    debug_inc(STG_IP_OUTPUT, CODE_PROBE_ENTRY);
-    if (!skb) return 0;
-    
     if (DIRECTION_FILTER == 2) {
-        debug_inc(STG_IP_OUTPUT, CODE_DIRECTION_FILTER);
+        debug_inc(STG_IP_QUEUE_XMIT, CODE_DIRECTION_FILTER);
         return 0;  // Skip if system_rx only
     }
-    
-    debug_inc(STG_IP_OUTPUT, CODE_HANDLE_CALLED);
-    handle_stage_event(ctx, skb, STG_IP_OUTPUT, 1);
+
+    // Use tcp_sock-based parsing for reliable packet key extraction
+    struct packet_key_t key = {};
+    if (!parse_packet_key_tcp_early(skb, sk, &key, STG_IP_QUEUE_XMIT)) {
+        debug_inc(STG_IP_QUEUE_XMIT, CODE_PARSE_FAILED);
+        return 0;
+    }
+
+    debug_inc(STG_IP_QUEUE_XMIT, CODE_HANDLE_CALLED);
+
+    // Handle stage event directly without calling parse_packet_key again
+    u64 current_ts = bpf_ktime_get_ns();
+    u8 direction = 1; // TX direction
+
+    // This is first stage for TCP TX
+    debug_inc(STG_IP_QUEUE_XMIT, CODE_IS_FIRST_STAGE);
+
+    // Initialize new flow tracking using per-cpu map
+    debug_inc(STG_IP_QUEUE_XMIT, CODE_FLOW_CREATE);
+    flow_sessions.delete(&key);  // Clean any old entries
+
+    u32 init_key = 0;
+    struct flow_data_t *zero_ptr = flow_init_map.lookup(&init_key);
+    if (!zero_ptr) {
+        debug_inc(STG_IP_QUEUE_XMIT, CODE_FLOW_INIT_FAILED);
+        return 0;
+    }
+
+    // Manual initialization in per-cpu map to avoid stack overflow
+    #pragma unroll
+    for (int i = 0; i < MAX_STAGES; i++) {
+        zero_ptr->stages[i].valid = 0;
+        zero_ptr->stages[i].timestamp = 0;
+        zero_ptr->stages[i].skb_ptr = 0;
+        zero_ptr->ts[i] = 0;
+        zero_ptr->skb_ptr[i] = 0;
+    }
+    zero_ptr->first_pid = 0;
+    zero_ptr->ct_start_time = 0;
+    zero_ptr->ct_lookup_duration = 0;
+    zero_ptr->qdisc_enq_time = 0;
+    zero_ptr->qdisc_qlen = 0;
+    zero_ptr->direction = 0;
+    zero_ptr->stage_count = 0;
+    zero_ptr->complete = 0;
+
+    struct flow_data_t *flow_ptr = flow_sessions.lookup_or_try_init(&key, zero_ptr);
+    if (!flow_ptr) {
+        debug_inc(STG_IP_QUEUE_XMIT, CODE_FLOW_NOT_FOUND);
+        return 0;
+    }
+
+    // Initialize flow data
+    flow_ptr->first_pid = bpf_get_current_pid_tgid() >> 32;
+    bpf_get_current_comm(&flow_ptr->first_comm, sizeof(flow_ptr->first_comm));
+
+    struct net_device *dev = NULL;
+    if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) == 0 && dev != NULL) {
+        bpf_probe_read_kernel_str(flow_ptr->first_ifname, IFNAMSIZ, dev->name);
+    }
+
+    flow_ptr->direction = direction;
+    bpf_probe_read_kernel(&flow_ptr->queue_mapping, sizeof(flow_ptr->queue_mapping), &skb->queue_mapping);
+    bpf_probe_read_kernel(&flow_ptr->skb_hash, sizeof(flow_ptr->skb_hash), &skb->hash);
+    bpf_probe_read_kernel(&flow_ptr->len, sizeof(flow_ptr->len), &skb->len);
+    bpf_probe_read_kernel(&flow_ptr->data_len, sizeof(flow_ptr->data_len), &skb->data_len);
+
+    debug_inc(STG_IP_QUEUE_XMIT, CODE_FLOW_FOUND);
+
+    // Record detailed information for this stage
+    if (STG_IP_QUEUE_XMIT < MAX_STAGES && !flow_ptr->stages[STG_IP_QUEUE_XMIT].valid) {
+        struct stage_info_t *stage = &flow_ptr->stages[STG_IP_QUEUE_XMIT];
+
+        stage->timestamp = current_ts;
+        stage->skb_ptr = (u64)skb;
+        stage->cpu = bpf_get_smp_processor_id();
+
+        // Get current device info
+        if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) == 0 && dev != NULL) {
+            bpf_probe_read_kernel(&stage->ifindex, sizeof(stage->ifindex), &dev->ifindex);
+            bpf_probe_read_kernel_str(stage->devname, IFNAMSIZ, dev->name);
+        }
+
+        // Get current SKB info
+        bpf_probe_read_kernel(&stage->queue_mapping, sizeof(stage->queue_mapping), &skb->queue_mapping);
+        bpf_probe_read_kernel(&stage->skb_hash, sizeof(stage->skb_hash), &skb->hash);
+        bpf_probe_read_kernel(&stage->len, sizeof(stage->len), &skb->len);
+        bpf_probe_read_kernel(&stage->data_len, sizeof(stage->data_len), &skb->data_len);
+
+        stage->valid = 1;
+        flow_ptr->stage_count++;
+
+        // Backward compatibility - still fill old fields
+        flow_ptr->ts[STG_IP_QUEUE_XMIT] = current_ts;
+        flow_ptr->skb_ptr[STG_IP_QUEUE_XMIT] = (u64)skb;
+    }
+
+    flow_sessions.update(&key, flow_ptr);
+
+    // Update statistics
+    u32 stat_idx = STG_IP_QUEUE_XMIT %% 32;
+    u64 *counter = probe_stats.lookup(&stat_idx);
+    if (counter) {
+        (*counter)++;
+    }
+
     return 0;
 }
+
+// REMOVED: ip_output probe - TCP uses __ip_queue_xmit, UDP/ICMP use ip_send_skb
 
 int kprobe__ovs_vport_receive(struct pt_regs *ctx, void *vport, struct sk_buff *skb, void *tun_info) {
     if (!skb) return 0;
@@ -988,7 +1172,7 @@ int kprobe__ip_send_skb(struct pt_regs *ctx, struct net *net, struct sk_buff *sk
 
 // TX direction protocol layer probes - TCP transmit starts here
 // REMOVED: __tcp_transmit_skb and udp_sendmsg probes - socket/protocol layer probes removed
-// TX direction now starts at ip_output
+// TX direction now starts at __ip_queue_xmit (TCP) or ip_send_skb (UDP/ICMP)
 """
 
 # Constants  
@@ -1095,7 +1279,8 @@ def get_stage_name(stage_id):
         # 系统 TX 路径（Local→Uplink，系统发送到外部） - EXTENDED
         21: "SOCK_SEND_SYSCALL",  # New: syscall entry
         # REMOVED: 1: "SOCK_SEND" and 22: "TCP_UDP_SEND" - socket and protocol layer probes removed
-        2: "IP_OUTPUT",           # IP output processing
+        1: "IP_QUEUE_XMIT",       # TCP first stage: __ip_queue_xmit
+        # REMOVED: 2: "IP_OUTPUT" - TCP uses __ip_queue_xmit, UDP/ICMP use ip_send_skb
         3: "OVS_TX",
         4: "FLOW_EXTRACT_TX", 
         5: "CT_TX",
@@ -1154,7 +1339,8 @@ def print_debug_statistics(b):
         # TX direction (socket -> network)
         21: "SOCK_SEND_SYSCALL",
         # REMOVED: 1: "SOCK_SEND" and 22: "TCP_UDP_SEND"
-        2: "IP_OUTPUT", 
+        1: "IP_QUEUE_XMIT",
+        # REMOVED: 2: "IP_OUTPUT", 
         3: "OVS_TX",
         4: "FLOW_EXTRACT_TX",
         5: "CT_TX",

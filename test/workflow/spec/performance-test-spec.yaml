@@ -24,7 +24,7 @@ variables:
 # 测试矩阵定义
 test_matrix:
   system-network:
-    duration: 3  # 系统网络测试使用3秒执行时间
+    duration: 10  # 系统网络测试使用3秒执行时间
     tools:
       - script: "system_network_perfomance_metrics.py"
         template: "sudo python3 {path} --internal-interface {INTERNAL_INTERFACE} --phy-interface {PHY_INTERFACE} --src-ip {SRC_IP} --dst-ip {DST_IP} --direction {direction} --protocol {protocol}"
@@ -47,7 +47,7 @@ test_matrix:
         DST_IP: "{REMOTE_IP}"
 
   vm-network:
-    duration: 7  # 虚拟机网络测试使用7秒执行时间
+    duration: 8  # 虚拟机网络测试使用7秒执行时间
     tools:
       - script: "vm_network_latency_summary.py"
         template: "sudo python3 {path} --vm-interface {VM_INTERFACE} --phy-interface {PHY_INTERFACE} --direction {direction} --src-ip {SRC_IP} --dst-ip {DST_IP} --protocol {protocol}"

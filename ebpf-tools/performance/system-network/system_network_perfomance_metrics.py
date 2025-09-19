@@ -218,39 +218,6 @@ BPF_PERCPU_ARRAY(flow_init_map, struct flow_data_t, 1);  // Per-cpu temp storage
 // Performance statistics
 BPF_ARRAY(probe_stats, u64, 32);          // Event counters for each probe point
 
-// Debug statistics framework
-BPF_HISTOGRAM(debug_stage_stats, u32);    // Key: (stage_id << 8) | code_point
-BPF_HISTOGRAM(ifindex_seen, u32);         // Track interface indexes we see
-
-// Debug code points
-#define CODE_PROBE_ENTRY            1   // Probe function entry
-#define CODE_INTERFACE_FILTER       2   // Interface filter
-#define CODE_DIRECTION_FILTER       3   // Direction filter  
-#define CODE_HANDLE_CALLED          4   // Handle function called
-#define CODE_HANDLE_ENTRY           5   // Handle function entry
-#define CODE_PARSE_ENTRY            6   // Parse function entry
-#define CODE_PARSE_SUCCESS          7   // Parse success
-#define CODE_PARSE_IP_FILTER        8   // IP filter
-#define CODE_PARSE_PROTO_FILTER     9   // Protocol filter
-#define CODE_PARSE_PORT_FILTER     10   // Port filter
-#define CODE_PARSE_FAILED          11   // Parse failed
-#define CODE_FLOW_CREATE           14   // Flow create
-#define CODE_FLOW_LOOKUP           15   // Flow lookup
-#define CODE_FLOW_FOUND            16   // Flow found
-#define CODE_FLOW_NOT_FOUND        17   // Flow not found
-#define CODE_PERF_SUBMIT           19   // Perf event submit
-#define CODE_IS_FIRST_STAGE        20   // Is first stage
-#define CODE_IS_LAST_STAGE         21   // Is last stage
-#define CODE_FLOW_INIT_FAILED      22   // Flow init failed
-#define CODE_TARGET_IFINDEX_5      23   // Saw target ifindex 5
-#define CODE_PHY_IFINDEX_CHECK     24   // PHY_IFINDEX value check
-
-// Debug increment function
-static __always_inline void debug_inc(u8 stage_id, u8 code_point) {
-    u32 key = ((u32)stage_id << 8) | code_point;
-    debug_stage_stats.increment(key);
-}
-
 // Events output
 BPF_PERF_OUTPUT(events);
 
@@ -285,11 +252,6 @@ static __always_inline bool is_target_phy_interface(const struct sk_buff *skb) {
     if (bpf_probe_read_kernel(&ifindex, sizeof(ifindex), &dev->ifindex) < 0) {
         return false;
     }
-    
-    // Track interface indexes we see for debugging
-    u32 idx = (u32)ifindex;
-    ifindex_seen.increment(idx);
-    
     return (ifindex == PHY_IFINDEX);
 }
 
@@ -448,7 +410,6 @@ static __always_inline int parse_packet_key_tcp_early(
     struct packet_key_t *key,
     u8 stage_id
 ) {
-    debug_inc(stage_id, CODE_PARSE_ENTRY);
     if (!sk) return 0;
 
     // Get from socket - this is reliable at __ip_queue_xmit
@@ -461,17 +422,14 @@ static __always_inline int parse_packet_key_tcp_early(
 
     // Apply same filters as standard function
     if (PROTOCOL_FILTER != 0 && key->proto != PROTOCOL_FILTER) {
-        debug_inc(stage_id, CODE_PARSE_PROTO_FILTER);
         return 0;
     }
 
     // Direction-specific IP filtering (direction 1 = system_tx)
     if (SRC_IP_FILTER != 0 && key->sip != SRC_IP_FILTER) {
-        debug_inc(stage_id, CODE_PARSE_IP_FILTER);
         return 0;
     }
     if (DST_IP_FILTER != 0 && key->dip != DST_IP_FILTER) {
-        debug_inc(stage_id, CODE_PARSE_IP_FILTER);
         return 0;
     }
 
@@ -503,15 +461,12 @@ static __always_inline int parse_packet_key_tcp_early(
 
     // Apply port filters
     if (SRC_PORT_FILTER != 0 && key->tcp.source != htons(SRC_PORT_FILTER) && key->tcp.dest != htons(SRC_PORT_FILTER)) {
-        debug_inc(stage_id, CODE_PARSE_PORT_FILTER);
         return 0;
     }
     if (DST_PORT_FILTER != 0 && key->tcp.source != htons(DST_PORT_FILTER) && key->tcp.dest != htons(DST_PORT_FILTER)) {
-        debug_inc(stage_id, CODE_PARSE_PORT_FILTER);
         return 0;
     }
 
-    debug_inc(stage_id, CODE_PARSE_SUCCESS);
     return 1;
 }
 
@@ -521,18 +476,14 @@ static __always_inline int parse_packet_key_tcp_early(
 
 // Main event handling function - tracks packets through all stages
 static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u8 stage_id, u8 direction) {
-    debug_inc(stage_id, CODE_HANDLE_ENTRY);
     
     struct packet_key_t key = {};
     u64 current_ts = bpf_ktime_get_ns();
     
     // Parse packet key for identification
-    debug_inc(stage_id, CODE_PARSE_ENTRY);
     if (!parse_packet_key(skb, &key, direction)) {
-        debug_inc(stage_id, CODE_PARSE_FAILED);
         return;
     }
-    debug_inc(stage_id, CODE_PARSE_SUCCESS);
     
     // Check if this is the first stage for this direction
     bool is_first_stage = false;
@@ -540,20 +491,17 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
         (direction == 1 && stage_id == STG_IP_SEND_SKB) ||   // UDP/ICMP TX path starts with ip_send_skb
         (direction == 2 && stage_id == STG_PHY_RX)) {        // system RX path starts with physical RX
         is_first_stage = true;
-        debug_inc(stage_id, CODE_IS_FIRST_STAGE);
     }
     
     struct flow_data_t *flow_ptr;
     
     if (is_first_stage) {
         // Initialize new flow tracking using per-cpu map
-        debug_inc(stage_id, CODE_FLOW_CREATE);
         flow_sessions.delete(&key);  // Clean any old entries
         
         u32 init_key = 0;
         struct flow_data_t *zero_ptr = flow_init_map.lookup(&init_key);
         if (!zero_ptr) {
-            debug_inc(stage_id, CODE_FLOW_INIT_FAILED);
             return;
         }
         
@@ -594,15 +542,12 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
         }
     } else {
         // Look up existing flow
-        debug_inc(stage_id, CODE_FLOW_LOOKUP);
         flow_ptr = flow_sessions.lookup(&key);
     }
     
     if (!flow_ptr) {
-        debug_inc(stage_id, CODE_FLOW_NOT_FOUND);
         return;
     }
-    debug_inc(stage_id, CODE_FLOW_FOUND);
     
     // Record detailed information for this stage
     if (stage_id < MAX_STAGES && !flow_ptr->stages[stage_id].valid) {
@@ -656,12 +601,10 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
         (direction == 2 && stage_id == STG_TCP_UDP_RCV) ||   // TCP/UDP RX ends at protocol layer recv  
         (direction == 2 && stage_id == STG_ICMP_RCV)) {      // ICMP RX ends at icmp_rcv
         is_last_stage = true;
-        debug_inc(stage_id, CODE_IS_LAST_STAGE);
     }
     
     // Only submit event at the last stage
     if (is_last_stage) {
-        debug_inc(stage_id, CODE_PERF_SUBMIT);
         u32 map_key_zero = 0;
         struct pkt_event *event_ptr = event_scratch_map.lookup(&map_key_zero);
         if (!event_ptr) {
@@ -701,16 +644,13 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
 
 // Socket layer helper for packet tracking without skb - WITH DIRECTION-AWARE FILTERING
 static __always_inline int handle_socket_event(struct sock *sk, u8 stage_id, u8 direction) {
-    debug_inc(stage_id, CODE_PROBE_ENTRY);
     
     if ((direction == 1 && DIRECTION_FILTER == 2) ||    // TX but rx_only mode
         (direction == 2 && DIRECTION_FILTER == 1)) {    // RX but tx_only mode
-        debug_inc(stage_id, CODE_DIRECTION_FILTER);
         return 0;
     }
     
     if (!sk) {
-        debug_inc(stage_id, CODE_PARSE_FAILED);
         return 0;
     }
     
@@ -721,18 +661,15 @@ static __always_inline int handle_socket_event(struct sock *sk, u8 stage_id, u8 
     
     // Read socket family
     if (bpf_probe_read_kernel(&family, sizeof(family), &sk->sk_family) != 0) {
-        debug_inc(stage_id, CODE_PARSE_FAILED);
         return 0;
     }
     
     if (family != AF_INET) {
-        debug_inc(stage_id, CODE_PARSE_IP_FILTER);
         return 0;  // Only handle IPv4
     }
     
     struct inet_sock *inet = inet_sk(sk);
     if (!inet) {
-        debug_inc(stage_id, CODE_PARSE_FAILED);
         return 0;
     }
     
@@ -743,7 +680,6 @@ static __always_inline int handle_socket_event(struct sock *sk, u8 stage_id, u8 
         bpf_probe_read_kernel(&sock_sport, sizeof(sock_sport), &inet->inet_sport) != 0 ||
         bpf_probe_read_kernel(&sock_dport, sizeof(sock_dport), &inet->inet_dport) != 0 ||
         bpf_probe_read_kernel(&sock_num, sizeof(sock_num), &inet->sk.__sk_common.skc_num) != 0) {
-        debug_inc(stage_id, CODE_PARSE_FAILED);
         return 0;
     }
     
@@ -757,7 +693,6 @@ static __always_inline int handle_socket_event(struct sock *sk, u8 stage_id, u8 
             if (sock_saddr == SRC_IP_FILTER || sock_rcv_saddr == SRC_IP_FILTER) {
                 match_found = true;
             } else if (SRC_IP_FILTER != 0) {
-                debug_inc(stage_id, CODE_PARSE_IP_FILTER);
                 return 0;
             }
         }
@@ -766,7 +701,6 @@ static __always_inline int handle_socket_event(struct sock *sk, u8 stage_id, u8 
             if (sock_daddr == DST_IP_FILTER) {
                 match_found = true;
             } else if (DST_IP_FILTER != 0) {
-                debug_inc(stage_id, CODE_PARSE_IP_FILTER);
                 return 0;
             }
         }
@@ -780,7 +714,6 @@ static __always_inline int handle_socket_event(struct sock *sk, u8 stage_id, u8 
             if (sock_daddr == SRC_IP_FILTER) {
                 match_found = true;
             } else {
-                debug_inc(stage_id, CODE_PARSE_IP_FILTER);
                 return 0;
             }
         }
@@ -789,7 +722,6 @@ static __always_inline int handle_socket_event(struct sock *sk, u8 stage_id, u8 
             if (sock_rcv_saddr == DST_IP_FILTER) {
                 match_found = true;
             } else {
-                debug_inc(stage_id, CODE_PARSE_IP_FILTER);
                 return 0;
             }
         }
@@ -797,11 +729,9 @@ static __always_inline int handle_socket_event(struct sock *sk, u8 stage_id, u8 
     
     // If no filters specified, or if we found at least one match, allow the event
     if ((SRC_IP_FILTER == 0 && DST_IP_FILTER == 0) || match_found) {
-        debug_inc(stage_id, CODE_HANDLE_CALLED);
         return 1; // Successfully processed with correct direction semantics
     }
     
-    debug_inc(stage_id, CODE_PARSE_IP_FILTER);
     return 0;
 }
 
@@ -809,41 +739,33 @@ static __always_inline int handle_socket_event(struct sock *sk, u8 stage_id, u8 
 // TX direction probes
 // TCP first stage: __ip_queue_xmit - use tcp_sock for reliable packet key, handle directly
 int kprobe____ip_queue_xmit(struct pt_regs *ctx, struct sock *sk, struct sk_buff *skb, void *fl) {
-    debug_inc(STG_IP_QUEUE_XMIT, CODE_PROBE_ENTRY);
     if (!skb || !sk) {
-        debug_inc(STG_IP_QUEUE_XMIT, CODE_PARSE_FAILED);
         return 0;
     }
 
     if (DIRECTION_FILTER == 2) {
-        debug_inc(STG_IP_QUEUE_XMIT, CODE_DIRECTION_FILTER);
         return 0;  // Skip if system_rx only
     }
 
     // Use tcp_sock-based parsing for reliable packet key extraction
     struct packet_key_t key = {};
     if (!parse_packet_key_tcp_early(skb, sk, &key, STG_IP_QUEUE_XMIT)) {
-        debug_inc(STG_IP_QUEUE_XMIT, CODE_PARSE_FAILED);
         return 0;
     }
 
-    debug_inc(STG_IP_QUEUE_XMIT, CODE_HANDLE_CALLED);
 
     // Handle stage event directly without calling parse_packet_key again
     u64 current_ts = bpf_ktime_get_ns();
     u8 direction = 1; // TX direction
 
     // This is first stage for TCP TX
-    debug_inc(STG_IP_QUEUE_XMIT, CODE_IS_FIRST_STAGE);
 
     // Initialize new flow tracking using per-cpu map
-    debug_inc(STG_IP_QUEUE_XMIT, CODE_FLOW_CREATE);
     flow_sessions.delete(&key);  // Clean any old entries
 
     u32 init_key = 0;
     struct flow_data_t *zero_ptr = flow_init_map.lookup(&init_key);
     if (!zero_ptr) {
-        debug_inc(STG_IP_QUEUE_XMIT, CODE_FLOW_INIT_FAILED);
         return 0;
     }
 
@@ -867,7 +789,6 @@ int kprobe____ip_queue_xmit(struct pt_regs *ctx, struct sock *sk, struct sk_buff
 
     struct flow_data_t *flow_ptr = flow_sessions.lookup_or_try_init(&key, zero_ptr);
     if (!flow_ptr) {
-        debug_inc(STG_IP_QUEUE_XMIT, CODE_FLOW_NOT_FOUND);
         return 0;
     }
 
@@ -886,7 +807,6 @@ int kprobe____ip_queue_xmit(struct pt_regs *ctx, struct sock *sk, struct sk_buff
     bpf_probe_read_kernel(&flow_ptr->len, sizeof(flow_ptr->len), &skb->len);
     bpf_probe_read_kernel(&flow_ptr->data_len, sizeof(flow_ptr->data_len), &skb->data_len);
 
-    debug_inc(STG_IP_QUEUE_XMIT, CODE_FLOW_FOUND);
 
     // Record detailed information for this stage
     if (STG_IP_QUEUE_XMIT < MAX_STAGES && !flow_ptr->stages[STG_IP_QUEUE_XMIT].valid) {
@@ -1033,38 +953,27 @@ RAW_TRACEPOINT_PROBE(netif_receive_skb) {
         return 0;
     }
     
-    u32 idx = (u32)ifindex;
-    ifindex_seen.increment(idx);
-    
     // Route to appropriate stage based on interface type and direction
     if (ifindex == PHY_IFINDEX) {
         // Physical interface
-        debug_inc(STG_PHY_RX, CODE_PROBE_ENTRY);
         
         if (DIRECTION_FILTER == 1) {
-            debug_inc(STG_PHY_RX, CODE_DIRECTION_FILTER);
             return 0;  // Skip if system_tx only
         }
         
-        debug_inc(STG_PHY_RX, CODE_TARGET_IFINDEX_5);
-        debug_inc(STG_PHY_RX, CODE_HANDLE_CALLED);
         handle_stage_event(ctx, skb, STG_PHY_RX, 2);  // Physical RX stage for system_rx
         
     } else if (ifindex == INTERNAL_IFINDEX) {
         // Internal port - this is the softirq processing stage (after internal_dev_recv)
-        debug_inc(STG_INTERNAL_SOFTIRQ, CODE_PROBE_ENTRY);
         
         if (DIRECTION_FILTER == 1) {
-            debug_inc(STG_INTERNAL_SOFTIRQ, CODE_DIRECTION_FILTER);
             return 0;  // Skip if system_tx only
         }
         
-        debug_inc(STG_INTERNAL_SOFTIRQ, CODE_HANDLE_CALLED);
         handle_stage_event(ctx, skb, STG_INTERNAL_SOFTIRQ, 2);  // Network RX end stage
         
     } else {
         // Other interfaces - filter out
-        debug_inc(STG_PHY_RX, CODE_INTERFACE_FILTER);
     }
     
     return 0;
@@ -1074,20 +983,16 @@ RAW_TRACEPOINT_PROBE(netif_receive_skb) {
 
 // Internal port device receive - OVS sends to kernel via internal_dev_recv  
 int kprobe__internal_dev_recv(struct pt_regs *ctx, struct sk_buff *skb) {
-    debug_inc(STG_INTERNAL_DEV_RECV, CODE_PROBE_ENTRY);
     if (!skb) return 0;
     
     if (DIRECTION_FILTER == 1) {
-        debug_inc(STG_INTERNAL_DEV_RECV, CODE_DIRECTION_FILTER);
         return 0;  // Skip if system_tx only
     }
     
     // Verify this is our target internal interface
     if (is_target_internal_interface(skb)) {
-        debug_inc(STG_INTERNAL_DEV_RECV, CODE_HANDLE_CALLED);
         handle_stage_event(ctx, skb, STG_INTERNAL_DEV_RECV, 2);  // Internal device receive entry
     } else {
-        debug_inc(STG_INTERNAL_DEV_RECV, CODE_INTERFACE_FILTER);
     }
     
     return 0;
@@ -1102,20 +1007,16 @@ int kprobe__ip_rcv(struct pt_regs *ctx, struct sk_buff *skb, struct net_device *
 }
 
 int kprobe__tcp_v4_rcv(struct pt_regs *ctx, struct sk_buff *skb) {
-    debug_inc(STG_TCP_UDP_RCV, CODE_PROBE_ENTRY);
     if (!skb) {
-        debug_inc(STG_TCP_UDP_RCV, CODE_PARSE_FAILED);
         return 0;
     }
     
     if (DIRECTION_FILTER == 1) {
-        debug_inc(STG_TCP_UDP_RCV, CODE_DIRECTION_FILTER);
         return 0;  // Skip if system_tx only
     }
     
     // DEBUG: TCP receive info (debug output disabled to avoid format conflicts)
     
-    debug_inc(STG_TCP_UDP_RCV, CODE_HANDLE_CALLED);
     handle_stage_event(ctx, skb, STG_TCP_UDP_RCV, 2);
     return 0;
 }
@@ -1130,36 +1031,28 @@ int kprobe__udp_rcv(struct pt_regs *ctx, struct sk_buff *skb) {
 
 // ICMP-specific probe points
 int kprobe__icmp_rcv(struct pt_regs *ctx, struct sk_buff *skb) {
-    debug_inc(STG_ICMP_RCV, CODE_PROBE_ENTRY);
     if (!skb) {
-        debug_inc(STG_ICMP_RCV, CODE_PARSE_FAILED);
         return 0;
     }
     
     if (DIRECTION_FILTER == 1) {
-        debug_inc(STG_ICMP_RCV, CODE_DIRECTION_FILTER);
         return 0;  // Skip if system_tx only
     }
     
-    debug_inc(STG_ICMP_RCV, CODE_HANDLE_CALLED);
     handle_stage_event(ctx, skb, STG_ICMP_RCV, 2);  // LAST STAGE for ICMP RX
     return 0;
 }
 
 // ip_send_skb - IP layer send (ICMP TX entry point)
 int kprobe__ip_send_skb(struct pt_regs *ctx, struct net *net, struct sk_buff *skb) {
-    debug_inc(STG_IP_SEND_SKB, CODE_PROBE_ENTRY);
     if (!skb) {
-        debug_inc(STG_IP_SEND_SKB, CODE_PARSE_FAILED);
         return 0;
     }
     
     if (DIRECTION_FILTER == 2) {
-        debug_inc(STG_IP_SEND_SKB, CODE_DIRECTION_FILTER);
         return 0;  // Skip if system_rx only
     }
     
-    debug_inc(STG_IP_SEND_SKB, CODE_HANDLE_CALLED);
     handle_stage_event(ctx, skb, STG_IP_SEND_SKB, 1);  // FIRST STAGE for ICMP TX
     return 0;
 }
@@ -1332,74 +1225,6 @@ def get_protocol_identifier(key, protocol):
     else:
         return "Proto%d" % protocol
 
-def print_debug_statistics(b):
-    """Print debug statistics for troubleshooting"""
-    # Stage name mapping - EXTENDED
-    stage_names = {
-        # TX direction (socket -> network)
-        21: "SOCK_SEND_SYSCALL",
-        # REMOVED: 1: "SOCK_SEND" and 22: "TCP_UDP_SEND"
-        1: "IP_QUEUE_XMIT",
-        # REMOVED: 2: "IP_OUTPUT", 
-        3: "OVS_TX",
-        4: "FLOW_EXTRACT_TX",
-        5: "CT_TX",
-        6: "CT_OUT_TX",
-        7: "PHY_QDISC_ENQ",
-        8: "PHY_QDISC_DEQ",
-        9: "PHY_TX",
-        
-        # RX direction (network -> socket)
-        11: "PHY_RX",
-        12: "OVS_RX",
-        13: "FLOW_EXTRACT_RX",
-        14: "CT_RX",
-        15: "CT_OUT_RX",
-        16: "INTERNAL_DEV_RECV",
-        17: "NETRX_END", 
-        18: "IP_RCV",
-        19: "TCP_UDP_RCV",
-        25: "ICMP_RCV", 
-        26: "IP_SEND_SKB",
-        # REMOVED: 23: "SOCK_QUEUE",
-        24: "SOCK_RECV_SYSCALL",
-        20: "SOCK_RECV"
-    }
-    
-    # Code point name mapping
-    code_names = {
-        1: "PROBE_ENTRY",
-        2: "INTERFACE_FILTER", 
-        3: "DIRECTION_FILTER",
-        4: "HANDLE_CALLED",
-        5: "HANDLE_ENTRY",
-        6: "PARSE_ENTRY",
-        7: "PARSE_SUCCESS",
-        8: "PARSE_IP_FILTER",
-        9: "PARSE_PROTO_FILTER",
-        10: "PARSE_PORT_FILTER",
-        11: "PARSE_FAILED",
-        14: "FLOW_CREATE",
-        15: "FLOW_LOOKUP",
-        16: "FLOW_FOUND",
-        17: "FLOW_NOT_FOUND",
-        19: "PERF_SUBMIT",
-        20: "IS_FIRST_STAGE",
-        21: "IS_LAST_STAGE",
-        22: "FLOW_INIT_FAILED",
-        23: "TARGET_IFINDEX_5",
-        24: "PHY_IFINDEX_CHECK"
-    }
-    
-    print("\n=== DEBUG STATISTICS ===")
-    debug_stats = b["debug_stage_stats"]
-    for k, v in sorted(debug_stats.items(), key=lambda x: x[0].value):
-        if v.value > 0:
-            stage_id = k.value >> 8
-            code_point = k.value & 0xFF
-            stage_name = stage_names.get(stage_id, "UNKNOWN_%d" % stage_id)
-            code_name = code_names.get(code_point, "CODE_%d" % code_point)
-            print("  %s.%s: %d" % (stage_name, code_name, v.value))
 
 def print_event(cpu, data, size):
     """Print performance event"""
@@ -1631,8 +1456,5 @@ Examples:
             b.perf_buffer_poll()
     except KeyboardInterrupt:
         print("\nDetaching...")
-        
-        # Print debug statistics for troubleshooting
-        print_debug_statistics(b)
     finally:
         print("Exiting.")

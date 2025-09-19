@@ -172,45 +172,14 @@ BPF_STACK_TRACE(stack_traces, 10240);
 BPF_PERF_OUTPUT(events);
 BPF_PERCPU_ARRAY(event_scratch_map, struct event_data_t, 1);
 
-// Debug statistics - comprehensive debug framework from bcc-debug-framework.md
-BPF_HISTOGRAM(debug_stage_stats, u32);  // Key: (stage_id << 8) | code_point
+// Debug statistics
 BPF_HISTOGRAM(ifindex_seen, u32);       // Track which ifindex values we see
 BPF_HISTOGRAM(proto_seen, u8);          // Track protocol values seen at TX0
-
-// Code point definitions for debugging
-#define CODE_PROBE_ENTRY            1   // Probe function entry
-#define CODE_INTERFACE_FILTER       2   // Interface filtering
-#define CODE_DIRECTION_FILTER       3   // Direction filtering  
-#define CODE_HANDLE_CALLED          4   // handle_stage_event called
-#define CODE_HANDLE_ENTRY           5   // handle_stage_event entry
-#define CODE_PARSE_ENTRY            6   // parse_packet_key entry
-#define CODE_PARSE_SUCCESS          7   // parse_packet_key success
-#define CODE_PARSE_IP_FILTER        8   // filtered by IP
-#define CODE_PARSE_PROTO_FILTER     9   // filtered by protocol
-#define CODE_PARSE_PORT_FILTER     10   // filtered by port
-#define CODE_PARSE_TCP_SUCCESS     11   // TCP parse success
-#define CODE_PARSE_UDP_SUCCESS     12   // UDP parse success
-#define CODE_FLOW_CREATE           14   // flow creation (stage 0 only)
-#define CODE_FLOW_LOOKUP           15   // flow lookup (non-stage 0)
-#define CODE_FLOW_FOUND            16   // flow found
-#define CODE_FLOW_NOT_FOUND        17   // flow not found
-#define CODE_SKB_READ_FAIL         18   // failed to read skb
-#define CODE_PERF_SUBMIT           19   // perf event submitted
-#define CODE_IP_HDR_ERROR          20   // IP header read error
-#define CODE_PROTO_ICMP            21   // ICMP protocol seen
-#define CODE_PROTO_OTHER           22   // Other protocol seen
-#define CODE_PROTO_SEEN            23   // Protocol value seen (for debugging)
 
 // Special counters for interface debugging
 BPF_ARRAY(interface_debug, u64, 4);
 #define IF_DBG_NULL_DEV             0   // dev is NULL
 #define IF_DBG_READ_FAIL            1   // ifindex read failed
-
-// Helper function to record debug statistics
-static __always_inline void debug_inc(u8 stage_id, u8 code_point) {
-    u32 key = ((u32)stage_id << 8) | code_point;
-    debug_stage_stats.increment(key);
-}
 
 // Key debugging - print key components for analysis
 BPF_PERF_OUTPUT(key_debug_events);
@@ -241,7 +210,6 @@ static __always_inline void debug_key(struct pt_regs *ctx, struct packet_key_t *
 }
 
 // Helper function for interface debugging
-static __always_inline void interface_debug_inc(int idx) {
     u64 *val = interface_debug.lookup(&idx);
     if (val) {
         (*val)++;
@@ -254,12 +222,10 @@ static __always_inline bool is_target_ifindex(const struct sk_buff *skb) {
     int ifindex = 0;
     
     if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) < 0 || dev == NULL) {
-        interface_debug_inc(IF_DBG_NULL_DEV);
         return false;
     }
     
     if (bpf_probe_read_kernel(&ifindex, sizeof(ifindex), &dev->ifindex) < 0) {
-        interface_debug_inc(IF_DBG_READ_FAIL);
         return false;
     }
     
@@ -368,7 +334,6 @@ static __always_inline int parse_packet_key_userspace(
     struct packet_key_t *key, 
     u8 stage_id
 ) {
-    debug_inc(stage_id, CODE_PARSE_ENTRY);
     
     if (skb == NULL) {
         return 0;
@@ -427,25 +392,20 @@ static __always_inline int parse_packet_key_userspace(
     
     // Apply filters
     if (PROTOCOL_FILTER != 0 && ip.protocol != PROTOCOL_FILTER) {
-        debug_inc(stage_id, CODE_PARSE_PROTO_FILTER);
         // Track what protocol we're filtering out (only for TX0)
         if (stage_id == TX_STAGE_0) {
             proto_seen.increment(ip.protocol);
             if (ip.protocol == IPPROTO_ICMP) {
-                debug_inc(stage_id, CODE_PROTO_ICMP);
             } else {
-                debug_inc(stage_id, CODE_PROTO_OTHER);
             }
         }
         return 0;
     }
     
     if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER && ip.daddr != SRC_IP_FILTER) {
-        debug_inc(stage_id, CODE_PARSE_IP_FILTER);
         return 0;
     }
     if (DST_IP_FILTER != 0 && ip.saddr != DST_IP_FILTER && ip.daddr != DST_IP_FILTER) {
-        debug_inc(stage_id, CODE_PARSE_IP_FILTER);
         return 0;
     }
 
@@ -482,14 +442,11 @@ static __always_inline int parse_packet_key_userspace(
             // Payload length removed from key structure
             
             if (SRC_PORT_FILTER != 0 && key->tcp.src_port != htons(SRC_PORT_FILTER) && key->tcp.dst_port != htons(SRC_PORT_FILTER)) {
-                debug_inc(stage_id, CODE_PARSE_PORT_FILTER);
                 return 0;
             }
             if (DST_PORT_FILTER != 0 && key->tcp.src_port != htons(DST_PORT_FILTER) && key->tcp.dst_port != htons(DST_PORT_FILTER)) {
-                debug_inc(stage_id, CODE_PARSE_PORT_FILTER);
                 return 0;
             }
-            debug_inc(stage_id, CODE_PARSE_TCP_SUCCESS);
             break;
         }
         case IPPROTO_UDP: {
@@ -532,23 +489,19 @@ static __always_inline int parse_packet_key_userspace(
             // Apply port filters only if not fragmented or is first fragment
             if (!is_fragment || frag_offset == 0) {
                 if (SRC_PORT_FILTER != 0 && key->udp.src_port != htons(SRC_PORT_FILTER) && key->udp.dst_port != htons(SRC_PORT_FILTER)) {
-                    debug_inc(stage_id, CODE_PARSE_PORT_FILTER);
                     return 0;
                 }
                 if (DST_PORT_FILTER != 0 && key->udp.src_port != htons(DST_PORT_FILTER) && key->udp.dst_port != htons(DST_PORT_FILTER)) {
-                    debug_inc(stage_id, CODE_PARSE_PORT_FILTER);
                     return 0;
                 }
             }
             
-            debug_inc(stage_id, CODE_PARSE_UDP_SUCCESS);
             break;
         }
         default:
             return 0;
     }
     
-    debug_inc(stage_id, CODE_PARSE_SUCCESS);
     return 1;
 }
 
@@ -557,7 +510,6 @@ static __always_inline int parse_packet_key(
     struct packet_key_t *key, 
     u8 stage_id
 ) {
-    debug_inc(stage_id, CODE_PARSE_ENTRY);
     
     struct iphdr ip;
     if (get_ip_header(skb, &ip, stage_id) != 0) {
@@ -569,25 +521,20 @@ static __always_inline int parse_packet_key(
     key->protocol = ip.protocol;
     
     if (PROTOCOL_FILTER != 0 && ip.protocol != PROTOCOL_FILTER) {
-        debug_inc(stage_id, CODE_PARSE_PROTO_FILTER);
         // Track what protocol we're filtering out (only for TX0)
         if (stage_id == TX_STAGE_0) {
             proto_seen.increment(ip.protocol);
             if (ip.protocol == IPPROTO_ICMP) {
-                debug_inc(stage_id, CODE_PROTO_ICMP);
             } else {
-                debug_inc(stage_id, CODE_PROTO_OTHER);
             }
         }
         return 0;
     }
     
     if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER && ip.daddr != SRC_IP_FILTER) {
-        debug_inc(stage_id, CODE_PARSE_IP_FILTER);
         return 0;
     }
     if (DST_IP_FILTER != 0 && ip.saddr != DST_IP_FILTER && ip.daddr != DST_IP_FILTER) {
-        debug_inc(stage_id, CODE_PARSE_IP_FILTER);
         return 0;
     }
     
@@ -595,34 +542,27 @@ static __always_inline int parse_packet_key(
         case IPPROTO_TCP:
             if (!parse_tcp_key(skb, key, stage_id)) return 0;
             if (SRC_PORT_FILTER != 0 && key->tcp.src_port != htons(SRC_PORT_FILTER) && key->tcp.dst_port != htons(SRC_PORT_FILTER)) {
-                debug_inc(stage_id, CODE_PARSE_PORT_FILTER);
                 return 0;
             }
             if (DST_PORT_FILTER != 0 && key->tcp.src_port != htons(DST_PORT_FILTER) && key->tcp.dst_port != htons(DST_PORT_FILTER)) {
-                debug_inc(stage_id, CODE_PARSE_PORT_FILTER);
                 return 0;
             }
-            debug_inc(stage_id, CODE_PARSE_TCP_SUCCESS);
             break;
         case IPPROTO_UDP:
             if (!parse_udp_key(skb, key, stage_id)) return 0;
             if (key->udp.frag_off == 0) { // Only apply port filter for non-fragments or first fragment
                 if (SRC_PORT_FILTER != 0 && key->udp.src_port != htons(SRC_PORT_FILTER) && key->udp.dst_port != htons(SRC_PORT_FILTER)) {
-                    debug_inc(stage_id, CODE_PARSE_PORT_FILTER);
                     return 0;
                 }
                 if (DST_PORT_FILTER != 0 && key->udp.src_port != htons(DST_PORT_FILTER) && key->udp.dst_port != htons(DST_PORT_FILTER)) {
-                    debug_inc(stage_id, CODE_PARSE_PORT_FILTER);
                     return 0;
                 }
             }
-            debug_inc(stage_id, CODE_PARSE_UDP_SUCCESS);
             break;
         default:
             return 0;
     }
     
-    debug_inc(stage_id, CODE_PARSE_SUCCESS);
     return 1;
 }
 
@@ -645,7 +585,6 @@ static __always_inline void submit_event(struct pt_regs *ctx, struct packet_key_
 
 // Common event handling function
 static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u8 stage_id) {
-    debug_inc(stage_id, CODE_HANDLE_ENTRY);
     
     struct packet_key_t key = {};
     if (!parse_packet_key(skb, &key, stage_id)) {
@@ -659,13 +598,11 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
     
     // Flow creation for start stages
     if (stage_id == TX_STAGE_0 || stage_id == RX_STAGE_0) {
-        debug_inc(stage_id, CODE_FLOW_CREATE);
         debug_key(ctx, &key, stage_id);  // Enable key debugging for TCP flow mismatch investigation
         struct flow_data_t zero = {};
         flow_sessions.delete(&key);
         flow_ptr = flow_sessions.lookup_or_try_init(&key, &zero);
         if (!flow_ptr) {
-            debug_inc(stage_id, CODE_FLOW_NOT_FOUND);
             return;
         }
         
@@ -705,16 +642,13 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
         }
         
     } else {
-        debug_inc(stage_id, CODE_FLOW_LOOKUP);
         debug_key(ctx, &key, stage_id);  // Enable key debugging for TCP flow mismatch investigation
         flow_ptr = flow_sessions.lookup(&key);
         if (!flow_ptr) {
-            debug_inc(stage_id, CODE_FLOW_NOT_FOUND);
             return;
         }
     }
     
-    debug_inc(stage_id, CODE_FLOW_FOUND);
     
     // Update timestamp if not already recorded
     if (flow_ptr->ts[stage_id] == 0) {
@@ -744,7 +678,6 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
 
 // Specialized event handling function for userspace SKB parsing
 static __always_inline void handle_stage_event_userspace(void *ctx, struct sk_buff *skb, u8 stage_id) {
-    debug_inc(stage_id, CODE_HANDLE_ENTRY);
     
     struct packet_key_t key = {};
     if (!parse_packet_key_userspace(skb, &key, stage_id)) {
@@ -756,13 +689,10 @@ static __always_inline void handle_stage_event_userspace(void *ctx, struct sk_bu
     
     struct flow_data_t *flow_ptr;
     
-    debug_inc(stage_id, CODE_FLOW_LOOKUP);
     flow_ptr = flow_sessions.lookup(&key);
     if (!flow_ptr) {
-        debug_inc(stage_id, CODE_FLOW_NOT_FOUND);
         return;
     }
-    debug_inc(stage_id, CODE_FLOW_FOUND);
     
     // Update flow data 
     if (flow_ptr->ts[stage_id] == 0) {
@@ -784,7 +714,6 @@ static __always_inline int parse_packet_key_tcp_early(
     struct packet_key_t *key,
     u8 stage_id
 ) {
-    debug_inc(stage_id, CODE_PARSE_ENTRY);
 
     if (!sk) return 0;
 
@@ -799,16 +728,13 @@ static __always_inline int parse_packet_key_tcp_early(
 
     // Apply same filters as standard function
     if (PROTOCOL_FILTER != 0 && key->protocol != PROTOCOL_FILTER) {
-        debug_inc(stage_id, CODE_PARSE_PROTO_FILTER);
         return 0;
     }
 
     if (SRC_IP_FILTER != 0 && key->src_ip != SRC_IP_FILTER && key->dst_ip != SRC_IP_FILTER) {
-        debug_inc(stage_id, CODE_PARSE_IP_FILTER);
         return 0;
     }
     if (DST_IP_FILTER != 0 && key->src_ip != DST_IP_FILTER && key->dst_ip != DST_IP_FILTER) {
-        debug_inc(stage_id, CODE_PARSE_IP_FILTER);
         return 0;
     }
 
@@ -846,25 +772,19 @@ static __always_inline int parse_packet_key_tcp_early(
 
     // Apply port filters
     if (SRC_PORT_FILTER != 0 && key->tcp.src_port != htons(SRC_PORT_FILTER) && key->tcp.dst_port != htons(SRC_PORT_FILTER)) {
-        debug_inc(stage_id, CODE_PARSE_PORT_FILTER);
         return 0;
     }
     if (DST_PORT_FILTER != 0 && key->tcp.src_port != htons(DST_PORT_FILTER) && key->tcp.dst_port != htons(DST_PORT_FILTER)) {
-        debug_inc(stage_id, CODE_PARSE_PORT_FILTER);
         return 0;
     }
 
-    debug_inc(stage_id, CODE_PARSE_TCP_SUCCESS);
-    debug_inc(stage_id, CODE_PARSE_SUCCESS);
     return 1;
 }
 
 // TX Stage 0: TCP __ip_queue_xmit - TCP IP layer transmission entry point
 int kprobe____ip_queue_xmit(struct pt_regs *ctx, struct sock *sk, struct sk_buff *skb, struct flowi *fl) {
-    debug_inc(TX_STAGE_0, CODE_PROBE_ENTRY);
 
     if (DIRECTION_FILTER == 2) { // rx only
-        debug_inc(TX_STAGE_0, CODE_DIRECTION_FILTER);
         return 0;
     }
 
@@ -873,8 +793,6 @@ int kprobe____ip_queue_xmit(struct pt_regs *ctx, struct sock *sk, struct sk_buff
         return 0;
     }
 
-    debug_inc(TX_STAGE_0, CODE_HANDLE_CALLED);
-    debug_inc(TX_STAGE_0, CODE_HANDLE_ENTRY);
 
     struct packet_key_t key = {};
     if (!parse_packet_key_tcp_early(skb, sk, &key, TX_STAGE_0)) {
@@ -885,12 +803,10 @@ int kprobe____ip_queue_xmit(struct pt_regs *ctx, struct sock *sk, struct sk_buff
     int stack_id = stack_traces.get_stackid(ctx, BPF_F_REUSE_STACKID);
 
     // Create flow for TX_STAGE_0
-    debug_inc(TX_STAGE_0, CODE_FLOW_CREATE);
     struct flow_data_t zero = {};
     flow_sessions.delete(&key);
     struct flow_data_t *flow_ptr = flow_sessions.lookup_or_try_init(&key, &zero);
     if (!flow_ptr) {
-        debug_inc(TX_STAGE_0, CODE_FLOW_NOT_FOUND);
         return 0;
     }
 
@@ -925,7 +841,6 @@ int kprobe____ip_queue_xmit(struct pt_regs *ctx, struct sock *sk, struct sk_buff
     flow_ptr->kstack_id[TX_STAGE_0] = stack_id;
 
     flow_sessions.update(&key, flow_ptr);
-    debug_inc(TX_STAGE_0, CODE_FLOW_FOUND);
 
     // Debug the key we created at TCP TX0
     debug_key(ctx, &key, TX_STAGE_0);
@@ -935,10 +850,8 @@ int kprobe____ip_queue_xmit(struct pt_regs *ctx, struct sock *sk, struct sk_buff
 
 // TX Stage 0: UDP ip_send_skb - UDP IP layer transmission entry point
 int kprobe__ip_send_skb(struct pt_regs *ctx, struct net *net, struct sk_buff *skb) {
-    debug_inc(TX_STAGE_0, CODE_PROBE_ENTRY);
 
     if (DIRECTION_FILTER == 2) { // rx only
-        debug_inc(TX_STAGE_0, CODE_DIRECTION_FILTER);
         return 0;
     }
 
@@ -947,7 +860,6 @@ int kprobe__ip_send_skb(struct pt_regs *ctx, struct net *net, struct sk_buff *sk
         return 0;
     }
 
-    debug_inc(TX_STAGE_0, CODE_HANDLE_CALLED);
     handle_stage_event(ctx, skb, TX_STAGE_0);
     return 0;
 }
@@ -1021,18 +933,15 @@ TRACEPOINT_PROBE(net, netif_receive_skb) {
         return 0;
     }
 
-    debug_inc(RX_STAGE_0, CODE_PROBE_ENTRY);
 
     if (!is_target_ifindex(skb)) {
         return 0;
     }
 
     if (DIRECTION_FILTER == 1) { // tx only
-        debug_inc(RX_STAGE_0, CODE_DIRECTION_FILTER);
         return 0;
     }
 
-    debug_inc(RX_STAGE_0, CODE_HANDLE_CALLED);
     handle_stage_event(args, skb, RX_STAGE_0);
     return 0;
 }
@@ -1372,85 +1281,6 @@ def analyze_key_consistency():
         for stage in stages:
             print("  Stage %d: seq=0x%08x len=%d" % (stage['stage_id'], stage['tcp_seq'], stage['payload_len']))
 
-def print_debug_statistics(b):
-    """Print comprehensive debug statistics - from bcc-debug-framework.md"""
-    
-    # Define stage names
-    stage_names = {
-        0: "TX0___ip_layer_entry",
-        1: "TX1_internal_dev_xmit", 
-        2: "TX2_ovs_dp_process_packet",
-        3: "TX3_ovs_dp_upcall",
-        4: "TX4_ovs_flow_key_extract_userspace",
-        5: "TX5_ovs_vport_send",
-        6: "TX6_dev_queue_xmit",
-        7: "RX0___netif_receive_skb",
-        8: "RX1_netdev_frame_hook",
-        9: "RX2_ovs_dp_process_packet", 
-        10: "RX3_ovs_dp_upcall",
-        11: "RX4_ovs_flow_key_extract_userspace",
-        12: "RX5_ovs_vport_send",
-        13: "RX6_tcp_v4_rcv/udp_rcv"
-    }
-    
-    # Define code point names
-    code_names = {
-        1: "PROBE_ENTRY",
-        2: "INTERFACE_FILTER", 
-        3: "DIRECTION_FILTER",
-        4: "HANDLE_CALLED",
-        5: "HANDLE_ENTRY",
-        6: "PARSE_ENTRY",
-        7: "PARSE_SUCCESS",
-        8: "PARSE_IP_FILTER",
-        9: "PARSE_PROTO_FILTER",
-        10: "PARSE_PORT_FILTER",
-        11: "PARSE_TCP_SUCCESS",
-        12: "PARSE_UDP_SUCCESS", 
-        14: "FLOW_CREATE",
-        15: "FLOW_LOOKUP",
-        16: "FLOW_FOUND",
-        17: "FLOW_NOT_FOUND",
-        18: "SKB_READ_FAIL",
-        19: "PERF_SUBMIT",
-        20: "IP_HDR_ERROR",
-        21: "PROTO_ICMP",
-        22: "PROTO_OTHER"
-    }
-    
-    print("\n=== Debug Statistics ===")
-    print("\nStage Statistics:")
-    stage_stats = b["debug_stage_stats"]
-    for k, v in sorted(stage_stats.items(), key=lambda x: x[0].value):
-        if v.value > 0:
-            stage_id = k.value >> 8
-            code_point = k.value & 0xFF
-            stage_name = stage_names.get(stage_id, "UNKNOWN_%d" % stage_id)
-            code_name = code_names.get(code_point, "CODE_%d" % code_point)
-            print("  %s.%s: %d" % (stage_name, code_name, v.value))
-    
-    print("\nInterface Debug:")
-    interface_debug = b["interface_debug"]
-    if interface_debug[0].value > 0:
-        print("  NULL_DEV: %d" % interface_debug[0].value)
-    if interface_debug[1].value > 0:
-        print("  READ_FAIL: %d" % interface_debug[1].value)
-    
-    print("\nInterface indices seen:")
-    ifindex_hist = b["ifindex_seen"]
-    for k, v in ifindex_hist.items():
-        if v.value > 0:
-            print("  ifindex %d: %d packets" % (k.value, v.value))
-    
-    # Print protocol distribution at TX0
-    print("\nProtocols filtered at TX0:")
-    proto_hist = b["proto_seen"]
-    proto_names = {1: "ICMP", 6: "TCP", 17: "UDP", 2: "IGMP", 89: "OSPF", 132: "SCTP"}
-    for k, v in sorted(proto_hist.items(), key=lambda x: x[1].value, reverse=True):
-        if v.value > 0:
-            proto_name = proto_names.get(k.value, "Protocol_%d" % k.value)
-            print("  %s: %d packets" % (proto_name, v.value))
-
 if __name__ == "__main__":
     if os.geteuid() != 0:
         print("This program must be run as root")
@@ -1557,7 +1387,6 @@ Examples:
             b.perf_buffer_poll()
     except KeyboardInterrupt:
         print("\nDetaching...")
-        print_debug_statistics(b)
         analyze_key_consistency()
     finally:
         print("Exiting.")

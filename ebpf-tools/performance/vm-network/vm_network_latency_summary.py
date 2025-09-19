@@ -154,7 +154,6 @@ struct stage_pair_key_t {
     u8 latency_bucket;  // log2 of latency in microseconds
 };
 
-
 // Maps
 BPF_TABLE("lru_hash", struct packet_key_t, struct flow_data_t, flow_sessions, 10240);
 
@@ -592,7 +591,6 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
     }
 }
 
-
 // Use tracepoint for both RX and TX direction
 RAW_TRACEPOINT_PROBE(netif_receive_skb) {
     // Get skb from tracepoint args
@@ -1004,7 +1002,6 @@ def print_histogram_summary(b, interval_start_time):
         total_hist.clear()
     except:
         pass
-
 
 def main():
     if os.geteuid() != 0:

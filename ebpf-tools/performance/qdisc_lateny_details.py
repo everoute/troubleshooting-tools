@@ -62,28 +62,6 @@ bpf_text = """
 #define TASK_COMM_LEN       16
 
 // Debug framework (same as vm_network_performance_metrics.py)
-#define CODE_PROBE_ENTRY            1
-#define CODE_INTERFACE_FILTER       2
-#define CODE_DIRECTION_FILTER       3
-#define CODE_HANDLE_CALLED          4
-#define CODE_HANDLE_ENTRY           5
-#define CODE_PARSE_ENTRY            6
-#define CODE_PARSE_SUCCESS          7
-#define CODE_PARSE_IP_FILTER        8
-#define CODE_PARSE_PROTO_FILTER     9
-#define CODE_PARSE_PORT_FILTER     10
-#define CODE_FLOW_CREATE           14
-#define CODE_FLOW_LOOKUP           15
-#define CODE_FLOW_FOUND            16
-#define CODE_FLOW_NOT_FOUND        17
-#define CODE_PERF_SUBMIT           19
-#define CODE_IP_HEADER_FAIL        20
-#define CODE_TRANSPORT_FAIL        21
-#define CODE_PROTOCOL_FILTER_FAIL  22
-#define CODE_IP_FILTER_FAIL        23
-#define CODE_PORT_FILTER_FAIL      24
-#define CODE_SRC_IP_MISMATCH        25
-#define CODE_DST_IP_MISMATCH        26
 
 // Packet key structure (same as vm_network_performance_metrics.py)
 struct packet_key_t {
@@ -139,15 +117,9 @@ BPF_TABLE("lru_hash", struct packet_key_t, struct qdisc_flow_data_t, qdisc_sessi
 BPF_PERF_OUTPUT(events);
 
 // Debug statistics
-BPF_HISTOGRAM(debug_stage_stats, u32);
 BPF_HISTOGRAM(ifindex_seen, u32);  // Track interface indices seen
 BPF_HISTOGRAM(src_ips_seen, u32);  // Track source IPs seen
 BPF_HISTOGRAM(dst_ips_seen, u32);  // Track destination IPs seen
-
-static __always_inline void debug_inc(u8 stage_id, u8 code_point) {
-    u32 key = ((u32)stage_id << 8) | code_point;
-    debug_stage_stats.increment(key);
-}
 
 // Device filtering with debug info
 static __always_inline bool is_target_interface(const struct sk_buff *skb) {
@@ -238,13 +210,11 @@ static __always_inline int parse_packet_key(
 ) {
     struct iphdr ip;
     if (get_ip_header(skb, &ip) != 0) {
-        debug_inc(stage_id, CODE_IP_HEADER_FAIL);
         return 0;  // IP header extraction failed
     }
     
     // Apply filters first
     if (PROTOCOL_FILTER != 0 && ip.protocol != PROTOCOL_FILTER) {
-        debug_inc(stage_id, CODE_PROTOCOL_FILTER_FAIL);
         return 0;
     }
     
@@ -254,11 +224,9 @@ static __always_inline int parse_packet_key(
     
     // IP filtering (simplified for qdisc - just check if either matches)
     if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER && ip.daddr != SRC_IP_FILTER) {
-        debug_inc(stage_id, CODE_SRC_IP_MISMATCH);
         return 0;
     }
     if (DST_IP_FILTER != 0 && ip.saddr != DST_IP_FILTER && ip.daddr != DST_IP_FILTER) {
-        debug_inc(stage_id, CODE_DST_IP_MISMATCH);
         return 0;
     }
     
@@ -272,7 +240,6 @@ static __always_inline int parse_packet_key(
         case IPPROTO_TCP: {
             struct tcphdr tcp;
             if (get_transport_header(skb, &tcp, sizeof(tcp)) != 0) {
-                debug_inc(stage_id, CODE_TRANSPORT_FAIL);
                 return 0;
             }
             
@@ -281,11 +248,9 @@ static __always_inline int parse_packet_key(
             key->tcp.seq = tcp.seq;
             
             if (SRC_PORT_FILTER != 0 && key->tcp.source != htons(SRC_PORT_FILTER) && key->tcp.dest != htons(SRC_PORT_FILTER)) {
-                debug_inc(stage_id, CODE_PORT_FILTER_FAIL);
                 return 0;
             }
             if (DST_PORT_FILTER != 0 && key->tcp.source != htons(DST_PORT_FILTER) && key->tcp.dest != htons(DST_PORT_FILTER)) {
-                debug_inc(stage_id, CODE_PORT_FILTER_FAIL);
                 return 0;
             }
             break;
@@ -299,16 +264,13 @@ static __always_inline int parse_packet_key(
                 key->udp.dest = udp.dest;
                 key->udp.len = udp.len;
             } else {
-                debug_inc(stage_id, CODE_TRANSPORT_FAIL);
                 // Still continue for UDP since we have IP ID
             }
             
             if (SRC_PORT_FILTER != 0 && key->udp.source != htons(SRC_PORT_FILTER) && key->udp.dest != htons(SRC_PORT_FILTER)) {
-                debug_inc(stage_id, CODE_PORT_FILTER_FAIL);
                 return 0;
             }
             if (DST_PORT_FILTER != 0 && key->udp.source != htons(DST_PORT_FILTER) && key->udp.dest != htons(DST_PORT_FILTER)) {
-                debug_inc(stage_id, CODE_PORT_FILTER_FAIL);
                 return 0;
             }
             break;
@@ -316,7 +278,6 @@ static __always_inline int parse_packet_key(
         case IPPROTO_ICMP: {
             struct icmphdr icmp;
             if (get_transport_header(skb, &icmp, sizeof(icmp)) != 0) {
-                debug_inc(stage_id, CODE_TRANSPORT_FAIL);
                 return 0;
             }
             
@@ -339,21 +300,15 @@ RAW_TRACEPOINT_PROBE(net_dev_queue) {
     struct sk_buff *skb = (struct sk_buff *)ctx->args[0];
     if (!skb) return 0;
     
-    debug_inc(STG_QDISC_ENQ, CODE_PROBE_ENTRY);
-    
     if (!is_target_interface(skb)) {
         return 0;
     }
-    
-    debug_inc(STG_QDISC_ENQ, CODE_INTERFACE_FILTER);
     
     // Parse packet key - use simplified key for more reliable matching
     struct packet_key_t key = {};
     if (!parse_packet_key(skb, &key, STG_QDISC_ENQ)) {
         return 0;
     }
-    
-    debug_inc(STG_QDISC_ENQ, CODE_PARSE_SUCCESS);
     
     // Store enqueue data
     struct qdisc_flow_data_t data = {};
@@ -367,8 +322,6 @@ RAW_TRACEPOINT_PROBE(net_dev_queue) {
     }
     
     qdisc_sessions.update(&key, &data);
-    debug_inc(STG_QDISC_ENQ, CODE_FLOW_CREATE);
-    
     return 0;
 }
 
@@ -378,8 +331,6 @@ RAW_TRACEPOINT_PROBE(qdisc_dequeue) {
     struct sk_buff *skb = (struct sk_buff *)ctx->args[3];
     if (!skb) return 0;
     
-    debug_inc(STG_QDISC_DEQ, CODE_PROBE_ENTRY);
-    
     // Parse packet key with detailed debug tracking
     struct packet_key_t key = {};
     if (!parse_packet_key(skb, &key, STG_QDISC_DEQ)) {
@@ -387,17 +338,11 @@ RAW_TRACEPOINT_PROBE(qdisc_dequeue) {
         return 0;
     }
     
-    debug_inc(STG_QDISC_DEQ, CODE_PARSE_SUCCESS);
-    
     // Look up enqueue data
-    debug_inc(STG_QDISC_DEQ, CODE_FLOW_LOOKUP);
     struct qdisc_flow_data_t *data = qdisc_sessions.lookup(&key);
     if (!data || data->enqueue_time == 0) {
-        debug_inc(STG_QDISC_DEQ, CODE_FLOW_NOT_FOUND);
         return 0;
     }
-    
-    debug_inc(STG_QDISC_DEQ, CODE_FLOW_FOUND);
     
     // Calculate timing
     u64 dequeue_time = bpf_ktime_get_ns();
@@ -417,8 +362,6 @@ RAW_TRACEPOINT_PROBE(qdisc_dequeue) {
     }
     
     events.perf_submit(ctx, &event, sizeof(event));
-    debug_inc(STG_QDISC_DEQ, CODE_PERF_SUBMIT);
-    
     // Clean up
     qdisc_sessions.delete(&key);
     
@@ -501,45 +444,6 @@ def get_protocol_identifier(key, protocol):
         return "ICMP id=%u seq=%u type=%u" % (icmp_id, seq, icmp_type)
     else:
         return "Proto%d" % protocol
-
-def print_debug_statistics(b):
-    """Print debug statistics (same format as vm_network_performance_metrics.py)"""
-    stage_names = {
-        8: "QDISC_ENQ",
-        9: "QDISC_DEQ"
-    }
-    
-    code_names = {
-        1: "PROBE_ENTRY", 2: "INTERFACE_FILTER", 3: "DIRECTION_FILTER", 4: "HANDLE_CALLED", 5: "HANDLE_ENTRY",
-        6: "PARSE_ENTRY", 7: "PARSE_SUCCESS", 8: "PARSE_IP_FILTER", 9: "PARSE_PROTO_FILTER", 10: "PARSE_PORT_FILTER",
-        14: "FLOW_CREATE", 15: "FLOW_LOOKUP", 16: "FLOW_FOUND", 17: "FLOW_NOT_FOUND", 19: "PERF_SUBMIT", 
-        20: "IP_HEADER_FAIL", 21: "TRANSPORT_FAIL", 22: "PROTOCOL_FILTER_FAIL", 23: "IP_FILTER_FAIL", 24: "PORT_FILTER_FAIL",
-        25: "SRC_IP_MISMATCH", 26: "DST_IP_MISMATCH"
-    }
-    
-    print("\n=== Debug Statistics ===")
-    stage_stats = b["debug_stage_stats"]
-    for k, v in sorted(stage_stats.items(), key=lambda x: x[0].value):
-        if v.value > 0:
-            stage_id = k.value >> 8
-            code_point = k.value & 0xFF
-            stage_name = stage_names.get(stage_id, "UNKNOWN_%d" % stage_id)
-            code_name = code_names.get(code_point, "CODE_%d" % code_point)
-            print("  %s.%s: %d" % (stage_name, code_name, v.value))
-    
-    # Show actual IPs seen for debugging
-    print("\n=== IPs Seen (Top 10) ===")
-    src_ips = b["src_ips_seen"]
-    print("Source IPs:")
-    for k, v in sorted(src_ips.items(), key=lambda x: x[1].value, reverse=True)[:10]:
-        ip_str = format_ip(k.value)
-        print("  %s: %d packets" % (ip_str, v.value))
-    
-    dst_ips = b["dst_ips_seen"] 
-    print("Destination IPs:")
-    for k, v in sorted(dst_ips.items(), key=lambda x: x[1].value, reverse=True)[:10]:
-        ip_str = format_ip(k.value)
-        print("  %s: %d packets" % (ip_str, v.value))
 
 def print_event(cpu, data, size):
     """Print qdisc event"""
@@ -643,6 +547,5 @@ if __name__ == "__main__":
             b.perf_buffer_poll()
     except KeyboardInterrupt:
         print("\nDetaching...")
-        print_debug_statistics(b)
     finally:
         print("Exiting.")

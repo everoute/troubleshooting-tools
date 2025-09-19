@@ -105,21 +105,6 @@ bpf_text = """
 #define TASK_COMM_LEN       16
 
 // Debug framework definitions
-#define CODE_PROBE_ENTRY            1   // Probe function entry
-#define CODE_INTERFACE_FILTER       2   // Interface filtering
-#define CODE_DIRECTION_FILTER       3   // Direction filtering  
-#define CODE_HANDLE_CALLED          4   // Handle function called
-#define CODE_HANDLE_ENTRY           5   // Handle function entry
-#define CODE_PARSE_ENTRY            6   // Parse function entry
-#define CODE_PARSE_SUCCESS          7   // Parse success
-#define CODE_PARSE_IP_FILTER        8   // IP filtering
-#define CODE_PARSE_PROTO_FILTER     9   // Protocol filtering
-#define CODE_PARSE_PORT_FILTER     10   // Port filtering
-#define CODE_FLOW_CREATE           14   // Flow creation
-#define CODE_FLOW_LOOKUP           15   // Flow lookup
-#define CODE_FLOW_FOUND            16   // Flow found
-#define CODE_FLOW_NOT_FOUND        17   // Flow not found
-#define CODE_PERF_SUBMIT           19   // Performance event submit
 
 // Packet key structure for unique packet identification
 struct packet_key_t {
@@ -232,14 +217,9 @@ BPF_ARRAY(probe_stats, u64, 32);          // Event counters for each probe point
 BPF_PERF_OUTPUT(events);
 
 // Debug statistics framework
-BPF_HISTOGRAM(debug_stage_stats, u32);  // Key: (stage_id << 8) | code_point
 BPF_HISTOGRAM(ifindex_seen, u32);       // Track which ifindex values we see
 
 // Debug function
-static __always_inline void debug_inc(u8 stage_id, u8 code_point) {
-    u32 key = ((u32)stage_id << 8) | code_point;
-    debug_stage_stats.increment(key);
-}
 
 // Helper functions - reusing vm_network_latency.py proven logic
 static __always_inline bool is_target_vm_interface(const struct sk_buff *skb) {
@@ -588,13 +568,11 @@ static __always_inline int parse_packet_key_userspace(
 
 // Main event handling function - tracks packets through all stages
 static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u8 stage_id, u8 direction) {
-    debug_inc(stage_id, CODE_HANDLE_ENTRY);  // Entry counter
     
     struct packet_key_t key = {};
     u64 current_ts = bpf_ktime_get_ns();
     
     // Parse packet key for identification
-    debug_inc(stage_id, CODE_PARSE_ENTRY);
     int parse_success = 0;
     // Use userspace parsing for OVS_USERSPACE stages, regular parsing for others
     if (stage_id == STG_OVS_USERSPACE_RX || stage_id == STG_OVS_USERSPACE_TX) {
@@ -606,8 +584,6 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
     if (!parse_success) {
         return;
     }
-    debug_inc(stage_id, CODE_PARSE_SUCCESS);
-    
     // Check if this is the first stage for this direction
     bool is_first_stage = false;
     if ((direction == 1 && stage_id == STG_VNET_RX) ||  // vnet RX path starts
@@ -618,7 +594,6 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
     struct flow_data_t *flow_ptr;
     
     if (is_first_stage) {
-        debug_inc(stage_id, CODE_FLOW_CREATE);
         // Initialize new flow tracking using per-cpu map
         flow_sessions.delete(&key);  // Clean any old entries
         
@@ -665,16 +640,12 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
         }
     } else {
         // Look up existing flow
-        debug_inc(stage_id, CODE_FLOW_LOOKUP);
         flow_ptr = flow_sessions.lookup(&key);
     }
     
     if (!flow_ptr) {
-        debug_inc(stage_id, CODE_FLOW_NOT_FOUND);
         return;
     }
-    debug_inc(stage_id, CODE_FLOW_FOUND);
-    
     // Record detailed information for this stage
     if (stage_id < MAX_STAGES && !flow_ptr->stages[stage_id].valid) {
         struct stage_info_t *stage = &flow_ptr->stages[stage_id];
@@ -855,7 +826,6 @@ int kprobe__ovs_flow_key_extract_userspace(struct pt_regs *ctx, struct net *net,
 }
 
 int kprobe__ovs_ct_update_key(struct pt_regs *ctx, struct sk_buff *skb, void *info, void *key, bool post_ct, bool keep_nat_flags) {
-    debug_inc(STG_FLOW_EXTRACT_END_RX, CODE_PROBE_ENTRY);  // General entry counter
     
     if (!skb) return 0;
     
@@ -863,25 +833,19 @@ int kprobe__ovs_ct_update_key(struct pt_regs *ctx, struct sk_buff *skb, void *in
     // post_ct=false indicates flow extract phase (ovs_ct_fill_key) - occurs BEFORE upcall
     // post_ct=true indicates conntrack action phase (__ovs_ct_lookup) - occurs AFTER upcall
     if (post_ct) {
-        debug_inc(STG_CT_OUT_RX, CODE_PROBE_ENTRY);  // Post-CT phase entry
         // Conntrack action phase - occurs after upcall processing
         if (DIRECTION_FILTER != 2) {  // vnet_rx or both
-            debug_inc(STG_CT_OUT_RX, CODE_HANDLE_CALLED);
             handle_stage_event(ctx, skb, STG_CT_OUT_RX, 1);
         }
         if (DIRECTION_FILTER != 1) {  // vnet_tx or both
-            debug_inc(STG_CT_OUT_TX, CODE_HANDLE_CALLED);
             handle_stage_event(ctx, skb, STG_CT_OUT_TX, 2);
         }
     } else {
-        debug_inc(STG_FLOW_EXTRACT_END_RX, CODE_PROBE_ENTRY);  // Flow extract phase entry
         // Flow extract phase - occurs BEFORE upcall (when flow table miss detected)
         if (DIRECTION_FILTER != 2) {  // vnet_rx or both
-            debug_inc(STG_FLOW_EXTRACT_END_RX, CODE_HANDLE_CALLED);
             handle_stage_event(ctx, skb, STG_FLOW_EXTRACT_END_RX, 1);
         }
         if (DIRECTION_FILTER != 1) {  // vnet_tx or both
-            debug_inc(STG_FLOW_EXTRACT_END_TX, CODE_HANDLE_CALLED);
             handle_stage_event(ctx, skb, STG_FLOW_EXTRACT_END_TX, 2);
         }
     }
@@ -1231,34 +1195,6 @@ def print_event(cpu, data, size):
         
     print("")
 
-def print_debug_statistics(b):
-    """Print debug statistics from the BPF program"""
-    # Stage name mapping
-    stage_names = {
-        1: "VNET_RX", 2: "OVS_RX", 3: "FLOW_EXTRACT_END_RX", 4: "OVS_UPCALL_RX", 5: "OVS_USERSPACE_RX",
-        6: "CT_RX", 7: "CT_OUT_RX", 8: "QDISC_ENQ", 9: "QDISC_DEQ", 10: "TX_QUEUE", 11: "TX_XMIT",
-        12: "PHY_RX", 13: "OVS_TX", 14: "FLOW_EXTRACT_END_TX", 15: "OVS_UPCALL_TX", 16: "OVS_USERSPACE_TX", 
-        17: "CT_TX", 18: "CT_OUT_TX", 19: "VNET_QDISC_ENQ", 20: "VNET_QDISC_DEQ", 21: "VNET_TX"
-    }
-    
-    # Code point name mapping
-    code_names = {
-        1: "PROBE_ENTRY", 2: "INTERFACE_FILTER", 3: "DIRECTION_FILTER", 4: "HANDLE_CALLED", 5: "HANDLE_ENTRY",
-        6: "PARSE_ENTRY", 7: "PARSE_SUCCESS", 8: "PARSE_IP_FILTER", 9: "PARSE_PROTO_FILTER", 10: "PARSE_PORT_FILTER",
-        14: "FLOW_CREATE", 15: "FLOW_LOOKUP", 16: "FLOW_FOUND", 17: "FLOW_NOT_FOUND", 19: "PERF_SUBMIT"
-    }
-    
-    print("\n=== Debug Statistics ===")
-    stage_stats = b["debug_stage_stats"]
-    for k, v in sorted(stage_stats.items(), key=lambda x: x[0].value):
-        if v.value > 0:
-            stage_id = k.value >> 8
-            code_point = k.value & 0xFF
-            stage_name = stage_names.get(stage_id, "UNKNOWN_%d" % stage_id)
-            code_name = code_names.get(code_point, "CODE_%d" % code_point)
-            print("  %s.%s: %d" % (stage_name, code_name, v.value))
-    print("")
-
 if __name__ == "__main__":
     if os.geteuid() != 0:
         print("This program must be run as root")
@@ -1381,11 +1317,6 @@ Examples:
     except KeyboardInterrupt:
         print("\nDetaching...")
         
-        # Print debug statistics first to diagnose missing stages
-        try:
-            print_debug_statistics(b)
-        except Exception as e:
-            print("Error in debug statistics: %s" % str(e))
         
         print("\n=== Performance Statistics ===")
         

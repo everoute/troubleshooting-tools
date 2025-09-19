@@ -279,7 +279,7 @@ int trace_vm_irqfd_stats(struct pt_regs *ctx) {
     hist_key.key_flags = flags;
     hist_key.slot = 0;  // For counting, slot is fixed to 0
     
-    irq_count_hist.atomic_increment(hist_key);
+    irq_count_hist.increment(hist_key);
     
     // Update auxiliary information
     u64 irqfd_key = (u64)irqfd;
@@ -339,7 +339,7 @@ int trace_kvm_arch_set_irq_inatomic(struct pt_regs *ctx) {
     hist_key.gsi = gsi;
     hist_key.slot = 0;
     
-    arch_set_irq_hist.atomic_increment(hist_key);
+    arch_set_irq_hist.increment(hist_key);
     
     // Store parameters for return probe
     struct arch_set_irq_ret_key ret_key = {};
@@ -417,7 +417,7 @@ int trace_kvm_set_msi(struct pt_regs *ctx) {
     hist_key.gsi = gsi;
     hist_key.slot = 0;
     
-    kvm_set_msi_hist.atomic_increment(hist_key);
+    kvm_set_msi_hist.increment(hist_key);
     
     return 0;
 }
@@ -457,7 +457,7 @@ int trace_kvm_vcpu_kick(struct pt_regs *ctx) {
     hist_key.vcpu_id = vcpu_id;
     hist_key.slot = 0;
     
-    kvm_vcpu_kick_hist.atomic_increment(hist_key);
+    kvm_vcpu_kick_hist.increment(hist_key);
     
     return 0;
 }

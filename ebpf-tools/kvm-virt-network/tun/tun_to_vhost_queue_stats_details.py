@@ -433,7 +433,7 @@ int trace_tun_net_xmit(struct pt_regs *ctx, struct sk_buff *skb, struct net_devi
         hist_key.slot = bpf_log2l(depth);  // Use log2 scale for histogram
     }
     
-    ptr_ring_depth_xmit.atomic_increment(hist_key);
+    ptr_ring_depth_xmit.increment(hist_key);
     
     return 0;
 }
@@ -494,11 +494,11 @@ int trace_handle_rx(struct pt_regs *ctx) {
     
     // VQ consumption progress histogram at handle_rx
     hist_key.slot = bpf_log2l(consumption_progress);
-    vq_consumption_progress_handle_rx.atomic_increment(hist_key);
+    vq_consumption_progress_handle_rx.increment(hist_key);
     
     // VQ processing delay histogram at handle_rx
     hist_key.slot = bpf_log2l(processing_delay);
-    vq_processing_delay_handle_rx.atomic_increment(hist_key);
+    vq_processing_delay_handle_rx.increment(hist_key);
     
     // VQ last_used_idx value histogram at handle_rx
     // Use log2 scale for histogram compatibility
@@ -511,7 +511,7 @@ int trace_handle_rx(struct pt_regs *ctx) {
         u64 log_result = bpf_log2l(last_used_idx);
         hist_key.slot = (log_result > 15) ? 15 : log_result;  // Cap at slot 15
     }
-    vq_last_used_idx_handle_rx.atomic_increment(hist_key);
+    vq_last_used_idx_handle_rx.increment(hist_key);
     
     return 0;
 }
@@ -546,7 +546,7 @@ int trace_tun_recvmsg_entry(struct pt_regs *ctx, struct socket *sock, struct msg
         hist_key.slot = bpf_log2l(depth);  // Use log2 scale for histogram
     }
     
-    ptr_ring_depth_recv.atomic_increment(hist_key);
+    ptr_ring_depth_recv.increment(hist_key);
     
     return 0;
 }
@@ -612,11 +612,11 @@ int trace_vhost_signal(struct pt_regs *ctx) {
     
     // VQ consumption progress histogram at vhost_signal
     hist_key.slot = bpf_log2l(consumption_progress);
-    vq_consumption_progress_vhost_signal.atomic_increment(hist_key);
+    vq_consumption_progress_vhost_signal.increment(hist_key);
     
     // VQ processing delay histogram at vhost_signal
     hist_key.slot = bpf_log2l(processing_delay);
-    vq_processing_delay_vhost_signal.atomic_increment(hist_key);
+    vq_processing_delay_vhost_signal.increment(hist_key);
     
     // VQ last_used_idx value histogram at vhost_signal
     // Use log2 scale for histogram compatibility
@@ -629,7 +629,7 @@ int trace_vhost_signal(struct pt_regs *ctx) {
         u64 log_result = bpf_log2l(last_used_idx);
         hist_key.slot = (log_result > 15) ? 15 : log_result;  // Cap at slot 15
     }
-    vq_last_used_idx_vhost_signal.atomic_increment(hist_key);
+    vq_last_used_idx_vhost_signal.increment(hist_key);
     
     // Track total signal count per sock_ptr for verification
     u32 *total_count = signal_total_count.lookup(&sock_ptr);

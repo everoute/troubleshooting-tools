@@ -1529,8 +1529,8 @@ if __name__ == "__main__":
         epilog="""
 Examples:
   Monitor system bidirectional traffic:
-    sudo %(prog)s --internal-interface port-mgt --phy-interface enp94s0f0np0 --system-ip 192.168.70.33
-    
+    sudo %(prog)s --internal-interface port-mgt --phy-interface enp94s0f0np0 --src-ip 192.168.70.33
+
   Monitor only system TX traffic (Local→Uplink):
     sudo %(prog)s --internal-interface port-mgt --phy-interface enp94s0f0np0 --direction tx --src-ip 192.168.70.33
     
@@ -1543,8 +1543,6 @@ Examples:
                         help='Internal port interface to monitor (e.g., port-mgt)')
     parser.add_argument('--phy-interface', type=str, required=True,
                         help='Physical interface to monitor (e.g., enp94s0f0np0)')
-    parser.add_argument('--system-ip', type=str, required=False,
-                        help='System IP address filter')
     parser.add_argument('--src-ip', type=str, required=False,
                         help='Source IP address filter')
     parser.add_argument('--dst-ip', type=str, required=False,
@@ -1565,12 +1563,8 @@ Examples:
     args = parser.parse_args()
     
     # Convert parameters
-    if args.system_ip:
-        src_ip_hex = ip_to_hex(args.system_ip)
-        dst_ip_hex = ip_to_hex(args.system_ip)
-    else:
-        src_ip_hex = ip_to_hex(args.src_ip) if args.src_ip else 0
-        dst_ip_hex = ip_to_hex(args.dst_ip) if args.dst_ip else 0
+    src_ip_hex = ip_to_hex(args.src_ip) if args.src_ip else 0
+    dst_ip_hex = ip_to_hex(args.dst_ip) if args.dst_ip else 0
     
     src_port = args.src_port if args.src_port else 0
     dst_port = args.dst_port if args.dst_port else 0
@@ -1591,9 +1585,7 @@ Examples:
     print("=== System Network Performance Tracer ===")
     print("Protocol filter: %s" % args.protocol.upper())
     print("Direction filter: %s (1=SYSTEM_TX/Local→Uplink, 2=SYSTEM_RX/Uplink→Local)" % args.direction.upper())
-    if args.system_ip:
-        print("System IP filter: %s" % args.system_ip)
-    elif args.src_ip or args.dst_ip:
+    if args.src_ip or args.dst_ip:
         if args.src_ip:
             print("Source IP filter: %s" % args.src_ip)
         if args.dst_ip:

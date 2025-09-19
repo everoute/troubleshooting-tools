@@ -444,7 +444,7 @@ int trace_tun_net_xmit(struct pt_regs *ctx, struct sk_buff *skb, struct net_devi
         hist_key.slot = bpf_log2l(depth);  // Use log2 scale for histogram
     }
     
-    ptr_ring_depth_xmit.atomic_increment(hist_key);
+    ptr_ring_depth_xmit.increment(hist_key);
     
     return 0;
 }
@@ -488,7 +488,7 @@ int trace_vhost_signal(struct pt_regs *ctx) {
         u64 log_result = bpf_log2l(last_used_idx);
         hist_key.slot = (log_result > 15) ? 15 : log_result;  // Cap at slot 15
     }
-    vq_last_used_idx_vhost_signal.atomic_increment(hist_key);
+    vq_last_used_idx_vhost_signal.increment(hist_key);
     
     // Track actual last_used_idx values for periodic display
     struct idx_value_key idx_key = {};

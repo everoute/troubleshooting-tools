@@ -12,4 +12,4 @@ claude_local*
 CLAUDE.md
 AGENTS.md
 bcc-program/*
-test/*results/*
+test/workflow/result/*

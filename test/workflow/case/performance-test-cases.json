@@ -1,0 +1,194 @@
+{
+  "metadata": {
+    "description": "Performance Test Cases",
+    "source": "Generated from test/workflow/case/performance-test-cases.txt",
+    "total_cases": 28
+  },
+  "test_cases": [
+    {
+      "id": 1,
+      "name": "system_network_perfomance_metrics_rx_tcp",
+      "command": "sudo python3 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-storage --phy-interface ens11 --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --direction rx --protocol tcp",
+      "duration": 5
+    },
+    {
+      "id": 2,
+      "name": "system_network_perfomance_metrics_tx_tcp",
+      "command": "sudo python3 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-storage --phy-interface ens11 --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --direction tx --protocol tcp",
+      "duration": 5
+    },
+    {
+      "id": 3,
+      "name": "system_network_perfomance_metrics_rx_udp",
+      "command": "sudo python3 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-storage --phy-interface ens11 --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --direction rx --protocol udp",
+      "duration": 5
+    },
+    {
+      "id": 4,
+      "name": "system_network_perfomance_metrics_tx_udp",
+      "command": "sudo python3 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-storage --phy-interface ens11 --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --direction tx --protocol udp",
+      "duration": 5
+    },
+    {
+      "id": 5,
+      "name": "system_network_latency_details_rx_tcp",
+      "command": "sudo python3 ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface ens11 --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --direction rx --protocol tcp",
+      "duration": 5
+    },
+    {
+      "id": 6,
+      "name": "system_network_latency_details_tx_tcp",
+      "command": "sudo python3 ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface ens11 --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --direction tx --protocol tcp",
+      "duration": 5
+    },
+    {
+      "id": 7,
+      "name": "system_network_latency_details_rx_udp",
+      "command": "sudo python3 ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface ens11 --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --direction rx --protocol udp",
+      "duration": 5
+    },
+    {
+      "id": 8,
+      "name": "system_network_latency_details_tx_udp",
+      "command": "sudo python3 ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface ens11 --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --direction tx --protocol udp",
+      "duration": 5
+    },
+    {
+      "id": 9,
+      "name": "system_network_icmp_rtt_rx",
+      "command": "sudo python3 ebpf-tools/performance/system-network/system_network_icmp_rtt.py --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --direction rx --phy-iface1 ens11",
+      "duration": 5
+    },
+    {
+      "id": 10,
+      "name": "system_network_icmp_rtt_tx",
+      "command": "sudo python3 ebpf-tools/performance/system-network/system_network_icmp_rtt.py --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --direction tx --phy-iface1 ens11",
+      "duration": 5
+    },
+    {
+      "id": 11,
+      "name": "vm_network_latency_summary_rx_tcp",
+      "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet0 --phy-interface ens4 --direction rx --src-ip 172.21.153.114 --dst-ip 172.21.153.113 --protocol tcp",
+      "duration": 5
+    },
+    {
+      "id": 12,
+      "name": "vm_network_latency_summary_tx_tcp",
+      "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet0 --phy-interface ens4 --direction tx --src-ip 172.21.153.113 --dst-ip 172.21.153.114 --protocol tcp",
+      "duration": 5
+    },
+    {
+      "id": 13,
+      "name": "vm_network_latency_summary_rx_udp",
+      "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet0 --phy-interface ens4 --direction rx --src-ip 172.21.153.114 --dst-ip 172.21.153.113 --protocol udp",
+      "duration": 5
+    },
+    {
+      "id": 14,
+      "name": "vm_network_latency_summary_tx_udp",
+      "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet0 --phy-interface ens4 --direction tx --src-ip 172.21.153.113 --dst-ip 172.21.153.114 --protocol udp",
+      "duration": 5
+    },
+    {
+      "id": 15,
+      "name": "vm_network_latency_summary_rx_icmp",
+      "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet0 --phy-interface ens4 --direction rx --src-ip 172.21.153.114 --dst-ip 172.21.153.113 --protocol icmp",
+      "duration": 5
+    },
+    {
+      "id": 16,
+      "name": "vm_network_latency_summary_tx_icmp",
+      "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet0 --phy-interface ens4 --direction tx --src-ip 172.21.153.113 --dst-ip 172.21.153.114 --protocol icmp",
+      "duration": 5
+    },
+    {
+      "id": 17,
+      "name": "vm_network_latency_details_rx_tcp",
+      "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet0 --phy-interface ens4 --direction rx --src-ip 172.21.153.114 --dst-ip 172.21.153.113 --protocol tcp",
+      "duration": 5
+    },
+    {
+      "id": 18,
+      "name": "vm_network_latency_details_tx_tcp",
+      "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet0 --phy-interface ens4 --direction tx --src-ip 172.21.153.113 --dst-ip 172.21.153.114 --protocol tcp",
+      "duration": 5
+    },
+    {
+      "id": 19,
+      "name": "vm_network_latency_details_rx_udp",
+      "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet0 --phy-interface ens4 --direction rx --src-ip 172.21.153.114 --dst-ip 172.21.153.113 --protocol udp",
+      "duration": 5
+    },
+    {
+      "id": 20,
+      "name": "vm_network_latency_details_tx_udp",
+      "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet0 --phy-interface ens4 --direction tx --src-ip 172.21.153.113 --dst-ip 172.21.153.114 --protocol udp",
+      "duration": 5
+    },
+    {
+      "id": 21,
+      "name": "vm_network_latency_details_rx_icmp",
+      "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet0 --phy-interface ens4 --direction rx --src-ip 172.21.153.114 --dst-ip 172.21.153.113 --protocol icmp",
+      "duration": 5
+    },
+    {
+      "id": 22,
+      "name": "vm_network_latency_details_tx_icmp",
+      "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet0 --phy-interface ens4 --direction tx --src-ip 172.21.153.113 --dst-ip 172.21.153.114 --protocol icmp",
+      "duration": 5
+    },
+    {
+      "id": 23,
+      "name": "vm_network_performance_metrics_rx_tcp",
+      "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet0 --phy-interface ens4 --direction rx --src-ip 172.21.153.114 --dst-ip 172.21.153.113 --protocol tcp",
+      "duration": 5
+    },
+    {
+      "id": 24,
+      "name": "vm_network_performance_metrics_tx_tcp",
+      "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet0 --phy-interface ens4 --direction tx --src-ip 172.21.153.113 --dst-ip 172.21.153.114 --protocol tcp",
+      "duration": 5
+    },
+    {
+      "id": 25,
+      "name": "vm_network_performance_metrics_rx_udp",
+      "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet0 --phy-interface ens4 --direction rx --src-ip 172.21.153.114 --dst-ip 172.21.153.113 --protocol udp",
+      "duration": 5
+    },
+    {
+      "id": 26,
+      "name": "vm_network_performance_metrics_tx_udp",
+      "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet0 --phy-interface ens4 --direction tx --src-ip 172.21.153.113 --dst-ip 172.21.153.114 --protocol udp",
+      "duration": 5
+    },
+    {
+      "id": 27,
+      "name": "vm_network_performance_metrics_rx_icmp",
+      "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet0 --phy-interface ens4 --direction rx --src-ip 172.21.153.114 --dst-ip 172.21.153.113 --protocol icmp",
+      "duration": 5
+    },
+    {
+      "id": 28,
+      "name": "vm_network_performance_metrics_tx_icmp",
+      "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet0 --phy-interface ens4 --direction tx --src-ip 172.21.153.113 --dst-ip 172.21.153.114 --protocol icmp",
+      "duration": 5
+    }
+  ],
+  "summary": {
+    "total_cases": 28,
+    "system_network_cases": 10,
+    "vm_network_cases": 18,
+    "categories": {
+      "system_network": {
+        "system_network_perfomance_metrics": 4,
+        "system_network_latency_details": 4,
+        "system_network_icmp_rtt": 2
+      },
+      "vm_network": {
+        "vm_network_latency_summary": 6,
+        "vm_network_latency_details": 6,
+        "vm_network_performance_metrics": 6
+      }
+    }
+  }
+}

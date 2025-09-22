@@ -1,0 +1,175 @@
+{
+  "metadata": {
+    "description": "Linux kernel network stack eBPF testing parameter specification",
+    "source": "Generated from spec config: Linux Network Stack Test Specification",
+    "total_cases": 26,
+    "generated_at": "2025-09-22 12:09:38"
+  },
+  "test_cases": [
+    {
+      "id": 1,
+      "name": "packet_drop_eth_drop_rx_protocol_tcp",
+      "command": "sudo python2 ebpf-tools/packet-drop/eth_drop.py --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --protocol tcp",
+      "duration": 10
+    },
+    {
+      "id": 2,
+      "name": "packet_drop_eth_drop_tx_protocol_tcp",
+      "command": "sudo python2 ebpf-tools/packet-drop/eth_drop.py --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --protocol tcp",
+      "duration": 10
+    },
+    {
+      "id": 3,
+      "name": "packet_drop_eth_drop_rx_protocol_udp",
+      "command": "sudo python2 ebpf-tools/packet-drop/eth_drop.py --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --protocol udp",
+      "duration": 10
+    },
+    {
+      "id": 4,
+      "name": "packet_drop_eth_drop_tx_protocol_udp",
+      "command": "sudo python2 ebpf-tools/packet-drop/eth_drop.py --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --protocol udp",
+      "duration": 10
+    },
+    {
+      "id": 5,
+      "name": "packet_drop_eth_drop_rx_protocol_icmp",
+      "command": "sudo python2 ebpf-tools/packet-drop/eth_drop.py --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --protocol icmp",
+      "duration": 10
+    },
+    {
+      "id": 6,
+      "name": "packet_drop_eth_drop_tx_protocol_icmp",
+      "command": "sudo python2 ebpf-tools/packet-drop/eth_drop.py --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --protocol icmp",
+      "duration": 10
+    },
+    {
+      "id": 7,
+      "name": "packet_drop_kernel_drop_stack_stats_summary_all_rx_protocol_tcp",
+      "command": "sudo python2 ebpf-tools/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --protocol tcp",
+      "duration": 10
+    },
+    {
+      "id": 8,
+      "name": "packet_drop_kernel_drop_stack_stats_summary_all_tx_protocol_tcp",
+      "command": "sudo python2 ebpf-tools/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --protocol tcp",
+      "duration": 10
+    },
+    {
+      "id": 9,
+      "name": "packet_drop_kernel_drop_stack_stats_summary_all_rx_protocol_udp",
+      "command": "sudo python2 ebpf-tools/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --protocol udp",
+      "duration": 10
+    },
+    {
+      "id": 10,
+      "name": "packet_drop_kernel_drop_stack_stats_summary_all_tx_protocol_udp",
+      "command": "sudo python2 ebpf-tools/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --protocol udp",
+      "duration": 10
+    },
+    {
+      "id": 11,
+      "name": "packet_drop_kernel_drop_stack_stats_summary_all_rx_protocol_icmp",
+      "command": "sudo python2 ebpf-tools/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --protocol icmp",
+      "duration": 10
+    },
+    {
+      "id": 12,
+      "name": "packet_drop_kernel_drop_stack_stats_summary_all_tx_protocol_icmp",
+      "command": "sudo python2 ebpf-tools/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --protocol icmp",
+      "duration": 10
+    },
+    {
+      "id": 13,
+      "name": "packet_drop_qdisc_drop_trace_rx_protocol_tcp",
+      "command": "sudo python2 ebpf-tools/packet-drop/qdisc_drop_trace.py --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --protocol tcp",
+      "duration": 10
+    },
+    {
+      "id": 14,
+      "name": "packet_drop_qdisc_drop_trace_tx_protocol_tcp",
+      "command": "sudo python2 ebpf-tools/packet-drop/qdisc_drop_trace.py --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --protocol tcp",
+      "duration": 10
+    },
+    {
+      "id": 15,
+      "name": "packet_drop_qdisc_drop_trace_rx_protocol_udp",
+      "command": "sudo python2 ebpf-tools/packet-drop/qdisc_drop_trace.py --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --protocol udp",
+      "duration": 10
+    },
+    {
+      "id": 16,
+      "name": "packet_drop_qdisc_drop_trace_tx_protocol_udp",
+      "command": "sudo python2 ebpf-tools/packet-drop/qdisc_drop_trace.py --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --protocol udp",
+      "duration": 10
+    },
+    {
+      "id": 17,
+      "name": "packet_drop_qdisc_drop_trace_rx_protocol_icmp",
+      "command": "sudo python2 ebpf-tools/packet-drop/qdisc_drop_trace.py --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --protocol icmp",
+      "duration": 10
+    },
+    {
+      "id": 18,
+      "name": "packet_drop_qdisc_drop_trace_tx_protocol_icmp",
+      "command": "sudo python2 ebpf-tools/packet-drop/qdisc_drop_trace.py --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --protocol icmp",
+      "duration": 10
+    },
+    {
+      "id": 19,
+      "name": "conntrack_trace_conntrack_rx_protocol_tcp",
+      "command": "sudo python2 ebpf-tools/conntrack/trace_conntrack.py --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --protocol tcp",
+      "duration": 10
+    },
+    {
+      "id": 20,
+      "name": "conntrack_trace_conntrack_tx_protocol_tcp",
+      "command": "sudo python2 ebpf-tools/conntrack/trace_conntrack.py --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --protocol tcp",
+      "duration": 10
+    },
+    {
+      "id": 21,
+      "name": "conntrack_trace_conntrack_rx_protocol_udp",
+      "command": "sudo python2 ebpf-tools/conntrack/trace_conntrack.py --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --protocol udp",
+      "duration": 10
+    },
+    {
+      "id": 22,
+      "name": "conntrack_trace_conntrack_tx_protocol_udp",
+      "command": "sudo python2 ebpf-tools/conntrack/trace_conntrack.py --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --protocol udp",
+      "duration": 10
+    },
+    {
+      "id": 23,
+      "name": "conntrack_trace_conntrack_rx_protocol_icmp",
+      "command": "sudo python2 ebpf-tools/conntrack/trace_conntrack.py --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --protocol icmp",
+      "duration": 10
+    },
+    {
+      "id": 24,
+      "name": "conntrack_trace_conntrack_tx_protocol_icmp",
+      "command": "sudo python2 ebpf-tools/conntrack/trace_conntrack.py --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --protocol icmp",
+      "duration": 10
+    },
+    {
+      "id": 25,
+      "name": "ip_trace_ip_defrag_rx_protocol_udp",
+      "command": "sudo python2 ebpf-tools/ip/trace_ip_defrag.py --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --protocol udp",
+      "duration": 10
+    },
+    {
+      "id": 26,
+      "name": "ip_trace_ip_defrag_tx_protocol_udp",
+      "command": "sudo python2 ebpf-tools/ip/trace_ip_defrag.py --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --protocol udp",
+      "duration": 10
+    }
+  ],
+  "summary": {
+    "total_cases": 26,
+    "tools": {
+      "packet": 18,
+      "conntrack": 6,
+      "ip": 2
+    },
+    "parameters": {}
+  }
+}

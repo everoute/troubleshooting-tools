@@ -215,9 +215,6 @@ BPF_TABLE("lru_hash", struct packet_key_t, struct flow_data_t, flow_sessions, 10
 BPF_ARRAY(event_scratch_map, struct pkt_event, 1);
 BPF_PERCPU_ARRAY(flow_init_map, struct flow_data_t, 1);  // Per-cpu temp storage for initialization
 
-// Performance statistics
-BPF_ARRAY(probe_stats, u64, 32);          // Event counters for each probe point
-
 // Events output
 BPF_PERF_OUTPUT(events);
 
@@ -634,12 +631,6 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
         flow_sessions.delete(&key);
     }
     
-    // Update statistics
-    u32 stat_idx = stage_id %% 32;
-    u64 *counter = probe_stats.lookup(&stat_idx);
-    if (counter) {
-        (*counter)++;
-    }
 }
 
 // Socket layer helper for packet tracking without skb - WITH DIRECTION-AWARE FILTERING
@@ -838,12 +829,6 @@ int kprobe____ip_queue_xmit(struct pt_regs *ctx, struct sock *sk, struct sk_buff
 
     flow_sessions.update(&key, flow_ptr);
 
-    // Update statistics
-    u32 stat_idx = STG_IP_QUEUE_XMIT %% 32;
-    u64 *counter = probe_stats.lookup(&stat_idx);
-    if (counter) {
-        (*counter)++;
-    }
 
     return 0;
 }
@@ -1015,7 +1000,6 @@ int kprobe__tcp_v4_rcv(struct pt_regs *ctx, struct sk_buff *skb) {
         return 0;  // Skip if system_tx only
     }
     
-    // DEBUG: TCP receive info (debug output disabled to avoid format conflicts)
     
     handle_stage_event(ctx, skb, STG_TCP_UDP_RCV, 2);
     return 0;
@@ -1423,12 +1407,6 @@ Examples:
     print("Physical interface: %s (ifindex %d)" % (args.phy_interface, phy_ifindex))
     print("Conntrack measurement: %s" % ("ENABLED" if args.enable_ct else "DISABLED"))
     
-    # Debug parameter values
-    print("\nDebug: BPF parameters:")
-    print("  src_ip_hex=0x%x, dst_ip_hex=0x%x" % (src_ip_hex, dst_ip_hex))
-    print("  src_port=%d, dst_port=%d" % (src_port, dst_port))
-    print("  protocol_filter=%d, internal_ifindex=%d, phy_ifindex=%d, direction_filter=%d" % 
-          (protocol_filter, internal_ifindex, phy_ifindex, direction_filter))
     
     try:
         b = BPF(text=bpf_text % (

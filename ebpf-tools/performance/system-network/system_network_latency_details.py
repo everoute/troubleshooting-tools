@@ -210,6 +210,7 @@ static __always_inline void debug_key(struct pt_regs *ctx, struct packet_key_t *
 }
 
 // Helper function for interface debugging
+static __always_inline void increment_interface_debug(u32 idx) {
     u64 *val = interface_debug.lookup(&idx);
     if (val) {
         (*val)++;

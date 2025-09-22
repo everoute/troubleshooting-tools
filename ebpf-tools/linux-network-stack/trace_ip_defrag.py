@@ -31,9 +31,9 @@ import signal
 import traceback
 
 parser = argparse.ArgumentParser(description='Trace IP defragmentation events, focusing on duplicates.')
-parser.add_argument('--src', type=str, help='Source IP address to monitor (e.g., 192.168.1.1)')
-parser.add_argument('--dst', type=str, help='Destination IP address to monitor (e.g., 10.0.0.2)')
-parser.add_argument('--proto', type=str, help='Protocol to monitor (e.g., tcp, udp, icmp or number)')
+parser.add_argument('--src-ip', type=str, help='Source IP address to monitor (e.g., 192.168.1.1)')
+parser.add_argument('--dst-ip', type=str, help='Destination IP address to monitor (e.g., 10.0.0.2)')
+parser.add_argument('--protocol', type=str, help='Protocol to monitor (e.g., tcp, udp, icmp or number)')
 parser.add_argument('--log-file', type=str, help='Path to log file (if specified, output will be written to this file)')
 args = parser.parse_args()
 
@@ -77,9 +77,9 @@ def proto_to_int(proto_str):
         exit(1)
 
 # Resolve IPs and Protocol
-src_ip_int = ip_to_hex(args.src)
-dst_ip_int = ip_to_hex(args.dst)
-protocol_num = proto_to_int(args.proto)
+src_ip_int = ip_to_hex(args.src_ip)
+dst_ip_int = ip_to_hex(args.dst_ip)
+protocol_num = proto_to_int(args.protocol)
 
 # Pre-format values for BPF text substitution
 src_ip_hex_str = "0x{:x}".format(src_ip_int)

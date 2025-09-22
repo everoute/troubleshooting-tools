@@ -74,14 +74,34 @@ class ImprovedTestCaseGenerator:
 
         return resolved
 
-    def get_script_path(self, category, script):
-        """Get relative script path based on category and test config"""
-        if category == "system-network":
-            return f"ebpf-tools/performance/system-network/{script}"
-        elif category == "vm-network":
-            return f"ebpf-tools/performance/vm-network/{script}"
+    def get_script_path(self, category, tool):
+        """Get complete script path: topic_dir + tool_dir + script_name"""
+        # Get topic configuration from test_config
+        topic_config = None
+        for topic_name, config in self.test_config.get('topics', {}).items():
+            if topic_name == category:
+                topic_config = config
+                break
+
+        if not topic_config:
+            raise ValueError(f"Topic '{category}' not found in test config")
+
+        # Get topic directory (first entry in dirs list)
+        topic_dirs = topic_config.get('dirs', [])
+        if not topic_dirs:
+            raise ValueError(f"No dirs specified for topic '{category}'")
+
+        topic_dir = topic_dirs[0]  # Use first directory as base
+
+        # Get tool directory and script name
+        tool_dir = tool.get('dir', '')
+        script_name = tool.get('script', '')
+
+        # Construct complete path: topic_dir/tool_dir/script_name
+        if tool_dir:
+            return f"{topic_dir}/{tool_dir}/{script_name}"
         else:
-            return f"ebpf-tools/{script}"
+            return f"{topic_dir}/{script_name}"
 
     def generate_parameter_combinations(self, tool, filtered_directions):
         """Generate all parameter combinations for a tool with conditional support"""
@@ -92,7 +112,7 @@ class ImprovedTestCaseGenerator:
         # Extract all parameters that need expansion
         expandable_params = {}
 
-        # Add protocols if defined
+        # Add protocols if defined (backward compatibility)
         if 'protocols' in tool:
             expandable_params['protocol'] = tool['protocols']
 
@@ -221,7 +241,6 @@ class ImprovedTestCaseGenerator:
 
         # Generate cases for each tool
         for tool in tools:
-            script = tool['script']
 
             # Check if tool specifies specific directions to generate
             tool_directions = tool.get('directions', None)
@@ -249,7 +268,7 @@ class ImprovedTestCaseGenerator:
 
                 # Prepare variables for template resolution
                 variables = {
-                    'path': self.get_script_path(category, script),
+                    'path': self.get_script_path(category, tool),
                 }
 
                 # Add parameter values
@@ -264,7 +283,7 @@ class ImprovedTestCaseGenerator:
                 command = self.resolve_variables(template, variables, category)
 
                 # Generate case name
-                case_name = self.generate_case_name(script, param_dict)
+                case_name = self.generate_case_name(tool.get('script', ''), param_dict)
 
                 # Create test case
                 test_case = {

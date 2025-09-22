@@ -93,8 +93,8 @@ parser = argparse.ArgumentParser(
 parser.add_argument('--type', type=str, default='all',
                     help='Protocol type filter (arp|rarp|ipv4|ipv6|lldp|flow_control|other|0xXXXX|all)')
 parser.add_argument('--l4-protocol', type=str, choices=['all', 'icmp', 'tcp', 'udp'], default='all', help='L4 Protocol filter (TCP/UDP/ICMP)')
-parser.add_argument('--src', type=str, help='Source IP address filter')
-parser.add_argument('--dst', type=str, help='Destination IP address filter')
+parser.add_argument('--src-ip', type=str, help='Source IP address filter')
+parser.add_argument('--dst-ip', type=str, help='Destination IP address filter')
 parser.add_argument('--src-port', type=int, help='Source port filter (TCP/UDP)')
 parser.add_argument('--dst-port', type=int, help='Destination port filter (TCP/UDP)')
 parser.add_argument('--vlan-id', type=int, help='VLAN ID filter')
@@ -109,8 +109,8 @@ args = parser.parse_args()
 # Process arguments
 l4_protocol_map = {'all': 0, 'icmp': 1, 'tcp': 6, 'udp': 17}
 l4_protocol = l4_protocol_map.get(args.l4_protocol, 0)
-src_ip = args.src if args.src else "0.0.0.0"
-dst_ip = args.dst if args.dst else "0.0.0.0"
+src_ip = args.src_ip if args.src_ip else "0.0.0.0"
+dst_ip = args.dst_ip if args.dst_ip else "0.0.0.0"
 src_port = args.src_port if args.src_port else 0
 dst_port = args.dst_port if args.dst_port else 0
 vlan_filter = args.vlan_id if args.vlan_id else 0
@@ -771,9 +771,9 @@ def print_packet_event(cpu, data, size):
         op_str = {1: "Request", 2: "Reply"}.get(event.arp_op, "Unknown({})".format(event.arp_op))
         print("  Operation:     {}".format(op_str))
         print("  Sender MAC:    {}".format(format_mac_address(event.arp_sha)))
-        print("  Sender IP:     {}".format(format_ip_address(unpack('I', str(bytearray(event.arp_sip)))[0])))
+        print("  Sender IP:     {}".format(format_ip_address(unpack('I', bytes(bytearray(event.arp_sip)))[0])))
         print("  Target MAC:    {}".format(format_mac_address(event.arp_tha)))
-        print("  Target IP:     {}".format(format_ip_address(unpack('I', str(bytearray(event.arp_tip)))[0])))
+        print("  Target IP:     {}".format(format_ip_address(unpack('I', bytes(bytearray(event.arp_tip)))[0])))
         
     elif event.protocol_type == 4:  # RARP
         print("{}RARP PACKET".format(vlan_prefix))
@@ -783,9 +783,9 @@ def print_packet_event(cpu, data, size):
         op_str = {3: "Request", 4: "Reply"}.get(event.arp_op, "Unknown({})".format(event.arp_op))
         print("  Operation:     {}".format(op_str))
         print("  Sender MAC:    {}".format(format_mac_address(event.arp_sha)))
-        print("  Sender IP:     {}".format(format_ip_address(unpack('I', str(bytearray(event.arp_sip)))[0])))
+        print("  Sender IP:     {}".format(format_ip_address(unpack('I', bytes(bytearray(event.arp_sip)))[0])))
         print("  Target MAC:    {}".format(format_mac_address(event.arp_tha)))
-        print("  Target IP:     {}".format(format_ip_address(unpack('I', str(bytearray(event.arp_tip)))[0])))
+        print("  Target IP:     {}".format(format_ip_address(unpack('I', bytes(bytearray(event.arp_tip)))[0])))
         
     else:  # Other protocols
         print("{}OTHER PROTOCOL".format(vlan_prefix))

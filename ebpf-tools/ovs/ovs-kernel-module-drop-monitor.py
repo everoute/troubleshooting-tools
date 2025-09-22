@@ -37,16 +37,16 @@ OVS_CS_F_SRC_NAT = 0x40
 OVS_CS_F_DST_NAT = 0x80
 
 parser = argparse.ArgumentParser(description='Monitor OpenVSwitch deferred action drops')
-parser.add_argument('--src', type=str, help='Source IP address to monitor (in dotted decimal notation)')
-parser.add_argument('--dst', type=str, help='Destination IP address to monitor (in dotted decimal notation)')
+parser.add_argument('--src-ip', '--src', type=str, help='Source IP address to monitor (in dotted decimal notation)')
+parser.add_argument('--dst-ip', '--dst', type=str, help='Destination IP address to monitor (in dotted decimal notation)')
 parser.add_argument('--protocol', type=str, choices=['all', 'icmp', 'tcp', 'udp'], default='all', help='Protocol to monitor')
 parser.add_argument('--src-port', type=int, help='Source port to monitor (for TCP/UDP)')
 parser.add_argument('--dst-port', type=int, help='Destination port to monitor (for TCP/UDP)')
 args = parser.parse_args()
 
 # Default values for filters
-src_ip = args.src if args.src else "0.0.0.0"
-dst_ip = args.dst if args.dst else "0.0.0.0"
+src_ip = args.src_ip if args.src_ip else "0.0.0.0"
+dst_ip = args.dst_ip if args.dst_ip else "0.0.0.0"
 src_port = args.src_port if args.src_port else 0
 dst_port = args.dst_port if args.dst_port else 0
 

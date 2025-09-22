@@ -21,32 +21,35 @@ test_matrix:
     duration: 10
     tools:
       # eth_drop.py - 支持协议和方向
-      - script: "packet-drop/eth_drop.py"
-        template: "sudo python2 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --protocol {protocol}"
+      - dir: "packet-drop"
+        script: "eth_drop.py"
+        template: "sudo python3 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --l4-protocol {protocol}"
         parameters:
           protocol: ["tcp", "udp", "icmp"]
 
       # kernel_drop_stack_stats_summary_all.py - 支持协议和方向
-      - script: "packet-drop/kernel_drop_stack_stats_summary_all.py"
-        template: "sudo python2 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --protocol {protocol}"
+      - dir: "packet-drop"
+        script: "kernel_drop_stack_stats_summary_all.py"
+        template: "sudo python3 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --l4-protocol {protocol}"
         parameters:
           protocol: ["tcp", "udp", "icmp"]
 
-      # qdisc_drop_trace.py - 支持协议和方向
-      - script: "packet-drop/qdisc_drop_trace.py"
-        template: "sudo python2 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --protocol {protocol}"
-        parameters:
-          protocol: ["tcp", "udp", "icmp"]
+      # qdisc_drop_trace.py - 无IP/协议过滤参数
+      - dir: "packet-drop"
+        script: "qdisc_drop_trace.py"
+        template: "sudo python3 {path}"
 
       # trace_conntrack.py - 支持协议和方向
-      - script: "conntrack/trace_conntrack.py"
-        template: "sudo python2 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --protocol {protocol}"
+      - dir: ""
+        script: "trace_conntrack.py"
+        template: "sudo python3 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --protocol {protocol}"
         parameters:
           protocol: ["tcp", "udp", "icmp"]
 
       # trace_ip_defrag.py - 仅UDP协议，支持方向
-      - script: "ip/trace_ip_defrag.py"
-        template: "sudo python2 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --protocol {protocol}"
+      - dir: ""
+        script: "trace_ip_defrag.py"
+        template: "sudo python3 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --protocol {protocol}"
         parameters:
           protocol: ["udp"]
 

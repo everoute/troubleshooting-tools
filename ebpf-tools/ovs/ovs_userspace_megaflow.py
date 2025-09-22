@@ -1031,9 +1031,10 @@ def parse_arguments():
     parser.add_argument('--eth-src', type=str, help='Filter by ethernet source MAC (e.g., aa:bb:cc:dd:ee:ff)')
     parser.add_argument('--eth-dst', type=str, help='Filter by ethernet destination MAC (e.g., aa:bb:cc:dd:ee:ff)')
     parser.add_argument('--eth-type', type=str, help='Filter by ethernet type (e.g., 0x0800 for IPv4)')
-    parser.add_argument('--ip-src', type=str, help='Filter by IP source address (e.g., 192.168.1.1)')
-    parser.add_argument('--ip-dst', type=str, help='Filter by IP destination address (e.g., 192.168.1.1)')
+    parser.add_argument('--src-ip', '--ip-src', type=str, help='Filter by IP source address (e.g., 192.168.1.1)')
+    parser.add_argument('--dst-ip', '--ip-dst', type=str, help='Filter by IP destination address (e.g., 192.168.1.1)')
     parser.add_argument('--ip-proto', type=int, help='Filter by IP protocol (e.g., 6 for TCP, 17 for UDP)')
+    parser.add_argument('--protocol', type=str, choices=['tcp', 'udp', 'icmp', 'all'], help='Filter by protocol (tcp, udp, icmp, all)')
     parser.add_argument('--l4-src-port', type=int, help='Filter by L4 source port (e.g., 80, 443)')
     parser.add_argument('--l4-dst-port', type=int, help='Filter by L4 destination port (e.g., 80, 443)')
     
@@ -1048,9 +1049,14 @@ def configure_filters(args):
     FILTER_CONFIG.eth_src = args.eth_src
     FILTER_CONFIG.eth_dst = args.eth_dst
     FILTER_CONFIG.eth_type = int(args.eth_type, 0) if args.eth_type else None
-    FILTER_CONFIG.ip_src = unpack('>I', inet_pton(AF_INET, args.ip_src))[0] if args.ip_src else None
-    FILTER_CONFIG.ip_dst = unpack('>I', inet_pton(AF_INET, args.ip_dst))[0] if args.ip_dst else None
-    FILTER_CONFIG.ip_proto = args.ip_proto
+    FILTER_CONFIG.ip_src = unpack('>I', inet_pton(AF_INET, args.src_ip))[0] if args.src_ip else None
+    FILTER_CONFIG.ip_dst = unpack('>I', inet_pton(AF_INET, args.dst_ip))[0] if args.dst_ip else None
+    # Handle protocol conversion from string to numeric
+    if args.protocol:
+        protocol_map = {'tcp': 6, 'udp': 17, 'icmp': 1, 'all': None}
+        FILTER_CONFIG.ip_proto = protocol_map.get(args.protocol.lower())
+    else:
+        FILTER_CONFIG.ip_proto = args.ip_proto
     FILTER_CONFIG.l4_src_port = args.l4_src_port
     FILTER_CONFIG.l4_dst_port = args.l4_dst_port
     

@@ -541,7 +541,7 @@ Examples:
                         help='Source port filter (TCP/UDP)')
     parser.add_argument('--dst-port', type=int, required=False,
                         help='Destination port filter (TCP/UDP)')
-    parser.add_argument('--proto', type=str, choices=['tcp', 'udp', 'icmp', 'all'], 
+    parser.add_argument('--protocol', '--proto', type=str, choices=['tcp', 'udp', 'icmp', 'all'],
                         default='all', help='Protocol filter (default: all)')
     parser.add_argument('--interval', type=int, default=5,
                         help='Statistics output interval in seconds (default: 5)')
@@ -555,10 +555,10 @@ Examples:
     dst_port = args.dst_port if args.dst_port else 0
     
     protocol_map = {'tcp': 6, 'udp': 17, 'icmp': 1, 'all': 0}
-    protocol_filter = protocol_map[args.proto]
+    protocol_filter = protocol_map[args.protocol]
     
     print("=== OVS Upcall Latency Histogram Tool ===")
-    print("Protocol filter: %s" % args.proto.upper())
+    print("Protocol filter: %s" % args.protocol.upper())
     if args.src_ip:
         print("Source IP filter: %s" % args.src_ip)
     if args.dst_ip:

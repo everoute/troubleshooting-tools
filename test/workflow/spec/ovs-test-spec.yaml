@@ -16,23 +16,26 @@ variables:
 # 测试矩阵定义
 test_matrix:
   ovs:
-    duration: 8
+    duration: 10
     tools:
       # ovs_upcall_latency_summary.py - 支持协议和方向
-      - script: "ovs_upcall_latency_summary.py"
-        template: "sudo python2 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --protocol {protocol}"
+      - dir: ""
+        script: "ovs_upcall_latency_summary.py"
+        template: "sudo python3 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --protocol {protocol}"
         parameters:
           protocol: ["tcp", "udp", "icmp"]
 
       # ovs_userspace_megaflow.py - 支持协议和方向
-      - script: "ovs_userspace_megaflow.py"
-        template: "sudo python2 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --protocol {protocol}"
+      - dir: ""
+        script: "ovs_userspace_megaflow.py"
+        template: "sudo python3 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --protocol {protocol}"
         parameters:
           protocol: ["tcp", "udp", "icmp"]
 
       # ovs-kernel-module-drop-monitor.py - 支持协议和方向
-      - script: "ovs-kernel-module-drop-monitor.py"
-        template: "sudo python2 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --protocol {protocol}"
+      - dir: ""
+        script: "ovs-kernel-module-drop-monitor.py"
+        template: "sudo python3 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --protocol {protocol}"
         parameters:
           protocol: ["tcp", "udp", "icmp"]
 
@@ -45,5 +48,5 @@ test_matrix:
         DST_IP: "{REMOTE_IP}"
 
 defaults:
-  duration: 8
+  duration: 10
   use_sudo: true

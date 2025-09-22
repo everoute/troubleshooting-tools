@@ -142,15 +142,15 @@ def sync_code_to_remote(config, topic, force_copy=True):
     print("=== Code synchronization completed ===\n")
     return True
 
-def sync_single_file_to_remote(script_name, config, topic, force_copy=True):
+def sync_single_file_to_remote(script_relative_path, config, topic, force_copy=True):
     """Sync a single script file to remote workdir"""
     print(f"\n=== Syncing single file to remote host {config.remote_host} ===")
 
     # Find the script file
-    local_script_path, local_dir = find_script_file(script_name, config, topic)
+    local_script_path, local_dir = find_script_file(script_relative_path, config, topic)
 
     if not local_script_path:
-        print(f"Error: Script file not found: {script_name}")
+        print(f"Error: Script file not found: {script_relative_path}")
         return False
 
     print(f"Found script: {local_script_path}")
@@ -171,6 +171,7 @@ def sync_single_file_to_remote(script_name, config, topic, force_copy=True):
         return False
 
     # Copy the single file
+    script_name = os.path.basename(script_relative_path)
     remote_script_path = f"{remote_dir}/{script_name}"
     print(f"Copying {local_script_path} to {remote_script_path}")
 
@@ -190,18 +191,26 @@ def sync_single_file_to_remote(script_name, config, topic, force_copy=True):
     if chmod_result.returncode != 0:
         print(f"Warning: Failed to make script executable: {chmod_result.stderr}")
 
-    print(f"Successfully synced {script_name}")
+    print(f"Successfully synced {script_relative_path}")
     print("=== File synchronization completed ===\n")
     return True
 
-def find_script_file(script_name, config, topic):
-    """Find the local path of a script file"""
-    local_dirs = config.get_local_dirs(topic)
+def find_script_file(script_relative_path, config, topic):
+    """Find the local path of a script file given its relative path"""
+    # script_relative_path is like "ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py"
+    # We need to find the actual local file
 
-    for local_dir in local_dirs:
-        script_path = os.path.join(local_dir, script_name)
-        if os.path.exists(script_path):
-            return script_path, local_dir
+    if os.path.exists(script_relative_path):
+        # Direct path exists
+        return script_relative_path, os.path.dirname(script_relative_path)
+
+    # The relative path might start with the topic directory, so check if the file exists
+    # in the current working directory structure
+    if script_relative_path.startswith('ebpf-tools/'):
+        # Try to find the file in the current directory structure
+        local_path = script_relative_path
+        if os.path.exists(local_path):
+            return local_path, os.path.dirname(local_path)
 
     return None, None
 
@@ -277,12 +286,12 @@ def generate_case_name(command):
 
     return '_'.join(case_parts)
 
-def extract_script_name_from_command(command):
-    """Extract the script name from a test command"""
+def extract_script_path_from_command(command):
+    """Extract the full script path from a test command"""
     parts = command.split()
     for part in parts:
         if part.endswith('.py'):
-            return os.path.basename(part)
+            return part
     return None
 
 def run_single_test(test_command, case_name, results_dir, config, topic, duration=10):
@@ -293,27 +302,16 @@ def run_single_test(test_command, case_name, results_dir, config, topic, duratio
     # Initialize executor
     executor = BPFRemoteExecutor(config.remote_host, config.remote_user)
 
-    # Extract workspace from the command - check script names
-    if 'system_network_' in test_command:
-        workspace = f"{config.remote_workdir}/ebpf-tools/performance/system-network"
-    elif 'vm_network_' in test_command:
-        workspace = f"{config.remote_workdir}/ebpf-tools/performance/vm-network"
-    else:
-        workspace = config.remote_workdir
+    # Use the remote workdir as workspace - scripts contain full relative paths
+    workspace = config.remote_workdir
 
-    # Clean up the command to remove the full path and sudo
+    # Clean up the command to remove sudo but keep full relative paths
     command_parts = test_command.split()
     clean_command_parts = []
 
     for part in command_parts:
         if part == 'sudo':
             continue
-        elif part == 'python3':
-            clean_command_parts.append(part)
-        elif part.endswith('.py'):
-            # Extract just the script name from any path (absolute or relative)
-            script_name = os.path.basename(part)
-            clean_command_parts.append(script_name)
         else:
             clean_command_parts.append(part)
 
@@ -438,13 +436,13 @@ def run_tests(config, topic=None, case_numbers=None, no_copy=False, force_copy=T
             # Single case: sync only the specific script file
             _, test_case = filtered_cases[0]
             test_command = test_case.get('command', test_case) if isinstance(test_case, dict) else test_case
-            script_name = extract_script_name_from_command(test_command)
-            if script_name:
-                if not sync_single_file_to_remote(script_name, config, target_topic, force_copy):
+            script_path = extract_script_path_from_command(test_command)
+            if script_path:
+                if not sync_single_file_to_remote(script_path, config, target_topic, force_copy):
                     print("File synchronization failed. Exiting.")
                     sys.exit(1)
             else:
-                print("Warning: Could not extract script name from command. Skipping file sync.")
+                print("Warning: Could not extract script path from command. Skipping file sync.")
         else:
             # Multiple cases or full run: sync all directories
             if not sync_code_to_remote(config, target_topic, force_copy):

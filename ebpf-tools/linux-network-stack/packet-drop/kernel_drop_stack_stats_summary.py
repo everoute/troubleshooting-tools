@@ -342,8 +342,8 @@ def main():
                         help="number of top stacks to show (default: 5)")
     parser.add_argument("-n", "--name", type=str, default="",
                         help="filter by device name (e.g., eth0, br-int)")
-    parser.add_argument("--src", type=str, help="source IP address filter")
-    parser.add_argument("--dst", type=str, help="destination IP address filter")
+    parser.add_argument("--src-ip", type=str, help="source IP address filter")
+    parser.add_argument("--dst-ip", type=str, help="destination IP address filter")
     parser.add_argument("--src-port", type=int, help="source port filter (TCP/UDP)")
     parser.add_argument("--dst-port", type=int, help="destination port filter (TCP/UDP)")
     parser.add_argument("--l4-protocol", type=str, choices=['all', 'icmp', 'tcp', 'udp'], 
@@ -353,8 +353,8 @@ def main():
     # Process five-tuple arguments
     l4_protocol_map = {'all': 0, 'icmp': 1, 'tcp': 6, 'udp': 17}
     l4_protocol = l4_protocol_map.get(args.l4_protocol, 0)
-    src_ip_hex = ip_to_hex(args.src) if args.src else 0
-    dst_ip_hex = ip_to_hex(args.dst) if args.dst else 0
+    src_ip_hex = ip_to_hex(args.src_ip) if args.src_ip else 0
+    dst_ip_hex = ip_to_hex(args.dst_ip) if args.dst_ip else 0
     src_port = args.src_port if args.src_port else 0
     dst_port = args.dst_port if args.dst_port else 0
     
@@ -366,10 +366,10 @@ def main():
     filters = []
     if args.name:
         filters.append("device: %s" % args.name)
-    if args.src:
-        filters.append("src IP: %s" % args.src)
-    if args.dst:
-        filters.append("dst IP: %s" % args.dst)
+    if args.src_ip:
+        filters.append("src IP: %s" % args.src_ip)
+    if args.dst_ip:
+        filters.append("dst IP: %s" % args.dst_ip)
     if args.src_port:
         filters.append("src port: %d" % args.src_port)
     if args.dst_port:

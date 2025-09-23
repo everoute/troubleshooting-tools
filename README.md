@@ -220,6 +220,7 @@ When adding new tools:
 使用 performance 目录下的工具进行系统级和虚拟机网络性能分析，包括延迟测量、CPU 绑定优化等。
 
 ### 本工具集合针对的对象
+
 1. **非研发**：按照说明采集日志，交研发人员进一步分析
 2. **研发**：根据特定问题确定追踪参数，提供完整命令给售后或自行执行
 
@@ -228,8 +229,9 @@ When adding new tools:
 - 输出默认到 stdout，使用重定向进行日志记录
 - 工具针对虚拟化环境设计，监控 tun 接口, ovs internal port, 物理接口等
 - 在生产环境中使用时考虑性能影响
-- 内核/userspace 程序调用栈追踪需要正确的符号解析: 需要安装相应 debuginfo
+- 内核/userspace 程序调用栈追踪需要正确的符号解析: 需要安装相应 kernel-debuginfo
 
-## 用户手册                                                                                                                                                                                                                  
-                                                                                                                                                                                                                             
-docs/user-manual.md                  
+## 用户手册
+
+docs/user-manual.md
+

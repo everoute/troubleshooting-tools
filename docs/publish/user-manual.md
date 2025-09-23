@@ -444,26 +444,19 @@ sudo python3 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py \
   --interface eth0 --verbose
 ```
 
-**kernel_drop_stack_stats_summary.py** - 内核丢包栈统计
+**kernel_drop_stack_stats_summary_all.py** - 内核丢包栈统计
 ```bash
 # 内核丢包栈统计分析
-sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary.py \
+sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py \
   --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --l4-protocol tcp
 
 # 详细栈统计（指定设备和时间间隔）
-sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary.py \
+sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py \
   --interval 5 --duration 60 --top 10 \
   --device br-int --src-ip 10.0.0.100 --l4-protocol tcp
 ```
 
-**kernel_drop_stack_stats_summary_all.py** - 增强型丢包统计
-```bash
-# 全面的内核丢包统计
-sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py \
-  --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --l4-protocol udp
-```
-
-**qdisc_drop_trace.py** - 队列规则丢包跟踪
+**qdisc_drop_trace.py** - 队列规则丢包跟踪 (当前版本仅 kernel 4.19)
 ```bash
 # 队列规则丢包监控
 sudo python3 ebpf-tools/linux-network-stack/packet-drop/qdisc_drop_trace.py

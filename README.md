@@ -98,63 +98,6 @@ git clone <repository-url>
 cd troubleshooting-tools
 ```
 
-## Usage Examples
-
-### Packet Drop Analysis
-Monitor packet drops for specific connections:
-```bash
-# Monitor TCP drops for specific connection
-sudo ./bcc-tools/packet-drop/multi-protocol-drop-monitor.py \
-    --src 192.168.1.10 --dst 192.168.1.20 --protocol tcp --dst-port 443
-
-# Monitor all protocol drops
-sudo ./bcc-tools/packet-drop/drop.py
-```
-
-### Network Latency Measurement
-Measure network latency at various layers:
-```bash
-# System network ICMP latency
-sudo ./bcc-tools/performance/system-network/icmp_rtt_latency.py \
-    --src-ip 192.168.1.10 --dst-ip 192.168.1.20 \
-    --phy-iface1 eth0 --phy-iface2 eth1
-
-# VM network latency
-sudo ./bcc-tools/performance/vm-network/vm_latency.py \
-    --src-ip 192.168.1.10 --dst-ip 192.168.1.20 \
-    --vm-interface vnet0 --phy-interface eth0 --direction tx
-```
-
-### OVS Analysis
-Monitor OVS operations:
-```bash
-# OVS upcall monitoring
-sudo ./bcc-tools/ovs-measurement/ovs-upcall-execute.py
-
-# OVS megaflow analysis
-sudo ./bcc-tools/ovs-measurement/ovs_userspace_megaflow.py --debug
-```
-
-### CPU Performance Analysis
-Monitor CPU-related performance issues:
-```bash
-# Off-CPU time analysis
-sudo ./bcc-tools/cpu-measurement/offcputime-ts.py
-
-# Scheduler latency monitoring
-sudo ./bcc-tools/cpu-measurement/sched_latency_monitor.sh
-```
-
-### Bpftrace Scripts
-Use bpftrace for quick analysis:
-```bash
-# Trace abnormal ARP events
-sudo bpftrace bpftrace-tools/trace-abnormal-arp.bt
-
-# Monitor OVS connection tracking issues
-sudo bpftrace bpftrace-tools/trace-ovs-ct-invalid.bt
-```
-
 ## Network Architecture
 
 This toolset is designed for virtualized network environments with the following architecture:
@@ -192,11 +135,6 @@ sudo ./tool-name --options | tee output.log
 3. **Symbol Resolution**: Ensure kernel debug symbols are installed
 4. **Interface Not Found**: Verify interface names and indices
 
-### Debug Mode
-Many tools support debug mode for detailed output:
-```bash
-sudo ./tool-name --debug
-```
 
 ## Contributing
 
@@ -229,3 +167,6 @@ When adding new tools:
 - 工具针对虚拟化环境设计，监控 tun 接口, ovs internal port, 物理接口等
 - 在生产环境中使用时考虑性能影响
 - 内核/userspace 程序调用栈追踪需要正确的符号解析: 需要安装相应 debuginfo
+
+## 文档
+用户手册见： docs/user-manual.md

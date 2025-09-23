@@ -21,7 +21,7 @@ ebpf-tools/
 └── performance/                     # 网络性能监控
     ├── system-network/              # 系统级网络性能
     └── vm-network/                  # 虚拟机专用网络性能
-        └── vm_pair_latency/         # 虚拟机间延迟监控
+        └── vm_pair_latency/         # 同节点虚拟机间延迟监控
 ```
 
 ## 2. 模块特定工具详情
@@ -1414,7 +1414,7 @@ Virtio-net 中断: 2,345
 - **直方图**: 使用 ASCII 字符绘制的分布图
 
 #### 4.7.4 错误和异常信息
-- **丢包原因**: `NETDEV_DROP_REASON_*` 常量
+- **返回值**: 特定函数返回值常量
 - **栈跟踪**: 函数名+偏移量 格式
 - **错误码**: BPF 程序加载错误信息
 
@@ -1519,40 +1519,9 @@ Virtio-net 中断: 2,345
      --device tun0
    ```
 
-### 5.2 性能优化建议
+### 5.2 监控最佳实践
 
-#### 5.2.1 系统级优化
-
-**CPU 亲和性优化**:
-```bash
-# 监控 CPU 利用率和调度延迟
-sudo ./ebpf-tools/cpu/cpu_monitor.sh
-sudo ./ebpf-tools/cpu/sched_latency_monitor.sh --interval 1 --duration 60
-
-# off-CPU 时间分析
-sudo python3 ebpf-tools/cpu/offcputime-ts.py
-```
-
-**网络队列优化**:
-- 调整 RX/TX 队列数量匹配 CPU 核数
-- 优化中断合并参数
-- 启用 NAPI 轮询模式
-
-#### 5.2.2 虚拟化优化
-
-**vhost-net 优化**:
-- 使用多队列 virtio-net
-- 优化 vhost worker 线程数
-- 调整 eventfd 通知机制
-
-**DPDK 集成**:
-- 考虑使用 DPDK vhost-user
-- 启用 SR-IOV 直通
-- 优化内存大页配置
-
-### 5.3 监控最佳实践
-
-#### 5.3.1 生产环境监控
+#### 5.2.1 生产环境监控
 
 **性能影响最小化**:
 ```bash
@@ -1565,12 +1534,12 @@ sudo python3 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py \
   --no-stack-trace
 ```
 
-**分阶段监控**:
-1. **基线性能采集** (5-10分钟)
-2. **问题时段详细分析** (1-2分钟)
-3. **持续监控和报警**
+**分层测量**:
+1. **基线性能采集** : 使用若干问题域/模块的 summary 版本测量工具，获取问题初筛结果，确定需要做精细 detail 信息测量的范围，即如何进一步过滤
+2. **问题时段详细分析** : 部署特定问题域的 details 版测量工具，使用 summary 筛查结果作为过滤器，进一步减小对 workload 影响
+3. **持续监控和报警** : 合理设计的 summary metric ， histogram 形式统计， 部署关键模块，核心指标测量。 
 
-#### 5.3.2 数据分析工作流
+#### 5.2.2 数据分析工作流
 
 **数据收集**:
 ```bash
@@ -1586,9 +1555,9 @@ sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py \
 2. 将丢包事件与网络流量关联
 3. 将虚拟化指标与客户机性能关联
 
-### 5.4 故障排查检查单
+### 5.3 故障排查检查单
 
-#### 5.4.1 网络延迟高检查单
+#### 5.3.1 网络延迟高检查单
 
 □ **基础检查**
 - [ ] 检查系统 CPU 利用率
@@ -1598,18 +1567,18 @@ sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py \
 □ **网络栈分析**
 - [ ] 使用 system_network_latency_details.py 分析各阶段延迟
 - [ ] 检查 OVS upcall 延迟
-- [ ] 分析 virtio-net 处理延迟
+- [ ] 分析 virtio-net 中断处理，vring 信息统计
 
 □ **虚拟化检查**
-- [ ] 检查 vhost-net 队列关联
+- [ ] 检查 vhost-net 线程详情，关联 tun 队列 && virtio-net 队列详情
 - [ ] 分析 virtio-net 中断合并
 - [ ] 检查 TUN/TAP 环形缓冲区
 
-#### 5.4.2 网络丢包检查单
+#### 5.3.2 网络丢包检查单
 
 □ **丢包检测**
-- [ ] 使用 eth_drop.py 检测基本丢包
-- [ ] 使用 kernel_drop_stack_stats_summary_all.py 分析详细丢包栈
+- [ ] 使用 eth_drop.py 检测丢包详情全量信息
+- [ ] 使用 kernel_drop_stack_stats_summary_all.py 分析详细丢包栈, 分层按流量/dev 等聚合的丢包 rootcause 统计
 - [ ] 检查 qdisc 队列丢包
 
 □ **丢包原因分析**
@@ -1620,10 +1589,10 @@ sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py \
 
 □ **OVS 相关检查**
 - [ ] 检查 OVS 数据路径丢包
-- [ ] 分析 megaflow 命中率
-- [ ] 检查 flow table 状态
+- [ ] 分析 megaflow 生命周期
+- [ ] 检查 kernel megaflow table 表项状态更新
 
-#### 5.4.3 虚拟化性能检查单
+#### 5.3.3 虚拟化性能检查单
 
 □ **vhost-net 检查**
 - [ ] 检查 vhost worker 线程 CPU 亲和性
@@ -1640,9 +1609,9 @@ sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py \
 - [ ] 分析 GSO/TSO 卸载状态
 - [ ] 检查设备队列映射
 
-### 5.5 常见错误和解决方案
+### 5.4 常见错误和解决方案
 
-#### 5.5.1 BPF 程序加载失败
+#### 5.4.1 BPF 程序加载失败
 
 **错误信息**: `bpf: Failed to load program: Permission denied`
 
@@ -1651,7 +1620,7 @@ sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py \
 2. 检查内核版本是否支持 BPF
 3. 检查 BCC 安装是否完整
 
-#### 5.5.2 程序挂起
+#### 5.4.2 程序挂起
 
 **错误信息**: `Cannot attach to function: No such file or directory`
 
@@ -1660,7 +1629,7 @@ sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py \
 2. 检查函数名是否正确
 3. 检查内核模块是否加载
 
-#### 5.5.3 数据采集异常
+#### 5.4.3 数据采集异常
 
 **现象**: 无数据或数据不完整
 
@@ -1676,14 +1645,13 @@ sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py \
 #### 6.1.1 基本要求
 - **内核版本**: Linux 内核 4.19.90+ （推荐 openEuler 20.03 LTS 或更高版本）
 - **BPF 支持**: 内核必须编译启用 CONFIG_BPF=y, CONFIG_BPF_SYSCALL=y
-- **调试信息**: 推荐安装内核调试符号包 (kernel-debuginfo)
 - **权限要求**: 所有 eBPF 工具需要 root 权限执行
+- **安装包要求**: 所有 eBPF 工具运行需要安装 kernel-devel && kernel-header , 此外推荐安装内核调试符号包 (kernel-debuginfo)
 
 #### 6.1.2 依赖组件
 - **BCC 工具链**: BPF Compiler Collection 0.18.0+
-- **bpftrace**: bpftrace 0.11.0+
+- **bpftrace**: bpftrace 0.10.0+
 - **Python 环境**: Python 3.6+ （支持 Python 2.7 兼容）
-- **系统工具**: iproute2, ethtool
 
 #### 6.1.3 内核配置验证
 ```bash
@@ -1707,19 +1675,20 @@ bpftrace --version
 #### 6.2.1 虚拟化环境
 - **Hypervisor**: KVM/QEMU 4.0+
 - **虚拟网卡**: virtio-net 驱动
-- **网络后端**: vhost-net 或 vhost-user
-- **多队列支持**: 推荐启用 virtio-net 多队列
+- **网络后端**: vhost-net  
+- **多队列支持**: 启用 virtio-net 多队列 && vhost-net 多线程
 
 #### 6.2.2 网络环境
-- **网络交换机**: Open vSwitch 2.10+ 或 Linux Bridge
+- **虚拟网络**: Open vSwitch 2.13+ 或 Linux Bridge
 - **网络协议**: 支持 TCP/UDP/ICMP IPv4/IPv6
 - **VLAN 支持**: 802.1Q VLAN 标签
+- **Conntrace 支持**: 协议栈 conntrack 模块
 - **流量控制**: TC (Traffic Control) qdisc 支持
 
 #### 6.2.3 操作系统支持
 - **主要支持**: openEuler 20.03 LTS+
 - **测试支持**: CentOS 7+, Ubuntu 18.04+, RHEL 8+
-- **内核版本**: 4.19.90 为主要适配目标
+- **内核版本**: 4.19.90 && tecentos tls 5.4 && 5.10 为主要适配目标
 
 ### 6.3 安装部署步骤
 
@@ -1732,7 +1701,7 @@ sudo yum install -y bcc-tools python3-bcc
 sudo yum install -y bpftrace
 
 # 安装其他依赖
-sudo yum install -y kernel-debuginfo iproute2 ethtool
+sudo yum install -y kernel-devel-$(uname -r) kernel-header-$(uname -r) 
 
 # 克隆项目
 git clone https://github.com/your-org/troubleshooting-tools.git
@@ -1745,13 +1714,13 @@ cd troubleshooting-tools
 sudo apt update
 
 # 安装 BCC
-sudo apt install -y bpfcc-tools python3-bpfcc
+sudo apt install -y bcc-tools python3-bcc
 
 # 安装 bpftrace
 sudo apt install -y bpftrace
 
 # 安装其他依赖
-sudo apt install -y linux-tools-$(uname -r) iproute2 ethtool
+sudo apt install -y kernel-devel-$(uname -r) kernel-header-$(uname -r) 
 
 # 克隆项目
 git clone https://github.com/echkenluo/troubleshooting-tools.git
@@ -1762,6 +1731,8 @@ cd troubleshooting-tools
 ```bash
 # 测试基本 BPF 功能
 sudo python3 -c "from bcc import BPF; print('BCC import successful')"
+# oe 系统上
+sudo python3 -c "from bpfcc import BPF; print('BCC import successful')"
 
 # 测试简单 eBPF 程序
 sudo bpftrace -e 'BEGIN { printf("bpftrace is working\\n"); exit(); }'
@@ -1866,15 +1837,15 @@ sudo perf report
 | 5.4.x | 支持 | 所有功能可用 |
 | 5.10.x LTS | 支持 | 推荐使用 |
 | 4.18.x | 部分支持 | 部分新特性不可用 |
-| < 4.18 | 不支持 | BPF 功能不完整 |
+| < 4.18 | 不支持(redhat 系系统部分工具支持) | BPF 功能不完整，仅 redhat 系部分支持 |
 
 #### 6.6.2 工具版本支持
 
 | 组件 | 最低版本 | 推荐版本 | 说明 |
 |------|----------|----------|------|
-| BCC | 0.18.0 | 0.25.0+ | 较新版本性能更好 |
-| bpftrace | 0.11.0 | 0.16.0+ | 支持更多语言特性 |
-| Python | 3.6 | 3.8+ | 推荐使用 Python 3 |
+| BCC | 0.15.0 | 0.25.0+ | 较新版本更好 |
+| bpftrace | 0.10.0 | 0.16.0+ | 支持更多语言特性,部分实现优化 |
+| Python | 2.7 | 3.8+ | 推荐使用 Python 3, 依赖 package: python-bcc 或 python3-bcc，oe 系统 python3-bcc |
 | LLVM | 6.0 | 12.0+ | 更好的 BPF 编译支持 |
 
 该项目为虚拟化环境的网络性能监控和故障排查提供了全面的 eBPF 工具集，通过合理的部署和使用，可以有效提升网络问题诊断的效率和准确性。

@@ -1,0 +1,376 @@
+#!/usr/bin/bpftrace
+
+#include <linux/tcp.h>
+#include <linux/ip.h>
+#include <linux/icmp.h>
+#include <linux/virtio.h>
+#include <linux/virtio_net.h>
+#include <linux/netdevice.h>
+#include <linux/workqueue.h>
+#include <linux/types.h>
+#include <net/net_failover.h>
+
+struct ewma_pkt_len {
+	unsigned long internal;
+};	
+
+struct virtnet_stat_desc {
+	char desc[ETH_GSTRING_LEN];
+	size_t offset;
+};
+
+struct virtnet_sq_stats {
+	struct u64_stats_sync syncp;
+	u64 packets;
+	u64 bytes;
+	u64 xdp_tx;
+	u64 xdp_tx_drops;
+	u64 kicks;
+};
+
+struct virtnet_rq_stats {
+	struct u64_stats_sync syncp;
+	u64 packets;
+	u64 bytes;
+	u64 drops;
+	u64 xdp_packets;
+	u64 xdp_tx;
+	u64 xdp_redirects;
+	u64 xdp_drops;
+	u64 kicks;
+};
+
+/* Internal representation of a send virtqueue */
+struct send_queue {
+	/* Virtqueue associated with this send _queue */
+	struct virtqueue *vq;
+
+	/* TX: fragments + linear part + virtio header */
+	struct scatterlist sg[MAX_SKB_FRAGS + 2];
+
+	/* Name of the send queue: output.$index */
+	char name[40];
+
+	struct virtnet_sq_stats stats;
+
+	struct napi_struct napi;
+};
+
+/* Internal representation of a receive virtqueue */
+struct receive_queue {
+	/* Virtqueue associated with this receive_queue */
+	struct virtqueue *vq;
+
+	struct napi_struct napi;
+
+	struct bpf_prog __rcu *xdp_prog;
+
+	struct virtnet_rq_stats stats;
+
+	/* Chain pages by the private ptr. */
+	struct page *pages;
+
+	/* Average packet length for mergeable receive buffers. */
+	struct ewma_pkt_len mrg_avg_pkt_len;
+
+	/* Page frag for packet buffer allocation. */
+	struct page_frag alloc_frag;
+
+	/* RX: fragments + linear part + virtio header */
+	struct scatterlist sg[MAX_SKB_FRAGS + 2];
+
+	/* Min single buffer size for mergeable buffers case. */
+	unsigned int min_buf_len;
+
+	/* Name of this receive queue: input.$index */
+	char name[40];
+
+	struct xdp_rxq_info xdp_rxq;
+};
+
+/* Control VQ buffers: protected by the rtnl lock */
+struct control_buf {
+	struct virtio_net_ctrl_hdr hdr;
+	virtio_net_ctrl_ack status;
+	struct virtio_net_ctrl_mq mq;
+	u8 promisc;
+	u8 allmulti;
+	__virtio16 vid;
+	__virtio64 offloads;
+};
+
+struct virtnet_info {
+	struct virtio_device *vdev;
+	struct virtqueue *cvq;
+	struct net_device *dev;
+	struct send_queue *sq;
+	struct receive_queue *rq;
+	unsigned int status;
+
+	/* Max # of queue pairs supported by the device */
+	u16 max_queue_pairs;
+
+	/* # of queue pairs currently used by the driver */
+	u16 curr_queue_pairs;
+
+	/* # of XDP queue pairs currently used by the driver */
+	u16 xdp_queue_pairs;
+
+	/* I like... big packets and I cannot lie! */
+	bool big_packets;
+
+	/* Host will merge rx buffers for big packets (shake it! shake it!) */
+	bool mergeable_rx_bufs;
+
+	/* Has control virtqueue */
+	bool has_cvq;
+
+	/* Host can handle any s/g split between our header and packet data */
+	bool any_header_sg;
+
+	/* Packet virtio header size */
+	u8 hdr_len;
+
+	/* Work struct for refilling if we run low on memory. */
+	struct delayed_work refill;
+
+	/* Work struct for config space updates */
+	struct work_struct config_work;
+
+	/* Does the affinity hint is set for virtqueues? */
+	bool affinity_hint_set;
+
+	/* CPU hotplug instances for online & dead */
+	struct hlist_node node;
+	struct hlist_node node_dead;
+
+	struct control_buf *ctrl;
+
+	/* Ethtool settings */
+	u8 duplex;
+	u32 speed;
+
+	unsigned long guest_offloads;
+
+	/* failover when STANDBY feature enabled */
+	struct failover *failover;
+};
+
+struct vring_desc_state {
+	void *data;			/* Data for callback. */
+	struct vring_desc *indir_desc;	/* Indirect descriptor, if any. */
+};
+
+struct vring_virtqueue {
+	struct virtqueue vq;
+
+	/* Actual memory layout for this queue */
+	struct vring vring;
+
+	/* Can we use weak barriers? */
+	bool weak_barriers;
+
+	/* Other side has made a mess, don't try any more. */
+	bool broken;
+
+	/* Host supports indirect buffers */
+	bool indirect;
+
+	/* Host publishes avail event idx */
+	bool event;
+
+	/* Head of free buffer list. */
+	unsigned int free_head;
+	/* Number we've added since last sync. */
+	unsigned int num_added;
+
+	/* Last used index we've seen. */
+	u16 last_used_idx;
+
+	/* Last written value to avail->flags */
+	u16 avail_flags_shadow;
+
+	/* Last written value to avail->idx in guest byte order */
+	u16 avail_idx_shadow;
+
+	/* How to notify other side. FIXME: commonalize hcalls! */
+	bool (*notify)(struct virtqueue *vq);
+
+	/* DMA, allocation, and size information */
+	bool we_own_ring;
+	size_t queue_size_in_bytes;
+	dma_addr_t queue_dma_addr;
+
+	/* Per-descriptor state. */
+	struct vring_desc_state desc_state[];
+};
+
+
+#define MAC_HEADER_SIZE 14
+
+
+kprobe:receive_buf {
+	@receive_buf_cpu_ts[cpu] = nsecs;
+	@receive_buf_num[cpu]++;
+
+	/* get vring_virtqueue parameter */
+	$rq = (struct receive_queue *)arg1;
+	$virtqueue = $rq->vq;
+	$vring_virtqueue = (struct vring_virtqueue *)$virtqueue;
+	$vring = $vring_virtqueue->vring;
+	$vq = $vring_virtqueue->vq;
+	@rx_name[cpu] = str($virtqueue->name);
+	@rx_vring_num[cpu] = $vring.num;
+	@rx_avail_flags[cpu] = $vring.avail->flags;
+	@rx_avail_idx[cpu] = $vring.avail->idx;
+	@rx_avail_flags_shadow[cpu] = $vring_virtqueue->avail_flags_shadow;
+	@rx_avail_idx_shadow[cpu] = $vring_virtqueue->avail_idx_shadow;
+	@rx_used_flags[cpu] = $vring.used->flags;
+	@rx_used_idx[cpu] = $vring.used->idx;
+	@rx_last_used_idx[cpu] = $vring_virtqueue->last_used_idx;
+}
+
+kprobe:virtnet_poll {
+	@receive_buf_num[cpu] = 0;
+	printf("%s virtnet_poll Cpu:%d budget:%d\n", strftime("%H:%M:%S.%f", nsecs),cpu,arg1);
+}
+
+kprobe:skb_recv_done {
+	printf("%s skb_recv_done Cpu:%d \n", strftime("%H:%M:%S.%f", nsecs),cpu);
+}
+
+kretprobe:receive_buf {
+	@receive_buf_cpu_ts[cpu] = 0;
+
+	@rx_name[cpu] = "none";
+	@rx_vring_num[cpu] = 0;
+	@rx_avail_flags[cpu] = 0;
+        @rx_avail_idx[cpu] = 0;
+        @rx_avail_flags_shadow[cpu] = 0;
+        @rx_avail_idx_shadow[cpu] = 0;
+        @rx_used_flags[cpu] = 0;
+        @rx_used_idx[cpu] = 0;
+        @rx_last_used_idx[cpu] = 0;
+}
+
+kprobe:napi_gro_receive {
+	$skb = (struct sk_buff *)arg1;
+	$end_time = nsecs;
+	$type = "unkown";
+
+	if (@receive_buf_cpu_ts[cpu]) {
+		/* cal durate time from receive_buf to napi_gro_receive */
+		$time_dur_ms = $end_time - @receive_buf_cpu_ts[cpu];
+
+		/* get skb seq and ack_seq */
+		$l2_header_address = $skb->head + $skb->mac_header;
+        	$l3_header_address = MAC_HEADER_SIZE + $l2_header_address;
+		$iphdr = (struct iphdr *)$l3_header_address;
+		$ip_version = $iphdr->version;
+		if ($ip_version == 4) {
+			$proto = $iphdr->protocol;
+			if ($proto == IPPROTO_TCP) {
+				$l4_header_address = $skb->head + $skb->transport_header;
+				$tcphdr = (struct tcphdr *)$l4_header_address;
+				$rx_seq = bswap($tcphdr->seq);
+				$rx_ack_seq = bswap($tcphdr->ack_seq);
+				
+				$type = "TCP";
+			}
+			if ($proto == IPPROTO_ICMP) {
+				$l4_header_address = $skb->head + $skb->transport_header;
+				$icmphdr = (struct icmphdr *)$l4_header_address;
+				$rx_seq = bswap($icmphdr->un.echo.id);
+				//$rx_seq = (($rx_seq >> 8)&0x00FF) | (($rx_seq << 8)&0xFF00);
+				$rx_ack_seq = 0;
+
+				$type = "ICMP";
+			}
+		}
+
+
+		printf("%s RX Cpu:%d %s vring_len:%d num:%d Durate:%d type:%s seq:%u ack_seq:%u avail_flags:%d avail_idx:%d avail_flags_shadow:%d avail_idx_shadow:%d used_flags:%d used_idx:%d last_used_idx:%d\n",
+			strftime("%H:%M:%S.%f", $end_time),cpu,@rx_name[cpu],@rx_vring_num[cpu],@receive_buf_num[cpu],
+			$time_dur_ms,$type,$rx_seq,$rx_ack_seq,
+			@rx_avail_flags[cpu],@rx_avail_idx[cpu],@rx_avail_flags_shadow[cpu],@rx_avail_idx_shadow[cpu],
+			@rx_used_flags[cpu],@rx_used_idx[cpu],@rx_last_used_idx[cpu]);
+	}
+}
+
+kprobe:start_xmit {
+	@start_xmit_cpu_ts[cpu] = nsecs;
+
+	$skb = (struct sk_buff *)arg0;
+	if (@receive_buf_cpu_ts[cpu]) {
+                /* get skb seq and ack_seq */
+                $l2_header_address = $skb->head + $skb->mac_header;
+                $l3_header_address = MAC_HEADER_SIZE + $l2_header_address;
+                $iphdr = (struct iphdr *)$l3_header_address;
+                $ip_version = $iphdr->version;
+                if ($ip_version == 4) {
+                        $proto = $iphdr->protocol;
+                        if ($proto == IPPROTO_TCP) {
+                                $l4_header_address = $skb->head + $skb->transport_header;
+                                $tcphdr = (struct tcphdr *)$l4_header_address;
+                                @tx_seq[cpu] = bswap($tcphdr->seq);
+                                @tx_ack_seq[cpu] = bswap($tcphdr->ack_seq);
+
+				@proto_type[cpu] = "TCP";
+                        }
+			if ($proto == IPPROTO_ICMP) {
+				$l4_header_address = $skb->head + $skb->transport_header;
+				$icmphdr = (struct icmphdr *)$l4_header_address;
+                                @tx_seq[cpu] = bswap($icmphdr->un.echo.sequence);
+                                @tx_ack_seq[cpu] = 0;
+
+				@proto_type[cpu] = "ICMP";
+			}
+                }
+        }
+}
+
+kretprobe:start_xmit {
+	@start_xmit_cpu_ts[cpu] = 0;
+	@tx_seq[cpu] = 0;
+	@tx_ack_seq[cpu] = 0;
+}
+
+kprobe:skb_xmit_done {
+	printf("%s skb_xmit_done Cpu:%d \n", strftime("%H:%M:%S.%f", nsecs),cpu);
+}
+
+kprobe:virtqueue_notify {
+	if (@start_xmit_cpu_ts[cpu]) {
+		$vring_virtqueue = (struct vring_virtqueue *)arg0;
+		$vring = $vring_virtqueue->vring;
+		$vq = $vring_virtqueue->vq;
+		
+		
+		printf("%s TX Cpu:%d %s vring_len:%d type:%s seq:%u ack_seq:%u avail_flags:%d avail_idx:%d avail_flags_shadow:%d avail_idx_shadow:%d used_flags:%d used_idx:%d last_used_idx:%d\n",
+			strftime("%H:%M:%S.%f", nsecs),cpu,str($vq.name),$vring.num,
+			@proto_type[cpu],@tx_seq[cpu],@tx_ack_seq[cpu],
+			$vring.avail->flags,$vring.avail->idx,$vring_virtqueue->avail_flags_shadow,
+			$vring_virtqueue->avail_idx_shadow,$vring.used->flags,$vring.used->idx,
+			$vring_virtqueue->last_used_idx);
+	}
+}
+
+END {
+	clear(@receive_buf_cpu_ts);
+	clear(@receive_buf_cpu_ts);
+	clear(@receive_buf_num);
+	clear(@receive_buf_num);
+	clear(@rx_avail_flags);
+	clear(@rx_avail_flags_shadow);
+	clear(@rx_avail_idx);
+	clear(@rx_avail_idx_shadow);
+	clear(@rx_last_used_idx);
+	clear(@rx_name);
+	clear(@rx_used_flags);
+	clear(@rx_used_idx);
+	clear(@rx_vring_num);
+	clear(@start_xmit_cpu_ts);
+	clear(@tx_ack_seq);
+	clear(@tx_seq);
+	clear(@proto_type);
+}

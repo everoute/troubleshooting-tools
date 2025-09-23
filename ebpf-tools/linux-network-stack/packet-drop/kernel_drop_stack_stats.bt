@@ -1,0 +1,137 @@
+#!/usr/bin/env bpftrace
+
+#include <linux/skbuff.h>
+#include <linux/netdevice.h>
+
+/*
+ * kfree_skb Stack Statistics with Device Filtering
+ * 
+ * This script tracks kfree_skb calls and collects stack trace statistics
+ * grouped by call stack + device name. It supports device filtering.
+ *
+ * Usage: sudo bpftrace kfree_skb_stack_stats.bt [device_name] [interval]
+ *        device_name: filter by device name (optional, e.g., "eth0", "br-int")
+ *        interval: reporting interval in seconds (optional, default: 10)
+ *
+ * Examples:
+ *   sudo bpftrace kfree_skb_stack_stats.bt
+ *   sudo bpftrace kfree_skb_stack_stats.bt eth0
+ *   sudo bpftrace kfree_skb_stack_stats.bt br-int 5
+ *   sudo bpftrace kfree_skb_stack_stats.bt "" 15
+ */
+
+BEGIN
+{
+    printf("Tracing kfree_skb calls...\n");
+    
+    if (str($1) != "") {
+        printf("Device filter: %s\n", str($1));
+        @filter_device = str($1);
+    } else {
+        printf("No device filter - monitoring all interfaces\n");
+        @filter_device = "";
+    }
+    
+    @interval = $2 > 0 ? $2 : 10;
+    printf("Reporting interval: %d seconds\n", @interval);
+    printf("Press Ctrl+C to see final summary\n");
+    printf("===========================================\n");
+    
+    @total_drops = 0;
+    @cycle = 0;
+    @last_total = 0;
+}
+
+kprobe:kfree_skb
+{
+    $skb = (struct sk_buff *)arg0;
+    
+    if ($skb->dev == 0) {
+        return;
+    }
+    
+    $devname = $skb->dev->name;
+    
+    // Apply device filter if specified
+    if (@filter_device != "" && $devname != @filter_device) {
+        return;
+    }
+    
+    // Increment total counter
+    @total_drops++;
+    
+    // Count by stack + device combination
+    @stack_counts[kstack, $devname] = count();
+    
+    // Track stack trace attempts
+    @stack_attempts[$devname] = count();
+    
+    // Track per-device totals
+    @device_totals[$devname] = count();
+}
+
+// Periodic reporting
+interval:s:1
+{
+    @elapsed++;
+    if ((@elapsed) % ((uint64)@interval) == 0) {
+        @cycle++;
+        $current_total = @total_drops;
+        $new_drops = $current_total - @last_total;
+        
+        time("%H:%M:%S ");
+        printf("Cycle %d - Total drops: %d (+%d in last %ds)\n", 
+               @cycle, $current_total, $new_drops, @interval);
+        printf("----------------------------------------\n");
+        
+        // Show top 3 device totals for this period
+        printf("Top devices:\n");
+        print(@device_totals, 3);
+        
+        printf("Top call stacks (showing top 3):\n");
+        print(@stack_counts, 3);
+        printf("===========================================\n");
+        
+        @last_total = $current_total;
+    }
+}
+
+END
+{
+    printf("\n");
+    time("%H:%M:%S ");
+    printf("kfree_skb Final Statistics\n");
+    printf("==========================================\n");
+    printf("Total packet drops: %d\n\n", @total_drops);
+    
+    if (@total_drops == 0) {
+        printf("No packet drops detected.\n");
+        clear(@filter_device);
+        clear(@interval);
+        clear(@cycle);
+        clear(@elapsed);
+        clear(@last_total);
+        clear(@total_drops);
+        exit();
+    }
+    
+    printf("Drops by device:\n");
+    print(@device_totals);
+    
+    printf("\nTop call stacks by device:\n");
+    printf("==========================================\n");
+    print(@stack_counts);
+    
+    printf("\nTracing completed.\n");
+    
+    // Cleanup
+    clear(@stack_counts);
+    clear(@device_totals);
+    clear(@stack_attempts);
+    clear(@filter_device);
+    clear(@interval);
+    clear(@cycle);
+    clear(@elapsed);
+    clear(@last_total);
+    clear(@total_drops);
+}

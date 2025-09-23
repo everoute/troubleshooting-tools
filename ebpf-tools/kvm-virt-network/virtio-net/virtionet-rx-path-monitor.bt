@@ -1,0 +1,256 @@
+#!/usr/bin/env bpftrace
+
+/*
+ * VM RX Path Monitor - Trace virtio network RX processing inside VM
+ * 
+ * This script traces key functions in the virtio network driver RX path:
+ * - virtnet_poll: NAPI poll function (returns packets processed)
+ * - virtqueue_enable_cb_prepare: Prepare interrupt callback (returns queue status)  
+ * - napi_complete_done: Complete NAPI polling (returns success/failure)
+ * - virtqueue_poll: Check virtqueue status (returns available data)
+ *
+ * Usage: sudo bpftrace vm-rx-path-monitor.bt
+ */
+
+BEGIN 
+{
+    printf("VM RX Path Monitor - Tracing virtio network RX processing\n");
+    printf("Monitoring: virtnet_poll, virtqueue_enable_cb_prepare\n");
+    printf("           napi_complete_done, virtqueue_poll\n");
+    printf("Press Ctrl+C to stop and show statistics\n\n");
+    
+    // Initialize counters
+    @start_time = nsecs;
+}
+
+// Track virtnet_poll - main NAPI poll function
+kretprobe:virtnet_poll
+{
+    $ret = retval;  // Number of packets processed
+    $pid = pid;
+    $comm = comm;
+    
+    @virtnet_poll_calls++;
+    @virtnet_poll_packets_total += $ret;
+    @virtnet_poll_ret_dist = hist($ret);
+    
+    if ($ret > 0) {
+        @virtnet_poll_productive++;
+        printf("%s [%d] virtnet_poll: processed %d packets\n", $comm, $pid, $ret);
+    }
+}
+
+// Track virtqueue_enable_cb_prepare - prepares interrupt callback
+kretprobe:virtqueue_enable_cb_prepare  
+{
+    $ret = retval;  // Queue status (0=empty, >0=has data)
+    $pid = pid;
+    $comm = comm;
+    
+    @enable_cb_calls++;
+    @enable_cb_ret_dist = hist($ret);
+    
+    if ($ret > 0) {
+        @enable_cb_data_available++;
+        printf("%s [%d] virtqueue_enable_cb_prepare: queue has data (ret=%d)\n", $comm, $pid, $ret);
+    }
+}
+
+// Track napi_complete_done - completes NAPI polling
+kretprobe:napi_complete_done
+{
+    $ret = retval;  // Success/failure (typically bool)
+    $pid = pid;
+    $comm = comm;
+    
+    @napi_complete_calls++;
+    @napi_complete_ret_dist = hist($ret);
+    
+    if ($ret) {
+        @napi_complete_success++;
+        printf("%s [%d] napi_complete_done: completed successfully\n", $comm, $pid);
+    } else {
+        printf("%s [%d] napi_complete_done: failed to complete\n", $comm, $pid);
+    }
+}
+
+// Track virtqueue_poll - check virtqueue status  
+kretprobe:virtqueue_poll
+{
+    $ret = retval;  // Available data in queue
+    $pid = pid;
+    $comm = comm;
+    
+    @virtqueue_poll_calls++;
+    @virtqueue_poll_ret_dist = hist($ret);
+    
+    if ($ret > 0) {
+        @virtqueue_poll_data_available++;
+        printf("%s [%d] virtqueue_poll: %d items available\n", $comm, $pid, $ret);
+    }
+}
+
+// Optional: Track function call sequences to understand the flow
+kprobe:virtnet_poll
+{
+    @last_function = 1;  // virtnet_poll
+    @call_sequence[tid] = 1;
+}
+
+kprobe:virtqueue_enable_cb_prepare
+{
+    if (@last_function == 1) {  // After virtnet_poll
+        @poll_to_enable_cb++;
+    }
+    @last_function = 2;  // virtqueue_enable_cb_prepare
+    @call_sequence[tid] = 2;
+}
+
+kprobe:napi_complete_done  
+{
+    if (@last_function == 2) {  // After virtqueue_enable_cb_prepare
+        @enable_cb_to_complete++;
+    }
+    @last_function = 3;  // napi_complete_done
+    @call_sequence[tid] = 3;
+}
+
+kprobe:virtqueue_poll
+{
+    @last_function = 4;  // virtqueue_poll
+    @call_sequence[tid] = 4;
+}
+
+// Print periodic summary every 10 seconds
+interval:s:10
+{
+    $elapsed = (nsecs - @start_time) / 1000000000;
+    printf("\n=== RX Path Summary (elapsed: %d seconds) ===\n", $elapsed);
+    
+    if (@virtnet_poll_calls > 0) {
+        $avg_packets = @virtnet_poll_packets_total / @virtnet_poll_calls;
+        $productive_rate = (@virtnet_poll_productive * 100) / @virtnet_poll_calls;
+        printf("virtnet_poll: %d calls, %d productive (%d%%), avg packets: %d\n", 
+               @virtnet_poll_calls, @virtnet_poll_productive, $productive_rate, $avg_packets);
+    }
+    
+    if (@enable_cb_calls > 0) {
+        $cb_data_rate = (@enable_cb_data_available * 100) / @enable_cb_calls;
+        printf("virtqueue_enable_cb_prepare: %d calls, %d with data (%d%%)\n",
+               @enable_cb_calls, @enable_cb_data_available, $cb_data_rate);
+    }
+    
+    if (@napi_complete_calls > 0) {
+        $complete_success_rate = (@napi_complete_success * 100) / @napi_complete_calls;
+        printf("napi_complete_done: %d calls, %d successful (%d%%)\n",
+               @napi_complete_calls, @napi_complete_success, $complete_success_rate);
+    }
+    
+    if (@virtqueue_poll_calls > 0) {
+        $poll_data_rate = (@virtqueue_poll_data_available * 100) / @virtqueue_poll_calls;
+        printf("virtqueue_poll: %d calls, %d with data (%d%%)\n",
+               @virtqueue_poll_calls, @virtqueue_poll_data_available, $poll_data_rate);
+    }
+    
+    printf("Call flow: poll->enable_cb: %d, enable_cb->complete: %d\n",
+           @poll_to_enable_cb, @enable_cb_to_complete);
+    printf("\n");
+}
+
+END 
+{
+    $elapsed = (nsecs - @start_time) / 1000000000;
+    printf("\n=== FINAL RX PATH STATISTICS (Total time: %d seconds) ===\n", $elapsed);
+    
+    printf("\n--- Function Call Counts ---\n");
+    printf("virtnet_poll calls: %d\n", @virtnet_poll_calls);
+    printf("virtqueue_enable_cb_prepare calls: %d\n", @enable_cb_calls);  
+    printf("napi_complete_done calls: %d\n", @napi_complete_calls);
+    printf("virtqueue_poll calls: %d\n", @virtqueue_poll_calls);
+    
+    printf("\n--- virtnet_poll Return Value Distribution ---\n");
+    printf("(Number of packets processed per call)\n");
+    print(@virtnet_poll_ret_dist);
+    
+    printf("\n--- virtqueue_enable_cb_prepare Return Value Distribution ---\n");
+    printf("(Queue status: 0=empty, >0=has data)\n");
+    print(@enable_cb_ret_dist);
+    
+    printf("\n--- napi_complete_done Return Value Distribution ---\n");
+    printf("(0=failed, 1=success)\n");
+    print(@napi_complete_ret_dist);
+    
+    printf("\n--- virtqueue_poll Return Value Distribution ---\n"); 
+    printf("(Number of available items in queue)\n");
+    print(@virtqueue_poll_ret_dist);
+    
+    printf("\n--- Performance Summary ---\n");
+    if (@virtnet_poll_calls > 0) {
+        $avg_packets = @virtnet_poll_packets_total / @virtnet_poll_calls;
+        $productive_rate = (@virtnet_poll_productive * 100) / @virtnet_poll_calls;
+        printf("Average packets per virtnet_poll: %d\n", $avg_packets);
+        printf("Productive virtnet_poll calls: %d%% (%d/%d)\n", 
+               $productive_rate, @virtnet_poll_productive, @virtnet_poll_calls);
+        printf("Total packets processed: %d\n", @virtnet_poll_packets_total);
+        
+        if ($elapsed > 0) {
+            $pps = @virtnet_poll_packets_total / $elapsed;
+            printf("Average packet processing rate: %d packets/second\n", $pps);
+        }
+    }
+    
+    if (@enable_cb_calls > 0) {
+        $cb_data_rate = (@enable_cb_data_available * 100) / @enable_cb_calls;
+        printf("virtqueue_enable_cb_prepare found data: %d%% (%d/%d)\n",
+               $cb_data_rate, @enable_cb_data_available, @enable_cb_calls);
+    }
+    
+    if (@napi_complete_calls > 0) {
+        $success_rate = (@napi_complete_success * 100) / @napi_complete_calls;
+        printf("napi_complete_done success rate: %d%% (%d/%d)\n",
+               $success_rate, @napi_complete_success, @napi_complete_calls);
+    }
+    
+    printf("\n--- Call Flow Patterns ---\n");
+    printf("virtnet_poll -> virtqueue_enable_cb_prepare: %d\n", @poll_to_enable_cb);
+    printf("virtqueue_enable_cb_prepare -> napi_complete_done: %d\n", @enable_cb_to_complete);
+    
+    printf("\n=== Analysis Insights ===\n");
+    
+    // Provide insights based on the data
+    if (@virtnet_poll_calls > 0) {
+        $productive_rate = (@virtnet_poll_productive * 100) / @virtnet_poll_calls;
+        if ($productive_rate < 50) {
+            printf("Low productive poll rate (%d%%) - polling overhead\n", $productive_rate);
+        } else {
+            printf("Good productive poll rate (%d%%)\n", $productive_rate);
+        }
+        
+        $avg_packets = @virtnet_poll_packets_total / @virtnet_poll_calls;
+        if ($avg_packets < 2) {
+            printf("Low avg packets per poll (%d) - inefficient batching\n", $avg_packets);
+        } else {
+            printf("Good batching efficiency (avg %d packets per poll)\n", $avg_packets);
+        }
+    }
+    
+    // Clear all maps
+    clear(@virtnet_poll_calls);
+    clear(@virtnet_poll_packets_total);
+    clear(@virtnet_poll_productive);
+    clear(@enable_cb_calls);
+    clear(@enable_cb_data_available);
+    clear(@napi_complete_calls);
+    clear(@napi_complete_success);
+    clear(@virtqueue_poll_calls);
+    clear(@virtqueue_poll_data_available);
+    clear(@poll_to_enable_cb);
+    clear(@enable_cb_to_complete);
+    clear(@last_function);
+    clear(@call_sequence);
+    clear(@start_time);
+    clear(@virtnet_poll_ret_dist);
+    clear(@enable_cb_ret_dist);
+    clear(@napi_complete_ret_dist);
+    clear(@virtqueue_poll_ret_dist);
+}

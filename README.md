@@ -8,79 +8,56 @@ This repository provides a collection of eBPF-based tools for monitoring, tracin
 
 ## Repository Structure
 
-### `bcc-tools/`
-Python-based BPF tools using the BCC (BPF Compiler Collection) framework. This directory contains the majority of the functionality:
+### `ebpf-tools/`
+Main directory containing all eBPF-based monitoring and troubleshooting tools organized by system component:
 
-#### `cpu-measurement/`
-CPU-specific monitoring and measurement tools:
-- `cpu_monitor.sh` - CPU usage monitoring script
-- `offcputime-ts.py` - Off-CPU time analysis with timestamps
-- `sched_latency_monitor.sh` - Scheduler latency monitoring
-- `futex.bt` - Futex contention tracing
-- `pthread_rwlock_wrlock*.bt` - Pthread rwlock monitoring
+#### `cpu/`
+CPU and scheduler monitoring tools:
+- Off-CPU time analysis
+- Scheduler latency monitoring
+- Futex and pthread lock tracing
+
+#### `kvm-virt-network/`
+KVM virtualization network stack monitoring:
+- `kvm/` - KVM IRQ injection and interrupt statistics
+- `tun/` - TUN/TAP device monitoring (ring buffer, GSO, TX stats)
+- `vhost-net/` - vhost eventfd, queue correlation, buffer peek stats
+- `virtio-net/` - virtio-net polling, IRQ monitoring, RX path tracing
 
 #### `linux-network-stack/`
-Linux kernel network stack tracing tools:
-- `trace_ct.py` - Connection tracking analysis
-- `trace_ct_multi_conn.py` - Multi-connection tracking
-- `trace_ip_defrag.py` - IP fragmentation/defragmentation tracing
+Linux kernel network stack tools:
+- Connection tracking (conntrack) monitoring
+- IP fragmentation/defragmentation tracing
+- `packet-drop/` - Comprehensive packet drop detection and analysis
 
-#### `ovs-measurement/`
-Open vSwitch (OVS) specific monitoring tools:
-- `ovs_userspace_megaflow.py` - OVS userspace megaflow analysis
-- `ovs_userspace_megaflow_kernel_parse.py` - Kernel-level megaflow parsing
-- `ovs-clone-execute-summary.py` - OVS clone and execute operation summary
-- `ovs-kernel-module-drop-monitor.py` - OVS kernel module drop monitoring
-- `ovs-upcall-execute.py` - OVS upcall execution tracing
-
-#### `packet-drop/`
-Packet drop analysis tools:
-- `multi-protocol-drop-monitor.py` - Multi-protocol packet drop monitoring
-- `drop.py` - Generic packet drop analysis
-- `eth_drop.py` - Ethernet-specific drop monitoring
+#### `ovs/`
+Open vSwitch specific monitoring:
+- Userspace megaflow analysis
+- Kernel module drop monitoring
+- Upcall latency measurement
 
 #### `performance/`
-Performance analysis and optimization tools:
+Network performance measurement tools:
+- `system-network/` - System-level network latency and metrics (ICMP RTT, TCP latency)
+- `vm-network/` - VM-specific network performance analysis
+  - VM network latency decomposition
+  - `vm_pair_latency/` - Inter-VM latency monitoring
+  - `vm_pair_latency_gap/` - Latency gap and jitter analysis
 
-##### `system-network/`
-System-level network performance tools:
-- `icmp_rtt_latency.py` - ICMP round-trip time latency measurement
-- `icmp_rx_latency.py` - ICMP receive path latency
-- `icmp_tx_latency.py` - ICMP transmit path latency
-- `tcp_latency.py` - TCP latency measurement
+#### `other/`
+Additional tracing tools:
+- Abnormal ARP detection
+- OVS connection tracking invalid states
+- Network offloading and segmentation tracing
+- Qdisc and TX queue monitoring
 
-##### `vm-network/`
-VM network performance analysis:
-- `vm_latency.py` - VM network end-to-end latency measurement
-- `vm_pair_latency/` - VM pair latency analysis tools
-- `vm_pair_latency_gap/` - VM pair latency gap analysis tools
+### `docs/`
+Documentation and guides:
+- `publish/` - User manuals and deployment guides
+- Design documents for various monitoring approaches
 
-##### `vm-binding-tools/`
-VM CPU binding and affinity tools:
-- `binding.py` - VM CPU binding management
-- `set-vm-pair-cpu-affinity.sh` - VM pair CPU affinity configuration
-- `set-process-cpu-mem-affinitity.sh` - Process CPU/memory affinity
-
-##### `iface_netstat.py` - Network interface statistics
-
-#### `virtio-network/`
-Virtio network device monitoring:
-- `tun_ring_monitor.py` - TUN device ring buffer monitoring
-
-### `bpftrace-tools/`
-High-level tracing scripts using bpftrace syntax:
-- `trace-abnormal-arp.bt` - Abnormal ARP event tracing
-- `trace-ovs-ct-invalid.bt` - OVS connection tracking invalid state tracing
-- `trace_offloading_segment.bt` - Network offloading segmentation tracing
-- `tun-abnormal-gso-type` - TUN device GSO type anomaly detection
-- `vpc-vm-udp-datapath.bt` - VPC VM UDP datapath tracing
-- Various queue and transmission monitoring scripts
-
-### `md/`
-Documentation and design documents:
-- `system-network-latency.md` - System network latency analysis guide
-- `vm-network-latency-design.md` - VM network latency measurement degign 
-- `ovs_userspace_megaflow_generate.md` - OVS userspace megaflow generation design
+### `test/`
+Test configurations and specifications for all tool categories
 
 ## Prerequisites
 
@@ -102,7 +79,7 @@ Documentation and design documents:
 # For RHEL/CentOS 7
 sudo yum install bcc-tools python2-bcc
 
-# For newer distributions
+# For openEuler distributions
 sudo apt-get install bpfcc-tools python3-bpfcc
 ```
 
@@ -205,7 +182,7 @@ sudo ./tool-name --options | tee output.log
 - Tools may introduce overhead in production environments
 - Use filtering options to reduce noise and performance impact
 - Monitor system resources when running intensive tracing
-- Consider using sampling or time-limited tracing for high-traffic systems
+- Consider using sampling or time-limited tracing for high-traffic systems: summary version
 
 ## Troubleshooting
 

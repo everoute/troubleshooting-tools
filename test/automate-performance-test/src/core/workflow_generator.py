@@ -1,0 +1,261 @@
+#!/usr/bin/env python3
+"""eBPF-centric workflow generator"""
+
+import json
+import hashlib
+from datetime import datetime
+from typing import Dict, List, Optional
+
+
+class EBPFCentricWorkflowGenerator:
+    """Generate eBPF-centric test workflow"""
+
+    def __init__(self):
+        """Initialize workflow generator"""
+        pass
+
+    def generate_workflow_spec(self, ssh_config: Dict, env_config: Dict,
+                             perf_spec: Dict, ebpf_config: Dict) -> Dict:
+        """Generate complete test workflow spec
+
+        Args:
+            ssh_config: SSH configuration
+            env_config: Environment configuration
+            perf_spec: Performance test specs
+            ebpf_config: eBPF tools configuration
+
+        Returns:
+            Complete workflow specification
+        """
+        workflow_spec = {
+            "metadata": {
+                "generation_time": datetime.now().isoformat(),
+                "total_test_cycles": 0,
+                "environments": list(env_config['test_environments'].keys())
+            },
+            "test_sequence": [],
+            "global_config": {
+                "ssh_hosts": ssh_config['ssh_hosts'],
+                "performance_specs": perf_spec['performance_tests']
+            }
+        }
+
+        # Generate baseline test cycles
+        for env_name in env_config['test_environments'].keys():
+            baseline_cycle = self._generate_baseline_test_cycle(
+                env_name, env_config, perf_spec
+            )
+            workflow_spec["test_sequence"].append(baseline_cycle)
+
+        # Generate eBPF case test cycles
+        for tool_id, tool_config in ebpf_config['ebpf_tools'].items():
+            for case_id in tool_config['testcase_source']['case_ids']:
+                for env_name in tool_config['test_associations']['applicable_environments']:
+                    ebpf_cycle = self._generate_ebpf_test_cycle(
+                        tool_id, case_id, env_name, tool_config,
+                        env_config, perf_spec
+                    )
+                    workflow_spec["test_sequence"].append(ebpf_cycle)
+
+        workflow_spec["metadata"]["total_test_cycles"] = len(workflow_spec["test_sequence"])
+        return workflow_spec
+
+    def _generate_baseline_test_cycle(self, env_name: str, env_config: Dict,
+                                     perf_spec: Dict) -> Dict:
+        """Generate baseline test cycle (no eBPF program)"""
+        return {
+            "cycle_id": f"baseline_{env_name}",
+            "cycle_type": "baseline",
+            "environment": env_name,
+            "ebpf_case": {
+                "case_id": "baseline",
+                "program": None,
+                "command": None,
+                "duration": None
+            },
+            "test_cycle": {
+                "init_hook": {
+                    "tasks": [
+                        "prepare_test_environment",
+                        "start_performance_servers",
+                        "prepare_monitoring_tools"
+                    ],
+                    "custom_monitoring": False
+                },
+                "performance_tests": self._get_performance_tests_for_env(env_name, perf_spec),
+                "post_hook": {
+                    "tasks": [
+                        "collect_baseline_results",
+                        "stop_performance_servers",
+                        "cleanup_environment"
+                    ]
+                }
+            },
+            "expected_duration": self._calculate_cycle_duration(perf_spec),
+            "result_path": f"baseline/{env_name}"
+        }
+
+    def _generate_ebpf_test_cycle(self, tool_id: str, case_id: int, env_name: str,
+                                 tool_config: Dict, env_config: Dict,
+                                 perf_spec: Dict) -> Dict:
+        """Generate eBPF tool test cycle"""
+        # Load case details from testcase file
+        case_details = self._load_case_details(
+            tool_config['testcase_source']['file'], case_id
+        )
+
+        return {
+            "cycle_id": f"{tool_id}_case_{case_id}_{env_name}",
+            "cycle_type": "ebpf_test",
+            "environment": env_name,
+            "ebpf_case": {
+                "case_id": case_id,
+                "tool_id": tool_id,
+                "program": case_details.get("name", ""),
+                "command": case_details.get("command", ""),
+                "duration": case_details.get("duration", 30)
+            },
+            "test_cycle": {
+                "init_hook": {
+                    "tasks": [
+                        "prepare_test_environment",
+                        "start_performance_servers",
+                        f"start_ebpf_case_{case_id}",
+                        "start_custom_monitoring"
+                    ],
+                    "custom_monitoring": True,
+                    "ebpf_startup_command": case_details.get("command", "")
+                },
+                "performance_tests": self._get_applicable_performance_tests(
+                    tool_config['test_associations']['performance_test_types'],
+                    perf_spec
+                ),
+                "post_hook": {
+                    "tasks": [
+                        "stop_custom_monitoring",
+                        f"stop_ebpf_case_{case_id}",
+                        f"collect_ebpf_results_{tool_id}_{case_id}",
+                        "cleanup_environment"
+                    ]
+                }
+            },
+            "monitoring_config": tool_config['resource_monitoring'],
+            "expected_duration": self._calculate_cycle_duration(perf_spec) + case_details.get("duration", 30),
+            "result_path": f"ebpf/{tool_id}_case_{case_id}/{env_name}"
+        }
+
+    def _get_performance_tests_for_env(self, env_name: str, perf_spec: Dict) -> List[Dict]:
+        """Get performance test configurations for environment"""
+        return [
+            {
+                "type": "throughput",
+                "configs": ["single_stream", "multi_stream"]
+            },
+            {
+                "type": "latency",
+                "configs": ["tcp_rr", "udp_rr"]
+            },
+            {
+                "type": "pps",
+                "configs": ["multi_stream_4", "multi_stream_8"]
+            }
+        ]
+
+    def _get_applicable_performance_tests(self, test_types: List[str],
+                                         perf_spec: Dict) -> List[Dict]:
+        """Get applicable performance tests"""
+        tests = []
+        for test_type in test_types:
+            if test_type == "throughput":
+                tests.append({
+                    "type": "throughput",
+                    "configs": ["single_stream", "multi_stream"]
+                })
+            elif test_type == "latency":
+                tests.append({
+                    "type": "latency",
+                    "configs": ["tcp_rr", "udp_rr"]
+                })
+            elif test_type == "pps":
+                tests.append({
+                    "type": "pps",
+                    "configs": ["multi_stream_4", "multi_stream_8"]
+                })
+        return tests
+
+    def _calculate_cycle_duration(self, perf_spec: Dict) -> int:
+        """Calculate total duration for test cycle"""
+        total_duration = 0
+
+        # Throughput test duration
+        if 'throughput' in perf_spec['performance_tests']:
+            throughput = perf_spec['performance_tests']['throughput']
+            total_duration += throughput.get('single_stream', {}).get('duration', 30)
+            total_duration += throughput.get('multi_stream', {}).get('duration', 30) * 3
+
+        # Latency test duration
+        if 'latency' in perf_spec['performance_tests']:
+            latency = perf_spec['performance_tests']['latency']
+            total_duration += latency.get('duration', 20) * 2  # TCP and UDP
+
+        # PPS test duration
+        if 'pps' in perf_spec['performance_tests']:
+            pps = perf_spec['performance_tests']['pps']
+            total_duration += pps.get('duration', 30) * 2  # Multiple streams
+
+        return total_duration
+
+    def _load_case_details(self, testcase_file: str, case_id: int) -> Dict:
+        """Load case details from testcase file
+
+        Args:
+            testcase_file: Path to testcase file
+            case_id: Case ID to load
+
+        Returns:
+            Case details dictionary
+        """
+        # This is a placeholder implementation
+        # In real implementation, would load from actual testcase file
+        return {
+            "name": f"case_{case_id}",
+            "command": f"python ebpf_tool.py --case {case_id}",
+            "duration": 30
+        }
+
+    def export_workflow(self, workflow_spec: Dict, output_file: str):
+        """Export workflow to JSON file
+
+        Args:
+            workflow_spec: Workflow specification
+            output_file: Output file path
+        """
+        with open(output_file, 'w') as f:
+            json.dump(workflow_spec, f, indent=2)
+
+    def validate_workflow(self, workflow_spec: Dict) -> bool:
+        """Validate workflow specification
+
+        Args:
+            workflow_spec: Workflow to validate
+
+        Returns:
+            Validation status
+        """
+        required_keys = ['metadata', 'test_sequence', 'global_config']
+
+        # Check required keys
+        for key in required_keys:
+            if key not in workflow_spec:
+                return False
+
+        # Check test sequence
+        if not workflow_spec['test_sequence']:
+            return False
+
+        # Check each test cycle
+        for cycle in workflow_spec['test_sequence']:
+            if 'cycle_id' not in cycle or 'cycle_type' not in cycle:
+                return False
+
+        return True

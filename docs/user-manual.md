@@ -201,26 +201,6 @@ ebpf-tools/
   - **使用场景**：虚拟机间通信延迟
   - **收集数据**：点对点延迟
   
-- **multi_vm_pair_latency.py**：多虚拟机对监控
-  - **使用场景**：多租户延迟分析
-  - **收集数据**：每对延迟矩阵
-  
-- **multi_vm_pair_latency_pairid.py**：标识对延迟
-  - **使用场景**：特定虚拟机对跟踪
-  - **收集数据**：标识对指标
-
-##### 延迟间隙分析 (`vm_pair_latency_gap/`)
-- **vm_pair_gap.py**：虚拟机对延迟间隙
-  - **使用场景**：延迟变化分析
-  - **收集数据**：间隙统计、抖动
-  
-- **multi_port_gap.py**：多端口延迟间隙
-  - **使用场景**：端口特定延迟分析
-  - **收集数据**：每端口间隙指标
-  
-- **multi_vm_pair_multi_port_gap.py**：综合间隙分析
-  - **使用场景**：复杂拓扑延迟分析
-  - **收集数据**：多维间隙数据
 
 #### 通用性能工具
 - **iface_netstat.py**：接口统计监控
@@ -886,171 +866,94 @@ CPU distribution:
 
 **eth_drop.py 输出格式：**
 ```
-=== Enhanced Packet Drop Monitor ===
-Filter configuration:
-  Type filter: IPV4
-  Source IP: 10.132.114.11
-  Destination IP: 10.132.114.12
-  L4 Protocol: TCP
-  Interface: eth0
-
-Starting packet drop monitoring...
-
-[2025-09-22 15:30:45.123] DROP DETECTED:
-Location: netif_receive_skb_core+0x145
-Reason: NETDEV_DROP_REASON_NO_BUFFER
-Packet info:
-  - Source: 10.132.114.11:45678
-  - Destination: 10.132.114.12:80
-  - Protocol: TCP
-  - Length: 1500 bytes
-  - Interface: eth0 (ifindex=2)
-  - CPU: 3
-
+--------------------------------------------------------------------------------
+Starting packet drop monitoring... Press Ctrl+C to stop
+[17:46:56] PID: 0 TGID: 0 COMM: swapper/0 CPU: 0
+Ethernet Header:
+  Source MAC: 9a:b9:0a:b6:d2:7a
+  Dest MAC:   ff:ff:ff:ff:ff:ff
+  EtherType:  0x0806
+ARP PACKET
+ARP Header:
+  Hardware Type: 0x0001
+  Protocol Type: 0x0800
+  Operation:     Request
+  Sender MAC:    9a:b9:0a:b6:d2:7a
+  Sender IP:     10.42.213.89
+  Target MAC:    00:00:00:00:00:00
+  Target IP:     10.42.213.91
+Interface: ovsbr-bbfi49amm
 Stack trace:
-  netif_receive_skb_core+0x145
-  __netif_receive_skb+0x67
-  process_backlog+0x89
-  __napi_poll+0x12a
-  net_rx_action+0x234
-  __do_softirq+0x156
-
-[2025-09-22 15:30:47.456] DROP DETECTED:
-Location: tcp_v4_rcv+0x234
-Reason: NETDEV_DROP_REASON_SOCKET_FILTER
-Packet info:
-  - Source: 10.132.114.11:34567
-  - Destination: 10.132.114.12:443
-  - Protocol: TCP
-  - Length: 64 bytes
-  - Interface: eth0 (ifindex=2)
-  - CPU: 1
-
-=== Drop Statistics Summary ===
-Total monitoring time: 120 seconds
-Total drops detected: 15
-
-Drop reasons:
-  - NO_BUFFER: 8 (53.3%)
-  - SOCKET_FILTER: 4 (26.7%)
-  - CHECKSUM_ERROR: 2 (13.3%)
-  - OTHER: 1 (6.7%)
-
-Drop locations:
-  - netif_receive_skb_core: 10 (66.7%)
-  - tcp_v4_rcv: 4 (26.7%)
-  - ip_local_deliver: 1 (6.6%)
-
-Affected protocols:
-  - TCP: 12 (80.0%)
-  - UDP: 3 (20.0%)
+  kfree_skb+0x1
+  ovs_vport_send+0x9d
+  do_output+0x57
+  do_execute_actions+0x362
+  ovs_execute_actions+0x4f
+  ovs_dp_process_packet+0x9d
+  ovs_vport_receive+0x76
+  netdev_frame_hook+0xc2
+  __netif_receive_skb_core+0x225
+  __netif_receive_skb_list_core+0x129
+  netif_receive_skb_list_internal+0x1f8
+  gro_normal_list.part.141+0x1e
+  napi_complete_done+0x8a
+  virtnet_poll+0x376
+  net_rx_action+0x12d
+  __softirqentry_text_start+0x91
+  irq_exit+0xa3
+  do_IRQ+0x59
+  ret_from_intr+0x0
+  default_idle+0x35
+  arch_cpu_idle+0x15
+  default_idle_call+0x26
+  do_idle+0x1b4
+  cpu_startup_entry+0x1d
+  rest_init+0xae
+  arch_call_rest_init+0xe
+  start_kernel+0x4ce
+  x86_64_start_reservations+0x24
+  x86_64_start_kernel+0xa4
+  secondary_startup_64+0xb6
 ```
 
-**kernel_drop_stack_stats_summary.py 输出格式：**
+**kernel_drop_stack_stats_summary_all.py 输出格式：**
 ```
-=== Kernel Drop Stack Statistics Tool ===
-Filters: src_ip=10.132.114.11, dst_ip=10.132.114.12, protocol=TCP
-Interval: 5 seconds, Duration: 60 seconds
-Top stacks to show: 10
+ Stack trace failures by device:
+    port-storage: 1 failed
+  Found 5 unique stack+flow combinations, showing top 5:
 
-Attaching kprobe to kfree_skb...
-BPF program loaded successfully
+  #1 Count: 76 calls [device: port-storage] [stack_id: 2]
+     Flow: 10.132.114.12 -> 10.132.114.11 (ICMP)
+  Stack trace:
+    Stack depth: 21 frames
+    kfree_skb+0x1 [kernel]
+    ip_protocol_deliver_rcu+0x1a9 [kernel]
+    ip_local_deliver_finish+0x48 [kernel]
+    ip_local_deliver+0xcd [kernel]
+    ip_rcv_finish+0x84 [kernel]
+    ... (16 more frames)
 
-[2025-09-22 16:45:30] === Stack Statistics Report (Interval: 5.0s) ===
-Total kfree_skb calls: 45
-Filtered kfree_skb calls: 12
-
-Top stack traces by count:
-
-1. Count: 8 (66.7%)
-   netif_receive_skb_core+0x145
-   __netif_receive_skb+0x67
-   process_backlog+0x89
-   __napi_poll+0x12a
-   net_rx_action+0x234
-   __do_softirq+0x156
-
-2. Count: 3 (25.0%)
-   tcp_v4_rcv+0x234
-   ip_local_deliver_finish+0x123
-   ip_local_deliver+0x45
-   ip_rcv_finish+0x67
-   ip_rcv+0x89
-
-3. Count: 1 (8.3%)
-   udp_queue_rcv_skb+0x156
-   __udp4_lib_rcv+0x234
-   udp_rcv+0x67
-   ip_local_deliver_finish+0x123
-   ip_local_deliver+0x45
-
-[2025-09-22 16:45:35] === Stack Statistics Report (Interval: 5.0s) ===
-Total kfree_skb calls: 23
-Filtered kfree_skb calls: 5
-
-=== Final Summary ===
-Total monitoring time: 60 seconds
-Total intervals: 12
-Overall filtered drops: 67
-Average drops per interval: 5.6
-
-Most frequent drop locations:
-1. netif_receive_skb_core: 42 occurrences (62.7%)
-2. tcp_v4_rcv: 18 occurrences (26.9%)
-3. udp_queue_rcv_skb: 7 occurrences (10.4%)
+  #2 Count: 3 calls [device: port-storage] [stack_id: 344]
+     Flow: 10.132.114.12 -> 10.132.114.11 (ICMP)
+  Stack trace:
+    Stack depth: 21 frames
+    kfree_skb+0x1 [kernel]
+  ...
 ```
 
 #### 4.2.2 连接跟踪输出
 
 **trace_conntrack.py 输出格式：**
 ```
-=== Connection Tracking Monitor ===
-Filter: src_ip=10.132.114.11, dst_ip=10.132.114.12, protocol=TCP
-Relative time: enabled
-Stack traces: enabled
-
-Attaching to conntrack functions...
-BPF program loaded successfully
-
-Starting connection tracking...
-
-[    0.000] CONNTRACK_NEW: 10.132.114.11:45678 -> 10.132.114.12:80 TCP
-  State: NEW -> ESTABLISHED
-  Timeout: 300 seconds
-  Zone: 0
-  Mark: 0x0
-
-[    2.345] CONNTRACK_UPDATE: 10.132.114.11:45678 -> 10.132.114.12:80 TCP
-  State: ESTABLISHED -> ESTABLISHED
-  Timeout: 299 seconds
-  Bytes: tx=1234, rx=5678
-  Packets: tx=15, rx=23
-
-[   45.678] CONNTRACK_DESTROY: 10.132.114.11:45678 -> 10.132.114.12:80 TCP
-  State: ESTABLISHED -> DESTROYED
-  Duration: 45.678 seconds
-  Final stats: tx_bytes=12340, rx_bytes=56780, tx_packets=150, rx_packets=230
-
-[   46.123] CONNTRACK_NEW: 10.132.114.11:34567 -> 10.132.114.12:443 TCP
-  State: NEW -> SYN_SENT
-  Timeout: 120 seconds
-  Zone: 0
-  Mark: 0x0
-
-=== Connection Summary ===
-Total connections tracked: 15
-Active connections: 3
-Completed connections: 12
-
-Connection states distribution:
-  - ESTABLISHED: 8 (53.3%)
-  - SYN_SENT: 3 (20.0%)
-  - TIME_WAIT: 2 (13.3%)
-  - CLOSE_WAIT: 1 (6.7%)
-  - FIN_WAIT: 1 (6.7%)
-
-Average connection duration: 32.4 seconds
-Total data transferred: 1.2 MB
+DATETIME: 2025-09-22 17:57:33.760 COMM: swapper/19       FUNC: __nf_ct_refresh_acct      DEV: port-storage[18]
+PKTINFO: 10.132.114.12:37323 -> 10.132.114.11:5201 (UDP) IP_ID:0x5013
+OVS_CT_INFO: OvsConInfoNFCT:N/A(Init) OvsCommit:N/A(Init) OvsZoneID:N/A(Init) OvsZoneDir:N/A(Init)
+SKB_CT_INFO: CT_STATUS:0x18e(NOT_TEMPLATE) CTINFO:0(IP_CT_ESTABLISHED) NFCT_PTR:0xffff88816bac30c0 SKBZoneID:0(KernelDefaultZone) SKBZoneDir:N/A(NoCfg) CT_LABEL:0x00000000000000000000000000000000
+  b'__nf_ct_refresh_acct+0x1'
+  b'nf_conntrack_in+0x3cd'
+  b'ipv4_conntrack_in+0x14'
+  b'nf_hook_slow+0x49'
+  ...
 ```
 
 ### 4.3 OVS 监控输出格式
@@ -1151,24 +1054,6 @@ Starting monitoring...
     - Packet length: 64 bytes
   Kernel timestamp: 1579021145692345ns
 
-============================================================
-=== Statistics Summary ===
-
-Statistics:
-   Total upcalls: 156
-   Filtered upcalls: 45 (28.8%)
-   Total flows: 23
-   Filtered flows: 12 (52.2%)
-   Upcall filter rate: 28.85%
-
-Upcall types:
-   MISS: 34 (75.6%)
-   ACTION: 8 (17.8%)
-   SLOW_PATH: 3 (6.7%)
-
-Flow installation rate: 89.4% (flows/upcalls)
-Average flow lifetime: 45.6 seconds
-============================================================
 ```
 
 ### 4.4 KVM 虚拟化网络输出格式
@@ -1313,100 +1198,25 @@ Tracing kernel packet drops. Hit Ctrl-C to end.
 ]: 8
 ```
 
-### 4.6 统计报告和汇总输出
+### 4.6 输出格式特点总结
 
-#### 4.6.1 综合性能报告
-
-```
-================================================================================
-                    eBPF 网络性能监控报告
-================================================================================
-监控时间: 2025-09-22 18:00:00 - 18:30:00 (30 分钟)
-监控范围: 172.21.153.0/24 网段
-协议: TCP, UDP, ICMP
-
-=== 系统性能指标 ===
-总数据包: 2,345,678
-总数据量: 3.2 GB
-平均 PPS: 1,303
-平均吞吐量: 1.8 Mbps
-
-=== 延迟统计 ===
-平均延迟: 42.3 us
-P50 延迟: 38.7 us
-P95 延迟: 76.5 us
-P99 延迟: 134.2 us
-最大延迟: 456.7 us
-
-=== 网络栈延迟分解 ===
-1. VNET_RX 到 OVS_RX: 14.2 us (33.6%)
-2. OVS_RX 到 FLOW_EXTRACT: 8.7 us (20.6%)
-3. FLOW_EXTRACT 到 QDISC_ENQ: 11.3 us (26.7%)
-4. QDISC_ENQ 到 TX_QUEUE: 4.9 us (11.6%)
-5. TX_QUEUE 到 TX_XMIT: 3.2 us (7.6%)
-
-=== 丢包统计 ===
-总丢包: 45
-丢包率: 0.0019%
-
-丢包原因分布:
-- NO_BUFFER: 23 (51.1%)
-- SOCKET_FILTER: 12 (26.7%)
-- CHECKSUM_ERROR: 7 (15.6%)
-- OTHER: 3 (6.7%)
-
-丢包位置分布:
-- netif_receive_skb_core: 28 (62.2%)
-- tcp_v4_rcv: 12 (26.7%)
-- udp_queue_rcv_skb: 5 (11.1%)
-
-=== OVS 性能指标 ===
-Upcall 次数: 1,234
-平均 Upcall 延迟: 23.4 us
-Megaflow 命中率: 94.7%
-Flow 安装成功率: 98.3%
-
-=== 虚拟化性能指标 ===
-vhost eventfd 事件: 5,678
-Virtio-net 中断: 2,345
-平均队列利用率: 67.8%
-队列关联率: 96.4%
-
-=== CPU 利用率 ===
-网络处理 CPU 利用率:
-- CPU 13: 45.6%
-- CPU 15: 38.9%
-- CPU 16: 23.4%
-- CPU 19: 18.7%
-
-=== 建议和优化方向 ===
-1. 网络性能整体良好，延迟在正常范围内
-2. 丢包率较低，主要由缓冲区不足引起
-3. OVS Megaflow 命中率高，性能优良
-4. 建议优化 VNET_RX 到 OVS_RX 阶段的延迟
-5. 可考虑增加网络缓冲区大小以减少丢包
-================================================================================
-```
-
-### 4.7 输出格式特点总结
-
-#### 4.7.1 时间戳格式
+#### 4.6.1 时间戳格式
 - **绝对时间**: `[YYYY-MM-DD HH:MM:SS.mmm]` 格式
 - **相对时间**: `[    0.000]` 格式（从启动开始的秒数）
 - **内核时间戳**: `KTIME=1579020094156218ns` 格式
 
-#### 4.7.2 网络信息格式
+#### 4.6.2 网络信息格式
 - **五元组**: `src_ip:src_port -> dst_ip:dst_port protocol`
 - **MAC 地址**: `52:54:00:12:34:56` 格式
 - **接口信息**: `device_name (ifindex=N) CPU=N`
 
-#### 4.7.3 性能指标格式
+#### 4.6.3 性能指标格式
 - **延迟**: 以微秒 (us) 为单位
 - **吞吐量**: 以 pps、Mbps、GB 等单位
 - **百分比**: P50、P95、P99 等百分位数
 - **直方图**: 使用 ASCII 字符绘制的分布图
 
-#### 4.7.4 错误和异常信息
+#### 4.6.4 错误和异常信息
 - **返回值**: 特定函数返回值常量
 - **栈跟踪**: 函数名+偏移量 格式
 - **错误码**: BPF 程序加载错误信息

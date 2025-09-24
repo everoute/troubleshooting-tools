@@ -1,8 +1,7 @@
-# 测试环境配置
+# Minimal Environment Configuration - Host Only
 test_environments:
   host:
-    name: "Host Network Environment"
-    description: "系统网络性能测试环境"
+    description: "Host-to-host testing only"
     server:
       ssh_ref: "host-server"
       test_ip: "10.132.114.11"
@@ -11,15 +10,8 @@ test_environments:
       ssh_ref: "host-client"
       test_ip: "10.132.114.12"
       interface: "port-storage"
-
-  vm:
-    name: "VM Network Environment"
-    description: "虚拟机网络性能测试环境"
-    server:
-      ssh_ref: "vm-server"
-      test_ip: "172.21.153.114"
-      interface: "ens4"
-    client:
-      ssh_ref: "vm-client"
-      test_ip: "172.21.153.113"
-      interface: "ens4"
+    network_config:
+      server_ip: "10.132.114.11"
+      client_ip: "10.132.114.12"
+      internal_interface: "port-storage"
+      physical_interface: "ens11"

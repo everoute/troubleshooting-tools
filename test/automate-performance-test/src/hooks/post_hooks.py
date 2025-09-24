@@ -132,6 +132,14 @@ class PostHooks:
                 'status': True
             })
 
+        # Generate time range statistics
+        if ebpf_command:
+            self._generate_time_statistics(host_ref, result_path, timestamp)
+            results['tasks'].append({
+                'name': 'generate_time_statistics',
+                'status': True
+            })
+
         # Collect case data
         collect_cmd = f"""
             echo "Case {case_id} data collection completed at: $(date '+%Y-%m-%d %H:%M:%S.%N')" > {result_path}/case_complete_{timestamp}.log
@@ -180,6 +188,53 @@ class PostHooks:
         })
 
         return results
+
+    def _generate_time_statistics(self, host_ref: str, result_path: str, timestamp: str):
+        """Generate time range statistics for eBPF monitoring and performance tests"""
+        stats_cmd = f"""
+            # Generate time range statistics
+            STATS_FILE="{result_path}/ebpf_monitoring/time_range_statistics_{timestamp}.log"
+
+            echo "# eBPF Tool Time Range Statistics" > $STATS_FILE
+            echo "# Generated at: $(date '+%Y-%m-%d %H:%M:%S.%N')" >> $STATS_FILE
+            echo "" >> $STATS_FILE
+
+            # eBPF Monitoring Time Range
+            echo "## eBPF Monitoring Time Range" >> $STATS_FILE
+            if [ -f "{result_path}/ebpf_monitoring/ebpf_cpu_monitor_{timestamp}.log" ]; then
+                FIRST_CPU=$(grep -v '^#' "{result_path}/ebpf_monitoring/ebpf_cpu_monitor_{timestamp}.log" | head -1 | awk '{{print $1" "$2}}')
+                LAST_CPU=$(grep -v '^#' "{result_path}/ebpf_monitoring/ebpf_cpu_monitor_{timestamp}.log" | tail -1 | awk '{{print $1" "$2}}')
+                echo "CPU Monitoring Start: $FIRST_CPU" >> $STATS_FILE
+                echo "CPU Monitoring End: $LAST_CPU" >> $STATS_FILE
+            fi
+
+            if [ -f "{result_path}/ebpf_monitoring/ebpf_memory_monitor_{timestamp}.log" ]; then
+                FIRST_MEM=$(grep -v '^#' "{result_path}/ebpf_monitoring/ebpf_memory_monitor_{timestamp}.log" | head -1 | awk '{{print $1" "$2}}')
+                LAST_MEM=$(grep -v '^#' "{result_path}/ebpf_monitoring/ebpf_memory_monitor_{timestamp}.log" | tail -1 | awk '{{print $1" "$2}}')
+                echo "Memory Monitoring Start: $FIRST_MEM" >> $STATS_FILE
+                echo "Memory Monitoring End: $LAST_MEM" >> $STATS_FILE
+            fi
+
+            if [ -f "{result_path}/ebpf_monitoring/ebpf_logsize_monitor_{timestamp}.log" ]; then
+                FIRST_LOG=$(grep -v '^#' "{result_path}/ebpf_monitoring/ebpf_logsize_monitor_{timestamp}.log" | head -1 | awk '{{print $1" "$2}}')
+                LAST_LOG=$(grep -v '^#' "{result_path}/ebpf_monitoring/ebpf_logsize_monitor_{timestamp}.log" | tail -1 | awk '{{print $1" "$2}}')
+                echo "LogSize Monitoring Start: $FIRST_LOG" >> $STATS_FILE
+                echo "LogSize Monitoring End: $LAST_LOG" >> $STATS_FILE
+            fi
+
+            echo "" >> $STATS_FILE
+            echo "## Performance Test Time Ranges (from client timing files)" >> $STATS_FILE
+
+            # Find and process all timing files
+            find {result_path}/../../ -name '*_timing.log' -type f 2>/dev/null | while read timing_file; do
+                if [ -f "$timing_file" ]; then
+                    echo "" >> $STATS_FILE
+                    echo "### Test: $(basename "$timing_file" _timing.log)" >> $STATS_FILE
+                    cat "$timing_file" >> $STATS_FILE
+                fi
+            done
+        """
+        self.ssh_manager.execute_command(host_ref, stats_cmd)
 
     def _execute_global_post(self, context: Dict) -> Dict:
         """Execute global cleanup"""

@@ -1,0 +1,217 @@
+{
+  "metadata": {
+    "generation_time": "2025-09-24T12:57:06.479132",
+    "total_test_cycles": 2,
+    "environments": [
+      "host"
+    ]
+  },
+  "test_sequence": [
+    {
+      "cycle_id": "baseline_host",
+      "cycle_type": "baseline",
+      "environment": "host",
+      "ebpf_case": {
+        "case_id": "baseline",
+        "program": null,
+        "command": null,
+        "duration": null
+      },
+      "test_cycle": {
+        "init_hook": {
+          "tasks": [
+            "prepare_test_environment",
+            "start_performance_servers",
+            "prepare_monitoring_tools"
+          ],
+          "custom_monitoring": false
+        },
+        "performance_tests": [
+          {
+            "type": "throughput",
+            "configs": [
+              "single_stream",
+              "multi_stream"
+            ]
+          },
+          {
+            "type": "latency",
+            "configs": [
+              "tcp_rr",
+              "udp_rr"
+            ]
+          },
+          {
+            "type": "pps",
+            "configs": [
+              "single_stream",
+              "multi_stream_2"
+            ]
+          }
+        ],
+        "post_hook": {
+          "tasks": [
+            "collect_baseline_results",
+            "stop_performance_servers",
+            "cleanup_environment"
+          ]
+        }
+      },
+      "expected_duration": 120,
+      "result_path": "baseline/host"
+    },
+    {
+      "cycle_id": "tool_minimal_case_1_host",
+      "cycle_type": "ebpf_test",
+      "environment": "host",
+      "ebpf_case": {
+        "case_id": 1,
+        "tool_id": "tool_minimal",
+        "program": "system_network_perfomance_metrics_rx_protocol_tcp",
+        "command": "sudo python3 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-storage --phy-interface ens11 --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --direction rx --protocol tcp",
+        "duration": 10,
+        "test_params": {
+          "protocol": "tcp",
+          "direction": "rx",
+          "extra": "iface_port-storage"
+        }
+      },
+      "test_cycle": {
+        "init_hook": {
+          "tasks": [
+            "prepare_test_environment",
+            "start_performance_servers",
+            "start_ebpf_case_1",
+            "start_custom_monitoring"
+          ],
+          "custom_monitoring": true,
+          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-storage --phy-interface ens11 --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --direction rx --protocol tcp"
+        },
+        "performance_tests": [
+          {
+            "type": "throughput",
+            "configs": [
+              "single_stream",
+              "multi_stream"
+            ]
+          },
+          {
+            "type": "latency",
+            "configs": [
+              "tcp_rr",
+              "udp_rr"
+            ]
+          },
+          {
+            "type": "pps",
+            "configs": [
+              "multi_stream_4",
+              "multi_stream_8"
+            ]
+          }
+        ],
+        "post_hook": {
+          "tasks": [
+            "stop_custom_monitoring",
+            "stop_ebpf_case_1",
+            "collect_ebpf_results_tool_minimal_1",
+            "cleanup_environment"
+          ]
+        }
+      },
+      "monitoring_config": {
+        "enabled": true,
+        "cpu": true,
+        "memory": true,
+        "memory_types": [
+          "virt",
+          "rss"
+        ],
+        "log_size": true,
+        "cpu_stats": [
+          "avg",
+          "peak"
+        ]
+      },
+      "expected_duration": 130,
+      "result_path": "ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host"
+    }
+  ],
+  "global_config": {
+    "ssh_hosts": {
+      "host-server": {
+        "host": "172.21.152.82",
+        "user": "smartx",
+        "workdir": "/home/smartx/lcc"
+      },
+      "host-client": {
+        "host": "172.21.152.85",
+        "user": "smartx",
+        "workdir": "/home/smartx/lcc"
+      },
+      "vm-server": {
+        "host": "172.21.153.114",
+        "user": "root",
+        "workdir": "/root/lcc"
+      },
+      "vm-client": {
+        "host": "172.21.153.113",
+        "user": "root",
+        "workdir": "/root/lcc"
+      }
+    },
+    "performance_specs": {
+      "throughput": {
+        "single_stream": {
+          "server_cmd": "iperf3 -s -p {port} -B {server_ip}",
+          "client_cmd_tcp": "iperf3 -c {server_ip} -B {client_ip} -p {port} -t {duration} -b {target_bw} -l 65520 -J > {result_file}",
+          "client_cmd_udp": "iperf3 -c {server_ip} -B {client_ip} -p {port} -t {duration} -b {target_bw} -u -J > {result_file}",
+          "duration": 10,
+          "target_bw": [
+            "1G"
+          ],
+          "ports": [
+            5001
+          ]
+        },
+        "multi_stream": {
+          "streams": [
+            2
+          ],
+          "base_port": 5001,
+          "duration": 10
+        }
+      },
+      "latency": {
+        "server_cmd": "netserver -L {server_ip} -p {port} -D",
+        "client_cmd_tcp": "netperf -H {server_ip} -p {port} -t TCP_RR -l 10 -- -o min_latency,mean_latency,max_latency,p99_latency,p90_latency > {result_file}",
+        "client_cmd_udp": "netperf -H {server_ip} -p {port} -t UDP_RR -l 10 -- -o min_latency,mean_latency,max_latency,p99_latency,p90_latency > {result_file}",
+        "duration": 10,
+        "ports": [
+          12865
+        ]
+      },
+      "pps": {
+        "server_cmd": "iperf3 -s -p {port} -B {server_ip}",
+        "client_cmd_tcp": "iperf3 -c {server_ip} -B {client_ip} -p {port} -t {duration} -b {target_bw} -l 64 -J > {result_file}",
+        "client_cmd_udp": "iperf3 -c {server_ip} -B {client_ip} -p {port} -t {duration} -b {target_bw} -l 64 -u -J > {result_file}",
+        "single_stream": {
+          "duration": 5,
+          "target_bw": [
+            "1G"
+          ],
+          "ports": [
+            5001
+          ]
+        },
+        "multi_stream": {
+          "streams": [
+            2
+          ],
+          "base_port": 5001,
+          "duration": 5
+        }
+      }
+    }
+  }
+}

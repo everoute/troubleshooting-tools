@@ -3,6 +3,8 @@
 
 import json
 import hashlib
+import os
+import re
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -10,9 +12,15 @@ from typing import Dict, List, Optional
 class EBPFCentricWorkflowGenerator:
     """Generate eBPF-centric test workflow"""
 
-    def __init__(self):
-        """Initialize workflow generator"""
-        pass
+    def __init__(self, testcase_loader=None, base_path=None):
+        """Initialize workflow generator
+
+        Args:
+            testcase_loader: TestcaseLoader instance
+            base_path: Base path for testcase files
+        """
+        self.testcase_loader = testcase_loader
+        self.base_path = base_path or '/Users/admin/workspace/troubleshooting-tools'
 
     def generate_workflow_spec(self, ssh_config: Dict, env_config: Dict,
                              perf_spec: Dict, ebpf_config: Dict) -> Dict:
@@ -104,6 +112,9 @@ class EBPFCentricWorkflowGenerator:
             tool_config['testcase_source']['file'], case_id
         )
 
+        # Extract parameters from case for path generation
+        test_params = self._extract_test_params(case_details)
+
         return {
             "cycle_id": f"{tool_id}_case_{case_id}_{env_name}",
             "cycle_type": "ebpf_test",
@@ -113,7 +124,8 @@ class EBPFCentricWorkflowGenerator:
                 "tool_id": tool_id,
                 "program": case_details.get("name", ""),
                 "command": case_details.get("command", ""),
-                "duration": case_details.get("duration", 30)
+                "duration": case_details.get("duration", 30),
+                "test_params": test_params
             },
             "test_cycle": {
                 "init_hook": {
@@ -141,11 +153,27 @@ class EBPFCentricWorkflowGenerator:
             },
             "monitoring_config": tool_config['resource_monitoring'],
             "expected_duration": self._calculate_cycle_duration(perf_spec) + case_details.get("duration", 30),
-            "result_path": f"ebpf/{tool_id}_case_{case_id}/{env_name}"
+            "result_path": self._generate_ebpf_result_path(tool_id, case_id, test_params, env_name)
         }
 
     def _get_performance_tests_for_env(self, env_name: str, perf_spec: Dict) -> List[Dict]:
         """Get performance test configurations for environment"""
+        # Generate PPS configs based on actual stream configuration
+        pps_configs = []
+        if 'pps' in perf_spec['performance_tests']:
+            pps_config = perf_spec['performance_tests']['pps']
+            # Add single_stream if it exists
+            if 'single_stream' in pps_config:
+                pps_configs.append('single_stream')
+            # Add multi_stream configs
+            if 'multi_stream' in pps_config:
+                streams = pps_config['multi_stream'].get('streams', [2])
+                pps_configs.extend([f"multi_stream_{stream}" for stream in streams])
+            # Fallback to old behavior if neither exists
+            elif 'streams' in pps_config:
+                streams = pps_config.get('streams', [2])
+                pps_configs = [f"multi_stream_{stream}" for stream in streams]
+
         return [
             {
                 "type": "throughput",
@@ -157,7 +185,7 @@ class EBPFCentricWorkflowGenerator:
             },
             {
                 "type": "pps",
-                "configs": ["multi_stream_4", "multi_stream_8"]
+                "configs": pps_configs
             }
         ]
 
@@ -177,9 +205,14 @@ class EBPFCentricWorkflowGenerator:
                     "configs": ["tcp_rr", "udp_rr"]
                 })
             elif test_type == "pps":
+                # Generate PPS configs based on actual stream configuration
+                pps_configs = []
+                if 'pps' in perf_spec['performance_tests']:
+                    streams = perf_spec['performance_tests']['pps'].get('streams', [4, 8])
+                    pps_configs = [f"multi_stream_{stream}" for stream in streams]
                 tests.append({
                     "type": "pps",
-                    "configs": ["multi_stream_4", "multi_stream_8"]
+                    "configs": pps_configs
                 })
         return tests
 
@@ -215,13 +248,85 @@ class EBPFCentricWorkflowGenerator:
         Returns:
             Case details dictionary
         """
-        # This is a placeholder implementation
-        # In real implementation, would load from actual testcase file
-        return {
-            "name": f"case_{case_id}",
-            "command": f"python ebpf_tool.py --case {case_id}",
-            "duration": 30
-        }
+        if self.testcase_loader:
+            # Use TestcaseLoader if available
+            return self.testcase_loader.get_case_details(testcase_file, case_id)
+        else:
+            # Try to load directly
+            try:
+                from utils.testcase_loader import TestcaseLoader
+                loader = TestcaseLoader(self.base_path)
+                return loader.get_case_details(testcase_file, case_id)
+            except:
+                # Fallback to placeholder
+                return {
+                    "name": f"case_{case_id}",
+                    "command": f"python ebpf_tool.py --case {case_id}",
+                    "duration": 30
+                }
+
+    def _extract_test_params(self, case_details: Dict) -> Dict:
+        """Extract test parameters from case details
+
+        Args:
+            case_details: Case details from testcase
+
+        Returns:
+            Test parameters dict
+        """
+        params = {}
+        command = case_details.get('command', '')
+
+        # Extract protocol
+        if '--protocol tcp' in command or 'tcp' in case_details.get('name', '').lower():
+            params['protocol'] = 'tcp'
+        elif '--protocol udp' in command or 'udp' in case_details.get('name', '').lower():
+            params['protocol'] = 'udp'
+        else:
+            params['protocol'] = 'tcp'  # default
+
+        # Extract direction
+        if '--direction rx' in command or '_rx_' in case_details.get('name', ''):
+            params['direction'] = 'rx'
+        elif '--direction tx' in command or '_tx_' in case_details.get('name', ''):
+            params['direction'] = 'tx'
+        else:
+            params['direction'] = 'rx'  # default
+
+        # Extract other params from command
+        params['extra'] = ''
+        if '--internal-interface' in command:
+            match = re.search(r'--internal-interface\s+(\S+)', command)
+            if match:
+                params['extra'] += f"iface_{match.group(1)}"
+
+        return params
+
+    def _generate_ebpf_result_path(self, tool_id: str, case_id: int,
+                                   test_params: Dict, env_name: str) -> str:
+        """Generate eBPF result path with params hash
+
+        Args:
+            tool_id: Tool ID
+            case_id: Case ID
+            test_params: Test parameters
+            env_name: Environment name
+
+        Returns:
+            Result path string
+        """
+        # Generate params hash
+        protocol = test_params.get('protocol', 'tcp')
+        direction = test_params.get('direction', 'rx')
+        extra = test_params.get('extra', '')
+
+        params_str = f"{protocol}_{direction}"
+        if extra:
+            params_str += f"_{extra}"
+
+        params_hash = hashlib.md5(params_str.encode()).hexdigest()[:6]
+
+        return f"ebpf/{tool_id}_case_{case_id}_{protocol}_{direction}_{params_hash}/{env_name}"
 
     def export_workflow(self, workflow_spec: Dict, output_file: str):
         """Export workflow to JSON file

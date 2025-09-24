@@ -12,15 +12,17 @@ logger = logging.getLogger(__name__)
 class InitHooks:
     """Layered initialization hooks for remote execution"""
 
-    def __init__(self, ssh_manager, path_manager):
+    def __init__(self, ssh_manager, path_manager, config=None):
         """Initialize hooks
 
         Args:
             ssh_manager: SSH connection manager
             path_manager: Remote path manager
+            config: Full configuration dict (optional)
         """
         self.ssh_manager = ssh_manager
         self.path_manager = path_manager
+        self.config = config or {}
 
     def execute_hook(self, stage: str, action: str, context: Dict) -> Dict:
         """Execute hook based on stage and action
@@ -130,6 +132,15 @@ class InitHooks:
             'status': status == 0
         })
 
+        # Store tool context for monitoring cleanup
+        self.tool_context = {
+            'tool_id': tool_id,
+            'environment': environment,
+            'host_ref': host_ref,
+            'workdir': workdir,
+            'timestamp': timestamp
+        }
+
         return results
 
     def _execute_case_init(self, context: Dict) -> Dict:
@@ -148,8 +159,8 @@ class InitHooks:
         if not result_path:
             result_path = f"{workdir}/performance-test-results/ebpf/{tool_id}_case_{case_id}/{environment}"
 
-        # Create case directories
-        cmd = f"mkdir -p {result_path}/{{client_results,server_results,monitoring,ebpf_monitoring}}"
+        # Create case directories (only server_results and ebpf_monitoring on server)
+        cmd = f"mkdir -p {result_path}/{{server_results,ebpf_monitoring}}"
         stdout, stderr, status = self.ssh_manager.execute_command(host_ref, cmd)
         results['tasks'].append({
             'name': 'create_case_directories',
@@ -177,10 +188,10 @@ class InitHooks:
                     'pid': ebpf_pid
                 })
 
-                # Start case monitoring
-                self._start_case_monitoring(host_ref, ebpf_pid, result_path, timestamp)
+                # Start tool-level monitoring (covers entire tool lifecycle)
+                self._start_tool_monitoring(host_ref, ebpf_pid, result_path, timestamp)
                 results['tasks'].append({
-                    'name': 'start_case_monitoring',
+                    'name': 'start_tool_monitoring',
                     'status': True
                 })
 
@@ -203,60 +214,127 @@ class InitHooks:
 
         # Start performance servers based on test type
         if test_type in ["throughput", "pps"]:
-            server_cmd = f"nohup iperf3 -s -p 5001 -B {server_ip} > {result_path}/iperf3_server_{test_type}_{timestamp}.log 2>&1 &"
-            self.ssh_manager.execute_command(server_host_ref, server_cmd)
+            # Get test config to determine if multi-stream
+            test_config = context.get('test_config', 'single_stream')
+            streams = 1
+            if 'multi_stream' in test_config:
+                # Extract stream count from config name or use default
+                if '_' in test_config:
+                    try:
+                        streams = int(test_config.split('_')[-1])
+                    except:
+                        streams = 2  # Default
+                else:
+                    streams = 2
+
+            # Kill any existing iperf3 servers
+            self.ssh_manager.execute_command(server_host_ref, "pkill -f 'iperf3.*-s' || true")
+
+            # Ensure log directory exists (result_path now already points to server_results)
+            self.ssh_manager.execute_command(server_host_ref, f"mkdir -p {result_path}")
+
+            # Start multiple servers for multi-stream tests
+            base_port = 5001
+            started_ports = []
+
+            for i in range(streams):
+                port = base_port + i
+                server_cmd = f"nohup iperf3 -s -p {port} -B {server_ip} > {result_path}/iperf3_server_{test_type}_port_{port}_{timestamp}.log 2>&1 &"
+                self.ssh_manager.execute_command(server_host_ref, server_cmd)
+                started_ports.append(port)
+
+            # Wait and verify server startup
+            self.ssh_manager.execute_command(server_host_ref, "sleep 3")
+
+            # Check all ports
+            all_listening = True
+            for port in started_ports:
+                stdout, stderr, exit_code = self.ssh_manager.execute_command(server_host_ref, f"ss -tln | grep ':{port} ' || echo 'NOT_LISTENING'")
+                if 'NOT_LISTENING' in stdout:
+                    all_listening = False
+                    break
+
             results['tasks'].append({
                 'name': 'start_iperf3_server',
-                'status': True
+                'status': all_listening,
+                'details': f"Ports {started_ports} listening: {all_listening}",
+                'ports': started_ports
             })
 
         elif test_type == "latency":
+            # Kill any existing netserver processes on the port
+            self.ssh_manager.execute_command(server_host_ref, "pkill -f 'netserver.*-p 12865' || true")
+
+            # Ensure log directory exists (result_path now already points to server_results)
+            self.ssh_manager.execute_command(server_host_ref, f"mkdir -p {result_path}")
             server_cmd = f"nohup netserver -L {server_ip} -p 12865 -D > {result_path}/netserver_{test_type}_{timestamp}.log 2>&1 &"
             self.ssh_manager.execute_command(server_host_ref, server_cmd)
+
+            # Wait and verify server startup
+            self.ssh_manager.execute_command(server_host_ref, "sleep 3")
+            stdout, stderr, exit_code = self.ssh_manager.execute_command(server_host_ref, "ss -tln | grep ':12865 ' || echo 'NOT_LISTENING'")
+
+            server_status = 'NOT_LISTENING' not in stdout
             results['tasks'].append({
                 'name': 'start_netserver',
-                'status': True
+                'status': server_status,
+                'details': f"Port 12865 listening: {server_status}"
             })
-
-        # Wait for servers to start
-        self.ssh_manager.execute_command(server_host_ref, "sleep 2")
 
         return results
 
-    def _start_case_monitoring(self, host_ref: str, ebpf_pid: str,
+    def _start_tool_monitoring(self, host_ref: str, ebpf_pid: str,
                               result_path: str, timestamp: str):
-        """Start case-level monitoring"""
-        # CPU monitoring
+        """Start tool-level monitoring with headers and configurable interval (covers entire tool lifecycle)"""
+        # Get monitoring interval from config (default 2 seconds)
+        interval = self.config.get('perf', {}).get('performance_tests', {}).get('monitoring', {}).get('interval', 2)
+
+        # CPU monitoring with header
         cpu_cmd = f"""
             nohup bash -c '
+                echo "# eBPF CPU Monitoring - CPU usage percentage (instantaneous)" > {result_path}/ebpf_monitoring/ebpf_cpu_monitor_{timestamp}.log
+                echo "# Timestamp                     CPU_Percent" >> {result_path}/ebpf_monitoring/ebpf_cpu_monitor_{timestamp}.log
                 while kill -0 {ebpf_pid} 2>/dev/null; do
                     echo "$(date "+%Y-%m-%d %H:%M:%S.%N")" "$(top -b -n 1 -p {ebpf_pid} | tail -1 | awk "{{print \\$9}}")"
-                    sleep 1
+                    sleep {interval}
                 done
-            ' > {result_path}/ebpf_monitoring/ebpf_cpu_monitor_{timestamp}.log 2>&1 &
+            ' >> {result_path}/ebpf_monitoring/ebpf_cpu_monitor_{timestamp}.log 2>&1 &
         """
         self.ssh_manager.execute_command(host_ref, cpu_cmd)
 
-        # Memory monitoring
+        # Memory monitoring with header
         mem_cmd = f"""
             nohup bash -c '
+                echo "# eBPF Memory Monitoring - Virtual memory size, Resident set size, Memory percentage (instantaneous)" > {result_path}/ebpf_monitoring/ebpf_memory_monitor_{timestamp}.log
+                echo "# Timestamp                     VSZ_KB      RSS_KB      MEM_Percent" >> {result_path}/ebpf_monitoring/ebpf_memory_monitor_{timestamp}.log
                 while kill -0 {ebpf_pid} 2>/dev/null; do
                     echo "$(date "+%Y-%m-%d %H:%M:%S.%N")" "$(ps -p {ebpf_pid} -o vsz,rss,pmem --no-headers)"
-                    sleep 1
+                    sleep {interval}
                 done
-            ' > {result_path}/ebpf_monitoring/ebpf_memory_monitor_{timestamp}.log 2>&1 &
+            ' >> {result_path}/ebpf_monitoring/ebpf_memory_monitor_{timestamp}.log 2>&1 &
         """
         self.ssh_manager.execute_command(host_ref, mem_cmd)
 
-        # Log size monitoring
+        # Log size monitoring with header and human-readable conversion
         log_file = f"{result_path}/ebpf_output_{timestamp}.log"
         logsize_cmd = f"""
             nohup bash -c '
+                echo "# eBPF Log Size Monitoring - Log file size (instantaneous)" > {result_path}/ebpf_monitoring/ebpf_logsize_monitor_{timestamp}.log
+                echo "# Timestamp                     Size_Bytes  Size_Human" >> {result_path}/ebpf_monitoring/ebpf_logsize_monitor_{timestamp}.log
                 while kill -0 {ebpf_pid} 2>/dev/null; do
                     SIZE=$(stat -c %s "{log_file}" 2>/dev/null || echo 0)
-                    echo "$(date "+%Y-%m-%d %H:%M:%S.%N")" "$SIZE"
-                    sleep 1
+                    if [ $SIZE -lt 1024 ]; then
+                        HUMAN="${{SIZE}}B"
+                    elif [ $SIZE -lt 1048576 ]; then
+                        HUMAN="$((SIZE/1024))K"
+                    elif [ $SIZE -lt 1073741824 ]; then
+                        HUMAN="$((SIZE/1048576))M"
+                    else
+                        HUMAN="$((SIZE/1073741824))G"
+                    fi
+                    echo "$(date "+%Y-%m-%d %H:%M:%S.%N")" "$SIZE" "$HUMAN"
+                    sleep {interval}
                 done
-            ' > {result_path}/ebpf_monitoring/ebpf_logsize_monitor_{timestamp}.log 2>&1 &
+            ' >> {result_path}/ebpf_monitoring/ebpf_logsize_monitor_{timestamp}.log 2>&1 &
         """
         self.ssh_manager.execute_command(host_ref, logsize_cmd)

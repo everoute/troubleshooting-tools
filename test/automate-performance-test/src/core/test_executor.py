@@ -9,6 +9,9 @@ from datetime import datetime
 
 from .ssh_manager import SSHManager
 from .remote_path_manager import RemotePathManager
+from hooks.init_hooks import InitHooks
+from hooks.post_hooks import PostHooks
+from hooks.custom_hooks import CustomHooks
 
 
 logger = logging.getLogger(__name__)
@@ -17,17 +20,24 @@ logger = logging.getLogger(__name__)
 class TestExecutor:
     """Test execution engine for remote test runs"""
 
-    def __init__(self, ssh_manager: SSHManager, path_manager: RemotePathManager):
+    def __init__(self, ssh_manager: SSHManager, path_manager: RemotePathManager, config=None):
         """Initialize test executor
 
         Args:
             ssh_manager: SSH connection manager
             path_manager: Remote path manager
+            config: Full configuration dict
         """
         self.ssh_manager = ssh_manager
         self.path_manager = path_manager
+        self.config = config or {}
         self.current_test_context = {}
         self.ebpf_processes = {}
+
+        # Initialize hooks with config
+        self.init_hooks = InitHooks(ssh_manager, path_manager, config)
+        self.post_hooks = PostHooks(ssh_manager, path_manager)
+        self.custom_hooks = CustomHooks(ssh_manager, path_manager)
 
     def execute_workflow(self, workflow_spec: Dict) -> Dict:
         """Execute complete workflow
@@ -45,8 +55,12 @@ class TestExecutor:
         }
 
         try:
-            # Execute global init
-            self._execute_global_init(workflow_spec)
+            # Execute global init using hooks
+            global_context = self._prepare_global_context(workflow_spec)
+            global_init_result = self.init_hooks.execute_hook(
+                "global", "init", global_context
+            )
+            logger.info(f"Global init completed: {global_init_result}")
 
             # Execute each test cycle
             for cycle in workflow_spec['test_sequence']:
@@ -54,8 +68,11 @@ class TestExecutor:
                 cycle_result = self._execute_test_cycle(cycle, workflow_spec)
                 results['test_cycles'].append(cycle_result)
 
-            # Execute global post
-            self._execute_global_post(workflow_spec)
+            # Execute global post using hooks
+            global_post_result = self.post_hooks.execute_hook(
+                "global", "post", global_context
+            )
+            logger.info(f"Global post completed: {global_post_result}")
 
             results['status'] = "completed"
         except Exception as e:
@@ -68,7 +85,7 @@ class TestExecutor:
         return results
 
     def _execute_test_cycle(self, cycle: Dict, workflow_spec: Dict) -> Dict:
-        """Execute single test cycle
+        """Execute single test cycle using layered hooks
 
         Args:
             cycle: Test cycle configuration
@@ -84,26 +101,35 @@ class TestExecutor:
         }
 
         try:
-            # Set current test context
-            self._set_test_context(cycle, workflow_spec)
+            # Prepare cycle context
+            cycle_context = self._prepare_cycle_context(cycle, workflow_spec)
 
-            # Execute init hook
-            if cycle['cycle_type'] == 'baseline':
-                self._execute_baseline_init(cycle)
-            else:
-                self._execute_ebpf_init(cycle)
+            # Tool-level init (if new tool)
+            tool_id = cycle.get('ebpf_case', {}).get('tool_id')
+            if tool_id and tool_id not in self.ebpf_processes:
+                tool_context = self._prepare_tool_context(tool_id, cycle, workflow_spec)
+                tool_init_result = self.init_hooks.execute_hook(
+                    "tool", "init", tool_context
+                )
+                logger.info(f"Tool init for {tool_id}: {tool_init_result}")
 
-            # Execute performance tests
+            # Case-level init
+            case_init_result = self.init_hooks.execute_hook(
+                "case", "init", cycle_context
+            )
+            logger.info(f"Case init: {case_init_result}")
+
+            # Execute performance tests with test-level hooks
             perf_results = self._execute_performance_tests(
-                cycle['test_cycle']['performance_tests']
+                cycle['test_cycle']['performance_tests'], cycle_context
             )
             cycle_result['performance_results'] = perf_results
 
-            # Execute post hook
-            if cycle['cycle_type'] == 'baseline':
-                self._execute_baseline_post(cycle)
-            else:
-                self._execute_ebpf_post(cycle)
+            # Case-level post
+            case_post_result = self.post_hooks.execute_hook(
+                "case", "post", cycle_context
+            )
+            logger.info(f"Case post: {case_post_result}")
 
             cycle_result['status'] = "completed"
         except Exception as e:
@@ -242,11 +268,12 @@ class TestExecutor:
         # Write metadata
         self._write_test_metadata(cycle, result_path, timestamp)
 
-    def _execute_performance_tests(self, perf_tests: List[Dict]) -> List[Dict]:
-        """Execute performance tests
+    def _execute_performance_tests(self, perf_tests: List[Dict], cycle_context: Dict) -> List[Dict]:
+        """Execute performance tests using test-level hooks
 
         Args:
             perf_tests: Performance test configurations
+            cycle_context: Current cycle context
 
         Returns:
             Test results
@@ -260,8 +287,31 @@ class TestExecutor:
             logger.info(f"Executing {test_type} tests")
 
             for config in configs:
-                result = self._run_single_performance_test(test_type, config)
-                results.append(result)
+                # Prepare test context
+                test_context = self._prepare_test_context(test_type, config, cycle_context)
+
+                # Test-level init (start servers)
+                test_init_result = self.init_hooks.execute_hook(
+                    "test", "init", test_context
+                )
+                logger.info(f"Test init for {test_type}/{config}: {test_init_result}")
+
+                # Execute actual performance test
+                test_result = self._run_performance_test(test_type, config, test_context)
+
+                # Test-level post (stop servers)
+                test_post_result = self.post_hooks.execute_hook(
+                    "test", "post", test_context
+                )
+                logger.info(f"Test post for {test_type}/{config}: {test_post_result}")
+
+                results.append({
+                    "test_type": test_type,
+                    "config": config,
+                    "result": test_result,
+                    "init_status": test_init_result.get('tasks', []),
+                    "post_status": test_post_result.get('tasks', [])
+                })
 
         return results
 
@@ -400,3 +450,378 @@ class TestExecutor:
         )
 
         logger.info(f"Wrote metadata to {metadata_file}")
+
+    def _prepare_global_context(self, workflow_spec: Dict) -> Dict:
+        """Prepare global context for hooks"""
+        context = {
+            'targets': ['server', 'client'],
+            'workflow': workflow_spec
+        }
+
+        # Add host references from config if available
+        if 'ssh' in self.config and 'env' in self.config:
+            ssh_hosts = self.config['ssh']['ssh_hosts']
+            for env_name, env_config in self.config['env']['test_environments'].items():
+                server_ref = env_config['server']['ssh_ref']
+                client_ref = env_config['client']['ssh_ref']
+
+                context[f'{env_name}_server_host_ref'] = server_ref
+                context[f'{env_name}_client_host_ref'] = client_ref
+
+                if server_ref in ssh_hosts:
+                    context[f'{env_name}_server_workdir'] = ssh_hosts[server_ref]['workdir']
+                if client_ref in ssh_hosts:
+                    context[f'{env_name}_client_workdir'] = ssh_hosts[client_ref]['workdir']
+
+        return context
+
+    def _prepare_cycle_context(self, cycle: Dict, workflow_spec: Dict) -> Dict:
+        """Prepare cycle context for hooks"""
+        timestamp = self.path_manager.get_timestamp()
+        env_name = cycle['environment']
+
+        # Get workdir from SSH config if available
+        workdir = "/tmp"  # default
+        host_ref = "host-server"  # default
+
+        if 'ssh' in self.config and 'env' in self.config:
+            env_config = self.config['env']['test_environments'].get(env_name, {})
+            server_config = env_config.get('server', {})
+            host_ref = server_config.get('ssh_ref', host_ref)
+
+            if host_ref in self.config['ssh']['ssh_hosts']:
+                workdir = self.config['ssh']['ssh_hosts'][host_ref]['workdir']
+
+        # Generate result path
+        if cycle['cycle_type'] == 'baseline':
+            result_path = f"{workdir}/performance-test-results/baseline/{env_name}"
+        else:
+            result_path = f"{workdir}/performance-test-results/{cycle['result_path']}"
+
+        return {
+            'cycle': cycle,
+            'timestamp': timestamp,
+            'environment': env_name,
+            'host_ref': host_ref,
+            'workdir': workdir,
+            'result_path': result_path,
+            'tool_id': cycle.get('ebpf_case', {}).get('tool_id'),
+            'case_id': cycle.get('ebpf_case', {}).get('case_id'),
+            'ebpf_command': cycle.get('ebpf_case', {}).get('command')
+        }
+
+    def _prepare_tool_context(self, tool_id: str, cycle: Dict, workflow_spec: Dict) -> Dict:
+        """Prepare tool context for hooks"""
+        env_name = cycle['environment']
+        host_ref = "host-server"
+        workdir = "/tmp"
+
+        if 'ssh' in self.config and 'env' in self.config:
+            env_config = self.config['env']['test_environments'].get(env_name, {})
+            server_config = env_config.get('server', {})
+            host_ref = server_config.get('ssh_ref', host_ref)
+
+            if host_ref in self.config['ssh']['ssh_hosts']:
+                workdir = self.config['ssh']['ssh_hosts'][host_ref]['workdir']
+
+        return {
+            'tool_id': tool_id,
+            'environment': env_name,
+            'host_ref': host_ref,
+            'workdir': workdir
+        }
+
+    def _prepare_test_context(self, test_type: str, config: str, cycle_context: Dict) -> Dict:
+        """Prepare test context for hooks"""
+        env_name = cycle_context['environment']
+        timestamp = self.path_manager.get_timestamp()
+
+        # Default values
+        server_ip = "127.0.0.1"
+        client_ip = "127.0.0.1"
+        server_host_ref = "host-server"
+        client_host_ref = "host-client"
+        interface = "eth0"
+
+        if 'env' in self.config:
+            env_config = self.config['env']['test_environments'].get(env_name, {})
+            server_config = env_config.get('server', {})
+            client_config = env_config.get('client', {})
+
+            server_ip = server_config.get('test_ip', server_ip)
+            client_ip = client_config.get('test_ip', client_ip)
+            server_host_ref = server_config.get('ssh_ref', server_host_ref)
+            client_host_ref = client_config.get('ssh_ref', client_host_ref)
+            interface = server_config.get('interface', interface)
+
+        # Determine result path - organized by test_type then config
+        conn_type = self._get_connection_type(config)
+        base_result_path = cycle_context['result_path']
+        # Create test_type subdirectory within server_results for better organization
+        result_path = f"{base_result_path}/server_results/{test_type}/{conn_type}_{timestamp}"
+
+        return {
+            'test_type': test_type,
+            'test_config': config,
+            'server_ip': server_ip,
+            'client_ip': client_ip,
+            'server_host_ref': server_host_ref,
+            'client_host_ref': client_host_ref,
+            'result_path': result_path,
+            'interface': interface,
+            'timestamp': timestamp
+        }
+
+    def _run_performance_test(self, test_type: str, config: str, test_context: Dict) -> Dict:
+        """Run actual performance test with real commands"""
+        result = {
+            "test_type": test_type,
+            "config": config,
+            "start_time": datetime.now().isoformat()
+        }
+
+        try:
+            if test_type == "throughput":
+                result = self._run_throughput_test(config, test_context)
+            elif test_type == "latency":
+                result = self._run_latency_test(config, test_context)
+            elif test_type == "pps":
+                result = self._run_pps_test(config, test_context)
+
+            result['status'] = "completed"
+        except Exception as e:
+            logger.error(f"Performance test failed: {str(e)}")
+            result['status'] = "failed"
+            result['error'] = str(e)
+        finally:
+            result['end_time'] = datetime.now().isoformat()
+
+        return result
+
+    def _run_throughput_test(self, config: str, test_context: Dict) -> Dict:
+        """Run throughput test with iperf3"""
+        result = {"type": "throughput", "config": config}
+
+        client_host = test_context['client_host_ref']
+        server_host = test_context['server_host_ref']
+        server_ip = test_context['server_ip']
+        client_ip = test_context['client_ip']
+        result_path = test_context['result_path']
+
+        # Ensure result directories exist on both client and server
+        client_result_path = result_path.replace('server_results', 'client_results')
+        mkdir_cmd = f"mkdir -p {client_result_path}"
+        self.ssh_manager.execute_command(client_host, mkdir_cmd)
+        # Also ensure server result path exists
+        server_mkdir_cmd = f"mkdir -p {result_path}"
+        self.ssh_manager.execute_command(server_host, server_mkdir_cmd)
+
+        if config == "single_stream":
+            # Record test start time and run TCP throughput test
+            start_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+            result_file = f"{client_result_path}/throughput_single_tcp.json"
+            timing_file = f"{client_result_path}/throughput_single_timing.log"
+
+            # Record test timing
+            timing_cmd = f"echo 'Test: throughput_single_tcp' > {timing_file} && echo 'Start: {start_time}' >> {timing_file}"
+            self.ssh_manager.execute_command(client_host, timing_cmd)
+
+            cmd = f"iperf3 -c {server_ip} -B {client_ip} -p 5001 -t 30 -b 10G -l 65520 -J > {result_file}"
+            stdout, stderr, status = self.ssh_manager.execute_command(client_host, cmd)
+
+            # Record test end time
+            end_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+            end_timing_cmd = f"echo 'End: {end_time}' >> {timing_file}"
+            self.ssh_manager.execute_command(client_host, end_timing_cmd)
+
+            if status == 0:
+                result['tcp_output'] = result_file
+                result['timing_file'] = timing_file
+            else:
+                result['tcp_error'] = stderr
+
+        elif config == "multi_stream":
+            # Run true multi-stream test with multiple processes
+            streams = test_context.get('streams', 2)  # Default 2 streams
+            base_port = 5001
+            result['client_files'] = []
+            result['timing_files'] = []
+            result['process_start_times'] = []
+            result['streams'] = streams
+
+            # Record multi-stream test start
+            test_start_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+
+            # Launch multiple client processes in parallel
+            client_cmds = []
+            for i in range(streams):
+                port = base_port + i
+                client_file = f"{client_result_path}/throughput_multi_stream_{i+1}_port_{port}.json"
+                timing_file = f"{client_result_path}/throughput_multi_stream_{i+1}_port_{port}_timing.log"
+
+                # Record per-process timing
+                process_start = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                timing_cmd = f"echo 'Test: throughput_multi_stream_process_{i+1}_port_{port}' > {timing_file} && echo 'Process_Start: {process_start}' >> {timing_file}"
+                self.ssh_manager.execute_command(client_host, timing_cmd)
+
+                client_cmd = f"iperf3 -c {server_ip} -B {client_ip} -p {port} -t 10 -b 1G -J > {client_file} 2>&1 &"
+                client_cmds.append(client_cmd)
+                result['client_files'].append(client_file)
+                result['timing_files'].append(timing_file)
+                result['process_start_times'].append(process_start)
+
+            # Start all client processes
+            for i, cmd in enumerate(client_cmds):
+                self.ssh_manager.execute_command(client_host, cmd)
+                # Record actual launch time
+                launch_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                timing_file = result['timing_files'][i]
+                launch_cmd = f"echo 'Actual_Launch: {launch_time}' >> {timing_file}"
+                self.ssh_manager.execute_command(client_host, launch_cmd)
+
+            # Wait for all processes to complete
+            wait_cmd = f"sleep 12"  # Test duration + 2 seconds
+            self.ssh_manager.execute_command(client_host, wait_cmd)
+
+            # Record multi-stream test end
+            test_end_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+            for timing_file in result['timing_files']:
+                end_cmd = f"echo 'Test_End: {test_end_time}' >> {timing_file}"
+                self.ssh_manager.execute_command(client_host, end_cmd)
+
+            result['test_start_time'] = test_start_time
+            result['test_end_time'] = test_end_time
+            result['success'] = True
+
+        return result
+
+    def _run_latency_test(self, config: str, test_context: Dict) -> Dict:
+        """Run latency test with netperf"""
+        result = {"type": "latency", "config": config}
+
+        client_host = test_context['client_host_ref']
+        server_host = test_context['server_host_ref']
+        server_ip = test_context['server_ip']
+        result_path = test_context['result_path']
+
+        # Ensure result directories exist on both client and server
+        client_result_path = result_path.replace('server_results', 'client_results')
+        mkdir_cmd = f"mkdir -p {client_result_path}"
+        self.ssh_manager.execute_command(client_host, mkdir_cmd)
+        # Also ensure server result path exists
+        server_mkdir_cmd = f"mkdir -p {result_path}"
+        self.ssh_manager.execute_command(server_host, server_mkdir_cmd)
+
+        test_type = "TCP_RR" if config == "tcp_rr" else "UDP_RR"
+        protocol = "tcp" if config == "tcp_rr" else "udp"
+        result_file = f"{client_result_path}/latency_{protocol}_rr.txt"
+        cmd = f"netperf -H {server_ip} -p 12865 -t {test_type} -l 20 -- -o min_latency,mean_latency,max_latency > {result_file}"
+
+        stdout, stderr, status = self.ssh_manager.execute_command(client_host, cmd)
+
+        if status == 0:
+            result['output'] = result_file
+        else:
+            result['error'] = stderr
+
+        return result
+
+    def _run_pps_test(self, config: str, test_context: Dict) -> Dict:
+        """Run PPS test with iperf3 small packets"""
+        result = {"type": "pps", "config": config}
+
+        # Determine stream count based on config
+        if config == "single_stream":
+            streams = 1
+        elif "multi_stream_" in config:
+            streams = int(config.split("_")[-1])
+        else:
+            streams = 2  # Default
+
+        client_host = test_context['client_host_ref']
+        server_host = test_context['server_host_ref']
+        server_ip = test_context['server_ip']
+        client_ip = test_context['client_ip']
+        result_path = test_context['result_path']
+        base_port = 5001
+
+        # Ensure result directories exist on both client and server
+        client_result_path = result_path.replace('server_results', 'client_results')
+        mkdir_cmd = f"mkdir -p {client_result_path}"
+        self.ssh_manager.execute_command(client_host, mkdir_cmd)
+        # Also ensure server result path exists
+        server_mkdir_cmd = f"mkdir -p {result_path}"
+        self.ssh_manager.execute_command(server_host, server_mkdir_cmd)
+
+        result['client_files'] = []
+        result['streams'] = streams
+
+        # Record PPS test start time
+        test_start_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        result['timing_files'] = []
+        result['process_start_times'] = []
+
+        # Launch client processes for PPS test
+        client_cmds = []
+        for i in range(streams):
+            port = base_port + i
+            if config == "single_stream":
+                client_file = f"{client_result_path}/pps_single_tcp.json"
+                timing_file = f"{client_result_path}/pps_single_timing.log"
+            else:
+                client_file = f"{client_result_path}/pps_multi_stream_{i+1}_port_{port}.json"
+                timing_file = f"{client_result_path}/pps_multi_stream_{i+1}_port_{port}_timing.log"
+
+            # Record per-process timing
+            process_start = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+            timing_cmd = f"echo 'Test: pps_{config}_process_{i+1}_port_{port}' > {timing_file} && echo 'Process_Start: {process_start}' >> {timing_file}"
+            self.ssh_manager.execute_command(client_host, timing_cmd)
+
+            # Use small packets (64 bytes) for PPS testing
+            client_cmd = f"iperf3 -c {server_ip} -B {client_ip} -p {port} -t 5 -b 1G -l 64 -J > {client_file} 2>&1 &"
+            client_cmds.append(client_cmd)
+            result['client_files'].append(client_file)
+            result['timing_files'].append(timing_file)
+            result['process_start_times'].append(process_start)
+
+        # Start all client processes
+        for i, cmd in enumerate(client_cmds):
+            self.ssh_manager.execute_command(client_host, cmd)
+            # Record actual launch time
+            launch_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+            timing_file = result['timing_files'][i]
+            launch_cmd = f"echo 'Actual_Launch: {launch_time}' >> {timing_file}"
+            self.ssh_manager.execute_command(client_host, launch_cmd)
+
+        # Wait for all processes to complete
+        wait_cmd = f"sleep 7"  # Test duration + 2 seconds
+        self.ssh_manager.execute_command(client_host, wait_cmd)
+
+        # Record test end time
+        test_end_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+        for timing_file in result['timing_files']:
+            end_cmd = f"echo 'Test_End: {test_end_time}' >> {timing_file}"
+            self.ssh_manager.execute_command(client_host, end_cmd)
+
+        result['test_start_time'] = test_start_time
+        result['test_end_time'] = test_end_time
+        result['success'] = True
+
+        return result
+
+    def _get_connection_type(self, config: str) -> str:
+        """Get connection type from config string"""
+        if 'single' in config:
+            return 'single'
+        elif 'multi' in config:
+            parts = config.split('_')
+            for part in parts:
+                if part.isdigit():
+                    return f"multi_{part}"
+            return 'multi_2'  # Default to 2 streams
+        elif 'tcp_rr' in config:
+            return 'tcp_rr'
+        elif 'udp_rr' in config:
+            return 'udp_rr'
+        else:
+            return 'single'

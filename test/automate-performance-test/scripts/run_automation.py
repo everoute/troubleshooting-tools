@@ -83,9 +83,16 @@ def main():
             configs['env']['test_environments'] = filtered_envs
             logger.info(f"Filtered to environments: {args.environments}")
 
-        # Generate workflow
+        # Initialize testcase loader
+        base_path = '/Users/admin/workspace/troubleshooting-tools'
+        testcase_loader = TestcaseLoader(base_path)
+
+        # Generate workflow with testcase loader
         logger.info("Generating test workflow...")
-        workflow_generator = EBPFCentricWorkflowGenerator()
+        workflow_generator = EBPFCentricWorkflowGenerator(
+            testcase_loader=testcase_loader,
+            base_path=base_path
+        )
         workflow_spec = workflow_generator.generate_workflow_spec(
             configs['ssh'], configs['env'], configs['perf'], configs['ebpf']
         )
@@ -108,8 +115,14 @@ def main():
 
         # Initialize managers
         ssh_manager = SSHManager(configs['ssh'])
-        path_manager = RemotePathManager("/tmp")  # Will be overridden by actual workdir
-        test_executor = TestExecutor(ssh_manager, path_manager)
+
+        # Get workdir from first available host
+        first_host = list(configs['ssh']['ssh_hosts'].keys())[0]
+        workdir = configs['ssh']['ssh_hosts'][first_host]['workdir']
+        path_manager = RemotePathManager(workdir)
+
+        # Initialize test executor with full config
+        test_executor = TestExecutor(ssh_manager, path_manager, configs)
 
         # Execute workflow
         with ssh_manager:

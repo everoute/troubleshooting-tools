@@ -1,0 +1,119 @@
+2025-09-25 18:29:45,988 - __main__ - INFO - Loading configurations from: /Users/admin/workspace/troubleshooting-tools/test/automate-performance-test/config
+2025-09-25 18:29:45,989 - utils.config_loader - INFO - Loaded config: ssh-config.yaml
+2025-09-25 18:29:45,990 - utils.config_loader - INFO - Loaded config: test-env-config.yaml
+2025-09-25 18:29:45,992 - utils.config_loader - INFO - Loaded config: performance-test-spec.yaml
+2025-09-25 18:29:45,992 - utils.config_loader - INFO - Loaded config: ebpf-tools-config.yaml
+2025-09-25 18:29:45,992 - __main__ - INFO - All configurations loaded and validated successfully
+2025-09-25 18:29:45,992 - __main__ - INFO - Filtered to tools: ['system_network_perfomance_metrics']
+2025-09-25 18:29:45,992 - __main__ - INFO - Filtered to environments: ['host']
+2025-09-25 18:29:45,992 - __main__ - INFO - Generating test workflow...
+2025-09-25 18:29:45,993 - utils.testcase_loader - INFO - Loaded testcase file: test/workflow/case/performance-test-cases.json
+2025-09-25 18:29:45,993 - __main__ - INFO - Workflow exported to: generated_workflow.json
+2025-09-25 18:29:45,993 - __main__ - INFO - Starting workflow execution...
+2025-09-25 18:29:45,993 - core.test_executor - INFO - Global init completed: {'stage': 'global', 'action': 'init', 'tasks': []}
+2025-09-25 18:29:45,993 - core.test_executor - INFO - Executing test cycle: baseline_host
+2025-09-25 18:29:46,033 - paramiko.transport - INFO - Connected (version 2.0, client OpenSSH_9.9)
+2025-09-25 18:29:46,278 - paramiko.transport - INFO - Authentication (publickey) successful!
+2025-09-25 18:29:46,278 - core.ssh_manager - INFO - Connected to host-server (172.21.152.82)
+2025-09-25 18:29:46,560 - core.test_executor - INFO - Case init: {'stage': 'case', 'action': 'init', 'tasks': [{'name': 'create_case_directories', 'status': True}]}
+2025-09-25 18:29:46,561 - core.test_executor - INFO - Executing throughput tests
+2025-09-25 18:29:50,423 - core.test_executor - INFO - Test init for throughput/single_stream: {'stage': 'test', 'action': 'init', 'tasks': [{'name': 'start_iperf3_server', 'status': True, 'details': 'Ports [5001] listening: True', 'ports': [5001]}]}
+2025-09-25 18:29:50,464 - paramiko.transport - INFO - Connected (version 2.0, client OpenSSH_9.9)
+2025-09-25 18:29:50,735 - paramiko.transport - INFO - Authentication (publickey) successful!
+2025-09-25 18:29:50,735 - core.ssh_manager - INFO - Connected to host-client (172.21.152.85)
+2025-09-25 18:30:22,000 - core.test_executor - INFO - Test post for throughput/single_stream: {'stage': 'test', 'action': 'post', 'tasks': [{'name': 'stop_iperf3_server', 'status': True}, {'name': 'collect_test_results', 'status': True}]}
+2025-09-25 18:30:26,256 - core.test_executor - INFO - Test init for throughput/multi_stream: {'stage': 'test', 'action': 'init', 'tasks': [{'name': 'start_iperf3_server', 'status': True, 'details': 'Ports [5001, 5002] listening: True', 'ports': [5001, 5002]}]}
+2025-09-25 18:30:40,622 - core.test_executor - INFO - Test post for throughput/multi_stream: {'stage': 'test', 'action': 'post', 'tasks': [{'name': 'stop_iperf3_server', 'status': True}, {'name': 'collect_test_results', 'status': True}]}
+2025-09-25 18:30:40,624 - core.test_executor - INFO - Executing latency tests
+2025-09-25 18:30:44,496 - core.test_executor - INFO - Test init for latency/tcp_rr: {'stage': 'test', 'action': 'init', 'tasks': [{'name': 'start_netserver', 'status': True, 'details': 'Port 12865 listening: True'}]}
+2025-09-25 18:31:05,540 - core.test_executor - INFO - Test post for latency/tcp_rr: {'stage': 'test', 'action': 'post', 'tasks': [{'name': 'stop_netserver', 'status': True}, {'name': 'collect_test_results', 'status': True}]}
+2025-09-25 18:31:09,485 - core.test_executor - INFO - Test init for latency/udp_rr: {'stage': 'test', 'action': 'init', 'tasks': [{'name': 'start_netserver', 'status': True, 'details': 'Port 12865 listening: True'}]}
+2025-09-25 18:31:30,403 - core.test_executor - INFO - Test post for latency/udp_rr: {'stage': 'test', 'action': 'post', 'tasks': [{'name': 'stop_netserver', 'status': True}, {'name': 'collect_test_results', 'status': True}]}
+2025-09-25 18:31:30,410 - core.test_executor - INFO - Executing pps tests
+2025-09-25 18:31:34,321 - core.test_executor - INFO - Test init for pps/single_stream: {'stage': 'test', 'action': 'init', 'tasks': [{'name': 'start_iperf3_server', 'status': True, 'details': 'Ports [5001] listening: True', 'ports': [5001]}]}
+2025-09-25 18:31:43,168 - core.test_executor - INFO - Test post for pps/single_stream: {'stage': 'test', 'action': 'post', 'tasks': [{'name': 'stop_iperf3_server', 'status': True}, {'name': 'collect_test_results', 'status': True}]}
+2025-09-25 18:31:47,541 - core.test_executor - INFO - Test init for pps/multi_stream_2: {'stage': 'test', 'action': 'init', 'tasks': [{'name': 'start_iperf3_server', 'status': True, 'details': 'Ports [5001, 5002] listening: True', 'ports': [5001, 5002]}]}
+2025-09-25 18:31:57,338 - core.test_executor - INFO - Test post for pps/multi_stream_2: {'stage': 'test', 'action': 'post', 'tasks': [{'name': 'stop_iperf3_server', 'status': True}, {'name': 'collect_test_results', 'status': True}]}
+2025-09-25 18:31:57,525 - core.test_executor - INFO - Case post: {'stage': 'case', 'action': 'post', 'tasks': [{'name': 'collect_case_data', 'status': True}]}
+2025-09-25 18:31:57,526 - core.test_executor - INFO - Executing test cycle: tool_minimal_case_1_host
+2025-09-25 18:31:57,911 - core.test_executor - INFO - Tool init for tool_minimal: {'stage': 'tool', 'action': 'init', 'tasks': [{'name': 'create_tool_directories', 'status': True}, {'name': 'tool_specific_setup', 'status': True}]}
+2025-09-25 18:32:00,335 - hooks.init_hooks - INFO - DEBUG: monitor_start_cmd = echo "eBPF monitoring start time: $(date "+%Y-%m-%d %H:%M:%S.%N"), PID: 3743648" > /home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host/ebpf_monitoring/monitor_start_20250925_183157.log
+2025-09-25 18:32:00,616 - hooks.init_hooks - INFO - DEBUG: resource_cmd = 
+            nohup bash -c '
+                echo "# eBPF Resource Monitoring - CPU and Memory statistics using ps" > /home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host/ebpf_monitoring/ebpf_resource_monitor_20250925_183157.log
+                echo "# Timestamp                     PID         CPU_Percent  VSZ_KB    RSS_KB    MEM_Percent" >> /home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host/ebpf_monitoring/ebpf_resource_monitor_20250925_183157.log
+                echo "# DEBUG: Starting resource monitoring for PID 3743648" >> /home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host/ebpf_monitoring/ebpf_resource_monitor_20250925_183157.log
+                while ps -p 3743648 >/dev/null 2>&1; do
+                    TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S.%N")
+                    CPU=$(ps -p 3743648 -o %cpu=)
+                    MEMLINE=$(ps -p 3743648 -o vsz= -o rss= -o pmem=)
+                    [ -z "$CPU" ] && CPU="0.00"
+                    [ -z "$MEMLINE" ] && MEMLINE="0 0 0.00"
+                    echo "$TIMESTAMP 3743648 $CPU $MEMLINE" >> /home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host/ebpf_monitoring/ebpf_resource_monitor_20250925_183157.log
+                    sleep 2
+                done
+                echo "# DEBUG: resource monitoring ended for PID 3743648" >> /home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host/ebpf_monitoring/ebpf_resource_monitor_20250925_183157.log
+            ' >> /home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host/ebpf_monitoring/ebpf_resource_monitor_20250925_183157.log 2>&1 &
+        
+2025-09-25 18:32:00,824 - hooks.init_hooks - INFO - DEBUG: logsize_cmd = 
+            nohup bash -c '
+                echo "# eBPF Log Size Monitoring - Log file size (instantaneous)" > /home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host/ebpf_monitoring/ebpf_logsize_monitor_20250925_183157.log
+                echo "# Timestamp                     Size_Bytes  Size_Human" >> /home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host/ebpf_monitoring/ebpf_logsize_monitor_20250925_183157.log
+                echo "# DEBUG: Starting logsize monitoring for /home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host/ebpf_output_20250925_183157.log" >> /home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host/ebpf_monitoring/ebpf_logsize_monitor_20250925_183157.log
+                while ps -p 3743648 >/dev/null 2>&1; do
+                    TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S.%N")
+                    SIZE=$(stat -c %s "/home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host/ebpf_output_20250925_183157.log" 2>/dev/null || echo 0)
+                    if [ $SIZE -lt 1024 ]; then
+                        HUMAN="${SIZE}B"
+                    elif [ $SIZE -lt 1048576 ]; then
+                        HUMAN="$((SIZE/1024))K"
+                    elif [ $SIZE -lt 1073741824 ]; then
+                        HUMAN="$((SIZE/1048576))M"
+                    else
+                        HUMAN="$((SIZE/1073741824))G"
+                    fi
+                    echo "$TIMESTAMP $SIZE $HUMAN" >> /home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host/ebpf_monitoring/ebpf_logsize_monitor_20250925_183157.log
+                    sleep 2
+                done
+                echo "# DEBUG: logsize monitoring ended for /home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host/ebpf_output_20250925_183157.log" >> /home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host/ebpf_monitoring/ebpf_logsize_monitor_20250925_183157.log
+            ' >> /home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host/ebpf_monitoring/ebpf_logsize_monitor_20250925_183157.log 2>&1 &
+        
+2025-09-25 18:32:01,201 - hooks.init_hooks - INFO - DEBUG: Stored case context for tool_minimal_1: timestamp=20250925_183157, result_path=/home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host, ebpf_pid=3743648
+2025-09-25 18:32:01,202 - core.test_executor - INFO - Case init: {'stage': 'case', 'action': 'init', 'tasks': [{'name': 'create_case_directories', 'status': True}, {'name': 'start_ebpf_program', 'status': True, 'pid': '3743648'}, {'name': 'start_tool_monitoring', 'status': True}], 'ebpf_pid': '3743648'}
+2025-09-25 18:32:01,202 - core.test_executor - INFO - Executing throughput tests
+2025-09-25 18:32:05,556 - core.test_executor - INFO - Test init for throughput/single_stream: {'stage': 'test', 'action': 'init', 'tasks': [{'name': 'start_iperf3_server', 'status': True, 'details': 'Ports [5001] listening: True', 'ports': [5001]}]}
+2025-09-25 18:32:37,417 - core.test_executor - INFO - Test post for throughput/single_stream: {'stage': 'test', 'action': 'post', 'tasks': [{'name': 'stop_iperf3_server', 'status': True}, {'name': 'collect_test_results', 'status': True}]}
+2025-09-25 18:32:41,874 - core.test_executor - INFO - Test init for throughput/multi_stream: {'stage': 'test', 'action': 'init', 'tasks': [{'name': 'start_iperf3_server', 'status': True, 'details': 'Ports [5001, 5002] listening: True', 'ports': [5001, 5002]}]}
+2025-09-25 18:32:56,170 - core.test_executor - INFO - Test post for throughput/multi_stream: {'stage': 'test', 'action': 'post', 'tasks': [{'name': 'stop_iperf3_server', 'status': True}, {'name': 'collect_test_results', 'status': True}]}
+2025-09-25 18:32:56,171 - core.test_executor - INFO - Executing latency tests
+2025-09-25 18:33:00,314 - core.test_executor - INFO - Test init for latency/tcp_rr: {'stage': 'test', 'action': 'init', 'tasks': [{'name': 'start_netserver', 'status': True, 'details': 'Port 12865 listening: True'}]}
+2025-09-25 18:33:21,505 - core.test_executor - INFO - Test post for latency/tcp_rr: {'stage': 'test', 'action': 'post', 'tasks': [{'name': 'stop_netserver', 'status': True}, {'name': 'collect_test_results', 'status': True}]}
+2025-09-25 18:33:25,401 - core.test_executor - INFO - Test init for latency/udp_rr: {'stage': 'test', 'action': 'init', 'tasks': [{'name': 'start_netserver', 'status': True, 'details': 'Port 12865 listening: True'}]}
+2025-09-25 18:33:46,469 - core.test_executor - INFO - Test post for latency/udp_rr: {'stage': 'test', 'action': 'post', 'tasks': [{'name': 'stop_netserver', 'status': True}, {'name': 'collect_test_results', 'status': True}]}
+2025-09-25 18:33:46,470 - core.test_executor - INFO - Executing pps tests
+2025-09-25 18:33:51,561 - core.test_executor - INFO - Test init for pps/multi_stream_4: {'stage': 'test', 'action': 'init', 'tasks': [{'name': 'start_iperf3_server', 'status': True, 'details': 'Ports [5001, 5002, 5003, 5004] listening: True', 'ports': [5001, 5002, 5003, 5004]}]}
+2025-09-25 18:34:03,954 - core.test_executor - INFO - Test post for pps/multi_stream_4: {'stage': 'test', 'action': 'post', 'tasks': [{'name': 'stop_iperf3_server', 'status': True}, {'name': 'collect_test_results', 'status': True}]}
+2025-09-25 18:34:10,669 - core.test_executor - INFO - Test init for pps/multi_stream_8: {'stage': 'test', 'action': 'init', 'tasks': [{'name': 'start_iperf3_server', 'status': True, 'details': 'Ports [5001, 5002, 5003, 5004, 5005, 5006, 5007, 5008] listening: True', 'ports': [5001, 5002, 5003, 5004, 5005, 5006, 5007, 5008]}]}
+2025-09-25 18:34:29,737 - core.test_executor - INFO - Test post for pps/multi_stream_8: {'stage': 'test', 'action': 'post', 'tasks': [{'name': 'stop_iperf3_server', 'status': True}, {'name': 'collect_test_results', 'status': True}]}
+2025-09-25 18:34:29,740 - hooks.init_hooks - INFO - DEBUG: Retrieved case context for tool_minimal_1: {'case_timestamp': '20250925_183157', 'result_path': '/home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host', 'ebpf_pid': '3743648', 'tool_id': 'tool_minimal', 'case_id': 1}
+2025-09-25 18:34:29,741 - hooks.post_hooks - INFO - DEBUG: Using case timestamp 20250925_183157 instead of current 20250925_183429
+2025-09-25 18:34:29,905 - hooks.post_hooks - INFO - DEBUG: monitoring_cmd = 
+                echo "DEBUG: Stopping monitoring processes for case 1" >> /home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host/ebpf_monitoring/monitor_stop_20250925_183157.log
+                pkill -f "ebpf_resource_monitor.*1" || true
+                pkill -f "ebpf_logsize_monitor.*1" || true
+                # Also try to kill by pattern matching the result path
+                pkill -f "/home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host/ebpf_monitoring" || true
+                echo "Case monitoring stopped at: $(date '+%Y-%m-%d %H:%M:%S.%N')" >> /home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host/ebpf_monitoring/monitor_stop_20250925_183157.log
+                echo "DEBUG: Monitoring stop commands completed" >> /home/smartx/lcc/performance-test-results/ebpf/tool_minimal_case_1_tcp_rx_0ac17a/host/ebpf_monitoring/monitor_stop_20250925_183157.log
+            
+2025-09-25 18:34:36,923 - core.test_executor - INFO - Case post: {'stage': 'case', 'action': 'post', 'tasks': [{'name': 'stop_case_monitoring', 'status': True}, {'name': 'stop_ebpf_program', 'status': True}, {'name': 'generate_time_statistics', 'status': True}, {'name': 'collect_case_data', 'status': True}]}
+2025-09-25 18:34:36,924 - core.test_executor - INFO - Global post completed: {'stage': 'global', 'action': 'post', 'tasks': []}
+2025-09-25 18:34:36,925 - core.ssh_manager - INFO - Closed connection to host-server
+2025-09-25 18:34:36,925 - core.ssh_manager - INFO - Closed connection to host-client
+2025-09-25 18:34:36,926 - __main__ - INFO - Workflow execution completed with status: completed
+2025-09-25 18:34:36,926 - __main__ - INFO - Execution Summary:
+2025-09-25 18:34:36,926 - __main__ - INFO -   Total test cycles: 2
+2025-09-25 18:34:36,926 - __main__ - INFO -   Successful cycles: 2
+2025-09-25 18:34:36,926 - __main__ - INFO -   Failed cycles: 0
+2025-09-25 18:34:36,926 - __main__ - INFO -   Start time: 2025-09-25T18:29:45.993597
+2025-09-25 18:34:36,926 - __main__ - INFO -   End time: 2025-09-25T18:34:36.924572

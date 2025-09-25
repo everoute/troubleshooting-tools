@@ -100,7 +100,7 @@ class RemoteEBPFMonitor:
         """Start CPU monitoring"""
         cmd = f"""
             nohup bash -c '
-                while kill -0 {ebpf_pid} 2>/dev/null; do
+                while ps -p {ebpf_pid} >/dev/null 2>&1; do
                     echo "$(date "+%Y-%m-%d %H:%M:%S.%N")" "$(top -b -n 1 -p {ebpf_pid} | tail -1 | awk "{{print \\$9}}")"
                     sleep 1
                 done
@@ -120,7 +120,7 @@ class RemoteEBPFMonitor:
         """Start memory monitoring"""
         cmd = f"""
             nohup bash -c '
-                while kill -0 {ebpf_pid} 2>/dev/null; do
+                while ps -p {ebpf_pid} >/dev/null 2>&1; do
                     echo "$(date "+%Y-%m-%d %H:%M:%S.%N")" "$(ps -p {ebpf_pid} -o vsz,rss,pmem --no-headers)"
                     sleep 1
                 done
@@ -141,7 +141,7 @@ class RemoteEBPFMonitor:
         """Start log size monitoring"""
         cmd = f"""
             nohup bash -c '
-                while kill -0 {ebpf_pid} 2>/dev/null; do
+                while ps -p {ebpf_pid} >/dev/null 2>&1; do
                     SIZE=$(stat -c %s "{log_file}" 2>/dev/null || echo 0)
                     echo "$(date "+%Y-%m-%d %H:%M:%S.%N")" "$SIZE"
                     sleep 1

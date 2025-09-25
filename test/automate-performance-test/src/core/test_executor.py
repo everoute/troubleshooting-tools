@@ -36,7 +36,7 @@ class TestExecutor:
 
         # Initialize hooks with config
         self.init_hooks = InitHooks(ssh_manager, path_manager, config)
-        self.post_hooks = PostHooks(ssh_manager, path_manager)
+        self.post_hooks = PostHooks(ssh_manager, path_manager, self.init_hooks)
         self.custom_hooks = CustomHooks(ssh_manager, path_manager)
 
     def execute_workflow(self, workflow_spec: Dict) -> Dict:
@@ -373,13 +373,13 @@ class TestExecutor:
         monitoring_path = f"{result_path}/ebpf_monitoring"
 
         # CPU monitoring
-        cpu_cmd = f"""nohup bash -c 'while kill -0 {ebpf_pid} 2>/dev/null; do \
+        cpu_cmd = f"""nohup bash -c 'while ps -p {ebpf_pid} >/dev/null 2>&1; do \
             echo "$(date +\\"%Y-%m-%d %H:%M:%S.%N\\")" $(top -b -n 1 -p {ebpf_pid} | tail -1 | awk "{{print \\$9}}"); \
             sleep 1; done' > {monitoring_path}/tool_cpu_usage_{timestamp}.log 2>&1 &"""
         self.ssh_manager.execute_command(host_ref, cpu_cmd)
 
         # Memory monitoring
-        mem_cmd = f"""nohup bash -c 'while kill -0 {ebpf_pid} 2>/dev/null; do \
+        mem_cmd = f"""nohup bash -c 'while ps -p {ebpf_pid} >/dev/null 2>&1; do \
             echo "$(date +\\"%Y-%m-%d %H:%M:%S.%N\\")" $(ps -p {ebpf_pid} -o vsz,rss --no-headers); \
             sleep 1; done' > {monitoring_path}/tool_memory_{timestamp}.log 2>&1 &"""
         self.ssh_manager.execute_command(host_ref, mem_cmd)
@@ -626,7 +626,7 @@ class TestExecutor:
             timing_cmd = f"echo 'Test: throughput_single_tcp' > {timing_file} && echo 'Start: {start_time}' >> {timing_file}"
             self.ssh_manager.execute_command(client_host, timing_cmd)
 
-            cmd = f"iperf3 -c {server_ip} -B {client_ip} -p 5001 -t 30 -b 10G -l 65520 -J > {result_file}"
+            cmd = f"iperf3 -c {server_ip} -B {client_ip} -p 5001 -t 30 -b 10G -l 65520 -J > {result_file} 2>&1"
             stdout, stderr, status = self.ssh_manager.execute_command(client_host, cmd)
 
             # Record test end time
@@ -715,7 +715,7 @@ class TestExecutor:
         test_type = "TCP_RR" if config == "tcp_rr" else "UDP_RR"
         protocol = "tcp" if config == "tcp_rr" else "udp"
         result_file = f"{client_result_path}/latency_{protocol}_rr.txt"
-        cmd = f"netperf -H {server_ip} -p 12865 -t {test_type} -l 20 -- -o min_latency,mean_latency,max_latency > {result_file}"
+        cmd = f"netperf -H {server_ip} -p 12865 -t {test_type} -l 20 -- -o min_latency,mean_latency,max_latency > {result_file} 2>&1"
 
         stdout, stderr, status = self.ssh_manager.execute_command(client_host, cmd)
 

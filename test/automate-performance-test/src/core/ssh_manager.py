@@ -185,7 +185,7 @@ class SSHManager:
             Process exists status
         """
         stdout, _, status = self.execute_command(
-            host_ref, f"kill -0 {pid} 2>/dev/null"
+            host_ref, f"ps -p {pid} >/dev/null 2>&1"
         )
         return status == 0
 

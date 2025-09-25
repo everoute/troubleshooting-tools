@@ -172,11 +172,34 @@ class InitHooks:
             start_cmd = f"""
                 cd {workdir}
                 echo "Starting eBPF case {case_id}: {ebpf_command}" > {result_path}/ebpf_start_{timestamp}.log
+                echo "eBPF case start time: $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {result_path}/ebpf_start_{timestamp}.log
+
                 nohup {ebpf_command} > {result_path}/ebpf_output_{timestamp}.log 2>&1 &
-                EBPF_PID=$!
-                echo $EBPF_PID > {result_path}/ebpf_pid_{timestamp}.txt
-                echo "eBPF program started with PID: $EBPF_PID at $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {result_path}/ebpf_start_{timestamp}.log
-                echo $EBPF_PID
+                WRAPPER_PID=$!
+                echo "Wrapper PID: $WRAPPER_PID" >> {result_path}/ebpf_start_{timestamp}.log
+
+                # Wait a moment for the process to start
+                sleep 2
+
+                # If command starts with sudo, find the actual child process
+                if echo "{ebpf_command}" | grep -q '^sudo'; then
+                    ACTUAL_PID=$(pgrep -P $WRAPPER_PID | head -1)
+                    if [ -z "$ACTUAL_PID" ]; then
+                        # Fallback: look for python process in the process group
+                        ACTUAL_PID=$(ps -eo pid,ppid,cmd | grep -v grep | grep "$WRAPPER_PID" | grep -E "python|python2|python3" | awk '{{print $1}}' | head -1)
+                    fi
+                    if [ -z "$ACTUAL_PID" ]; then
+                        ACTUAL_PID=$WRAPPER_PID
+                    fi
+                else
+                    ACTUAL_PID=$WRAPPER_PID
+                fi
+
+                echo $WRAPPER_PID > {result_path}/wrapper_pid_{timestamp}.txt
+                echo $ACTUAL_PID > {result_path}/ebpf_pid_{timestamp}.txt
+                echo "Wrapper PID: $WRAPPER_PID, Actual eBPF PID: $ACTUAL_PID" >> {result_path}/ebpf_start_{timestamp}.log
+                echo "eBPF program started at $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {result_path}/ebpf_start_{timestamp}.log
+                echo $ACTUAL_PID
             """
             stdout, stderr, status = self.ssh_manager.execute_command(host_ref, start_cmd)
             if status == 0 and stdout:
@@ -189,11 +212,27 @@ class InitHooks:
                 })
 
                 # Start tool-level monitoring (covers entire tool lifecycle)
+                monitor_start_cmd = f'echo "eBPF monitoring start time: $(date "+%Y-%m-%d %H:%M:%S.%N"), PID: {ebpf_pid}" > {result_path}/ebpf_monitoring/monitor_start_{timestamp}.log'
+                logger.info(f"DEBUG: monitor_start_cmd = {monitor_start_cmd}")
+                self.ssh_manager.execute_command(host_ref, monitor_start_cmd)
+
                 self._start_tool_monitoring(host_ref, ebpf_pid, result_path, timestamp)
                 results['tasks'].append({
                     'name': 'start_tool_monitoring',
                     'status': True
                 })
+
+                # Store case context with consistent timestamp for cleanup
+                if not hasattr(self, 'case_context'):
+                    self.case_context = {}
+                self.case_context[f"{tool_id}_{case_id}"] = {
+                    'case_timestamp': timestamp,
+                    'result_path': result_path,
+                    'ebpf_pid': ebpf_pid,
+                    'tool_id': tool_id,
+                    'case_id': case_id
+                }
+                logger.info(f"DEBUG: Stored case context for {tool_id}_{case_id}: timestamp={timestamp}, result_path={result_path}, ebpf_pid={ebpf_pid}")
 
         return results
 
@@ -283,37 +322,41 @@ class InitHooks:
 
         return results
 
+    def get_case_context(self, tool_id, case_id):
+        """Get stored case context for cleanup"""
+        if hasattr(self, 'case_context'):
+            key = f"{tool_id}_{case_id}"
+            context = self.case_context.get(key, {})
+            logger.info(f"DEBUG: Retrieved case context for {key}: {context}")
+            return context
+        return {}
+
     def _start_tool_monitoring(self, host_ref: str, ebpf_pid: str,
                               result_path: str, timestamp: str):
         """Start tool-level monitoring with headers and configurable interval (covers entire tool lifecycle)"""
         # Get monitoring interval from config (default 2 seconds)
         interval = self.config.get('perf', {}).get('performance_tests', {}).get('monitoring', {}).get('interval', 2)
 
-        # CPU monitoring with header
-        cpu_cmd = f"""
+        # Combined CPU and Memory monitoring using ps (single command, single file)
+        resource_cmd = f"""
             nohup bash -c '
-                echo "# eBPF CPU Monitoring - CPU usage percentage (instantaneous)" > {result_path}/ebpf_monitoring/ebpf_cpu_monitor_{timestamp}.log
-                echo "# Timestamp                     CPU_Percent" >> {result_path}/ebpf_monitoring/ebpf_cpu_monitor_{timestamp}.log
-                while kill -0 {ebpf_pid} 2>/dev/null; do
-                    echo "$(date "+%Y-%m-%d %H:%M:%S.%N")" "$(top -b -n 1 -p {ebpf_pid} | tail -1 | awk "{{print \\$9}}")"
+                echo "# eBPF Resource Monitoring - CPU and Memory statistics using ps" > {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
+                echo "# Timestamp                     PID         CPU_Percent  VSZ_KB    RSS_KB    MEM_Percent" >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
+                echo "# DEBUG: Starting resource monitoring for PID {ebpf_pid}" >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
+                while ps -p {ebpf_pid} >/dev/null 2>&1; do
+                    TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S.%N")
+                    CPU=$(ps -p {ebpf_pid} -o %cpu=)
+                    MEMLINE=$(ps -p {ebpf_pid} -o vsz= -o rss= -o pmem=)
+                    [ -z "$CPU" ] && CPU="0.00"
+                    [ -z "$MEMLINE" ] && MEMLINE="0 0 0.00"
+                    echo "$TIMESTAMP {ebpf_pid} $CPU $MEMLINE" >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
                     sleep {interval}
                 done
-            ' >> {result_path}/ebpf_monitoring/ebpf_cpu_monitor_{timestamp}.log 2>&1 &
+                echo "# DEBUG: resource monitoring ended for PID {ebpf_pid}" >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
+            ' >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log 2>&1 &
         """
-        self.ssh_manager.execute_command(host_ref, cpu_cmd)
-
-        # Memory monitoring with header
-        mem_cmd = f"""
-            nohup bash -c '
-                echo "# eBPF Memory Monitoring - Virtual memory size, Resident set size, Memory percentage (instantaneous)" > {result_path}/ebpf_monitoring/ebpf_memory_monitor_{timestamp}.log
-                echo "# Timestamp                     VSZ_KB      RSS_KB      MEM_Percent" >> {result_path}/ebpf_monitoring/ebpf_memory_monitor_{timestamp}.log
-                while kill -0 {ebpf_pid} 2>/dev/null; do
-                    echo "$(date "+%Y-%m-%d %H:%M:%S.%N")" "$(ps -p {ebpf_pid} -o vsz,rss,pmem --no-headers)"
-                    sleep {interval}
-                done
-            ' >> {result_path}/ebpf_monitoring/ebpf_memory_monitor_{timestamp}.log 2>&1 &
-        """
-        self.ssh_manager.execute_command(host_ref, mem_cmd)
+        logger.info(f"DEBUG: resource_cmd = {resource_cmd}")
+        self.ssh_manager.execute_command(host_ref, resource_cmd)
 
         # Log size monitoring with header and human-readable conversion
         log_file = f"{result_path}/ebpf_output_{timestamp}.log"
@@ -321,7 +364,9 @@ class InitHooks:
             nohup bash -c '
                 echo "# eBPF Log Size Monitoring - Log file size (instantaneous)" > {result_path}/ebpf_monitoring/ebpf_logsize_monitor_{timestamp}.log
                 echo "# Timestamp                     Size_Bytes  Size_Human" >> {result_path}/ebpf_monitoring/ebpf_logsize_monitor_{timestamp}.log
-                while kill -0 {ebpf_pid} 2>/dev/null; do
+                echo "# DEBUG: Starting logsize monitoring for {log_file}" >> {result_path}/ebpf_monitoring/ebpf_logsize_monitor_{timestamp}.log
+                while ps -p {ebpf_pid} >/dev/null 2>&1; do
+                    TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S.%N")
                     SIZE=$(stat -c %s "{log_file}" 2>/dev/null || echo 0)
                     if [ $SIZE -lt 1024 ]; then
                         HUMAN="${{SIZE}}B"
@@ -332,9 +377,11 @@ class InitHooks:
                     else
                         HUMAN="$((SIZE/1073741824))G"
                     fi
-                    echo "$(date "+%Y-%m-%d %H:%M:%S.%N")" "$SIZE" "$HUMAN"
+                    echo "$TIMESTAMP $SIZE $HUMAN" >> {result_path}/ebpf_monitoring/ebpf_logsize_monitor_{timestamp}.log
                     sleep {interval}
                 done
+                echo "# DEBUG: logsize monitoring ended for {log_file}" >> {result_path}/ebpf_monitoring/ebpf_logsize_monitor_{timestamp}.log
             ' >> {result_path}/ebpf_monitoring/ebpf_logsize_monitor_{timestamp}.log 2>&1 &
         """
+        logger.info(f"DEBUG: logsize_cmd = {logsize_cmd}")
         self.ssh_manager.execute_command(host_ref, logsize_cmd)

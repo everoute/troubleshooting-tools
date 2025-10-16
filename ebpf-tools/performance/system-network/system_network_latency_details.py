@@ -173,68 +173,19 @@ BPF_STACK_TRACE(stack_traces, 10240);
 BPF_PERF_OUTPUT(events);
 BPF_PERCPU_ARRAY(event_scratch_map, struct event_data_t, 1);
 
-// Debug statistics
-BPF_HISTOGRAM(ifindex_seen, u32);       // Track which ifindex values we see
-BPF_HISTOGRAM(proto_seen, u8);          // Track protocol values seen at TX0
-
-// Special counters for interface debugging
-BPF_ARRAY(interface_debug, u64, 4);
-#define IF_DBG_NULL_DEV             0   // dev is NULL
-#define IF_DBG_READ_FAIL            1   // ifindex read failed
-
-// Key debugging - print key components for analysis
-BPF_PERF_OUTPUT(key_debug_events);
-
-struct key_debug_t {
-    u8 stage_id;
-    __be32 src_ip;
-    __be32 dst_ip;
-    __be16 src_port;
-    __be16 dst_port;
-    __be32 tcp_seq;
-    u8 payload_len;
-    u32 timestamp;
-};
-
-static __always_inline void debug_key(struct pt_regs *ctx, struct packet_key_t *key, u8 stage_id) {
-    struct key_debug_t debug_data = {};
-    debug_data.stage_id = stage_id;
-    debug_data.src_ip = key->src_ip;
-    debug_data.dst_ip = key->dst_ip;
-    debug_data.src_port = key->tcp.src_port;
-    debug_data.dst_port = key->tcp.dst_port;
-    debug_data.tcp_seq = 0;  // Removed from key structure
-    debug_data.payload_len = 0;  // Removed from key structure
-    debug_data.timestamp = bpf_ktime_get_ns() / 1000000;  // Convert to ms
-    
-    key_debug_events.perf_submit(ctx, &debug_data, sizeof(debug_data));
-}
-
-// Helper function for interface debugging
-static __always_inline void increment_interface_debug(u32 idx) {
-    u64 *val = interface_debug.lookup(&idx);
-    if (val) {
-        (*val)++;
-    }
-}
-
 // Helper function to check if an interface index matches our targets
 static __always_inline bool is_target_ifindex(const struct sk_buff *skb) {
     struct net_device *dev = NULL;
     int ifindex = 0;
-    
+
     if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) < 0 || dev == NULL) {
         return false;
     }
-    
+
     if (bpf_probe_read_kernel(&ifindex, sizeof(ifindex), &dev->ifindex) < 0) {
         return false;
     }
-    
-    // Track all interface indices we see
-    u32 idx = (u32)ifindex;
-    ifindex_seen.increment(idx);
-    
+
     return (ifindex == TARGET_IFINDEX1 || ifindex == TARGET_IFINDEX2);
 }
 
@@ -391,16 +342,9 @@ static __always_inline int parse_packet_key_userspace(
     key->src_ip = ip.saddr;
     key->dst_ip = ip.daddr;
     key->protocol = ip.protocol;
-    
+
     // Apply filters
     if (PROTOCOL_FILTER != 0 && ip.protocol != PROTOCOL_FILTER) {
-        // Track what protocol we're filtering out (only for TX0)
-        if (stage_id == TX_STAGE_0) {
-            proto_seen.increment(ip.protocol);
-            if (ip.protocol == IPPROTO_ICMP) {
-            } else {
-            }
-        }
         return 0;
     }
 
@@ -524,13 +468,6 @@ static __always_inline int parse_packet_key(
     key->protocol = ip.protocol;
 
     if (PROTOCOL_FILTER != 0 && ip.protocol != PROTOCOL_FILTER) {
-        // Track what protocol we're filtering out (only for TX0)
-        if (stage_id == TX_STAGE_0) {
-            proto_seen.increment(ip.protocol);
-            if (ip.protocol == IPPROTO_ICMP) {
-            } else {
-            }
-        }
         return 0;
     }
 
@@ -602,7 +539,6 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
     
     // Flow creation for start stages
     if (stage_id == TX_STAGE_0 || stage_id == RX_STAGE_0) {
-        debug_key(ctx, &key, stage_id);  // Enable key debugging for TCP flow mismatch investigation
         struct flow_data_t zero = {};
         flow_sessions.delete(&key);
         flow_ptr = flow_sessions.lookup_or_try_init(&key, &zero);
@@ -644,9 +580,8 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
                 flow_ptr->udp_len = ntohs(udp.len);
             }
         }
-        
+
     } else {
-        debug_key(ctx, &key, stage_id);  // Enable key debugging for TCP flow mismatch investigation
         flow_ptr = flow_sessions.lookup(&key);
         if (!flow_ptr) {
             return;
@@ -867,9 +802,6 @@ int kprobe____ip_queue_xmit(struct pt_regs *ctx, struct sock *sk, struct sk_buff
     flow_ptr->kstack_id[TX_STAGE_0] = stack_id;
 
     flow_sessions.update(&key, flow_ptr);
-
-    // Debug the key we created at TCP TX0
-    debug_key(ctx, &key, TX_STAGE_0);
 
     return 0;
 }
@@ -1232,81 +1164,6 @@ def print_event(cpu, data, size):
     
     print("\n" + "="*80 + "\n")
 
-# Global list to store key debug events for analysis
-key_debug_data = []
-
-def print_key_debug(cpu, data, size):
-    """Print key debug event for flow matching analysis"""
-    import ctypes
-    import socket
-    
-    # Define the structure to match the C struct
-    class KeyDebugEvent(ctypes.Structure):
-        _fields_ = [
-            ("stage_id", ctypes.c_uint8),
-            ("src_ip", ctypes.c_uint32),
-            ("dst_ip", ctypes.c_uint32),
-            ("src_port", ctypes.c_uint16),
-            ("dst_port", ctypes.c_uint16),
-            ("tcp_seq", ctypes.c_uint32),
-            ("payload_len", ctypes.c_uint8),
-            ("timestamp", ctypes.c_uint32),
-        ]
-    
-    event = ctypes.cast(data, ctypes.POINTER(KeyDebugEvent)).contents
-    
-    # Store for analysis
-    key_debug_data.append({
-        'stage_id': event.stage_id,
-        'src_ip': format_ip(event.src_ip),
-        'dst_ip': format_ip(event.dst_ip),
-        'src_port': socket.ntohs(event.src_port),
-        'dst_port': socket.ntohs(event.dst_port),
-        'tcp_seq': event.tcp_seq,
-        'payload_len': event.payload_len,
-        'timestamp': event.timestamp
-    })
-    
-    # Only print key info for first 5 entries to avoid spam
-    if len(key_debug_data) <= 5:
-        print("KEY_DEBUG: Stage %d: %s:%d -> %s:%d seq=0x%08x len=%d ts=%d" % (
-            event.stage_id,
-            format_ip(event.src_ip), socket.ntohs(event.src_port),
-            format_ip(event.dst_ip), socket.ntohs(event.dst_port),
-            event.tcp_seq, event.payload_len, event.timestamp
-        ))
-
-def analyze_key_consistency():
-    """Analyze key consistency between stages"""
-    if not key_debug_data:
-        print("\nNo key debug data available for analysis")
-        return
-    
-    print("\n=== Key Consistency Analysis ===")
-    
-    # Group by similar connection tuples (ignoring seq and payload_len for now)
-    connections = {}
-    for entry in key_debug_data:
-        key = (entry['src_ip'], entry['dst_ip'], entry['src_port'], entry['dst_port'])
-        if key not in connections:
-            connections[key] = []
-        connections[key].append(entry)
-    
-    print("Found %d unique connections:" % len(connections))
-    
-    for i, (conn_key, stages) in enumerate(connections.items()):
-        if i >= 5:  # Limit to first 5 connections for readability
-            break
-            
-        print("\nConnection %d: %s:%d -> %s:%d" % (i+1, conn_key[0], conn_key[2], conn_key[1], conn_key[3]))
-        
-        # Sort by stage_id
-        stages.sort(key=lambda x: x['stage_id'])
-        
-        # Check for differences in seq and payload_len
-        for stage in stages:
-            print("  Stage %d: seq=0x%08x len=%d" % (stage['stage_id'], stage['tcp_seq'], stage['payload_len']))
-
 if __name__ == "__main__":
     if os.geteuid() != 0:
         print("This program must be run as root")
@@ -1417,16 +1274,14 @@ Examples:
         sys.exit(1)
 
     b["events"].open_perf_buffer(print_event)
-    # b["key_debug_events"].open_perf_buffer(print_key_debug)  # Temporarily disabled for testing
-    
+
     print("\nTracing system network TCP/UDP latency... Hit Ctrl-C to end.")
     print("Generate some TCP/UDP traffic to see results...\n")
-    
+
     try:
         while True:
             b.perf_buffer_poll()
     except KeyboardInterrupt:
         print("\nDetaching...")
-        analyze_key_consistency()
     finally:
         print("Exiting.")

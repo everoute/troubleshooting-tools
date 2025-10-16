@@ -164,39 +164,21 @@ BPF_STACK_TRACE(stack_traces, 10240);
 BPF_PERF_OUTPUT(events);
 BPF_PERCPU_ARRAY(event_scratch_map, struct event_data_t, 1);
 
-// Debug statistics - use histogram with stage_id and code_point as key
-BPF_HISTOGRAM(ifindex_seen, u32);       // Track which ifindex values we see
-
-// Code point definitions for debugging
-
-// Special counters for interface debugging
-BPF_ARRAY(interface_debug, u64, 4);
-#define IF_DBG_NULL_DEV             0   // dev is NULL
-#define IF_DBG_READ_FAIL            1   // ifindex read failed
-
-// Helper function to record debug statistics
-
-// Helper function for interface debugging
-
 // Helper function to check if an interface index matches our targets
 static __always_inline bool is_target_vm_interface(const struct sk_buff *skb) {
     if (VM_IFINDEX == 0) return false;
-    
+
     struct net_device *dev = NULL;
     int ifindex = 0;
-    
+
     if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) < 0 || dev == NULL) {
         return false;
     }
-    
+
     if (bpf_probe_read_kernel(&ifindex, sizeof(ifindex), &dev->ifindex) < 0) {
         return false;
     }
-    
-    // Track all interface indices we see
-    u32 idx = (u32)ifindex;
-    ifindex_seen.increment(idx);
-    
+
     return (ifindex == VM_IFINDEX);
 }
 
@@ -870,16 +852,6 @@ RAW_TRACEPOINT_PROBE(netif_receive_skb) {
     struct sk_buff *skb = (struct sk_buff *)ctx->args[0];
     if (!skb) return 0;
 
-    // Debug: log all interface indices we see at this probe point
-    struct net_device *dev = NULL;
-    int ifindex = 0;
-    if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) == 0 && dev != NULL) {
-        if (bpf_probe_read_kernel(&ifindex, sizeof(ifindex), &dev->ifindex) == 0) {
-            u32 idx = (u32)ifindex;
-            ifindex_seen.increment(idx);
-        }
-    }
-
     // TX Direction: Physical interface receives packets for VM
     if (is_target_phy_interface(skb)) {
         if (DIRECTION_FILTER == 2) {  // Skip if RX-only mode
@@ -1242,12 +1214,5 @@ Examples:
             b.perf_buffer_poll()
     except KeyboardInterrupt:
         print("\nDetaching...")
-        print("\n=== Interface Debug ===")
-
-        print("Interface indices seen:")
-        ifindex_hist = b["ifindex_seen"]
-        for k, v in ifindex_hist.items():
-            if v.value > 0:
-                print("  ifindex %d: %d packets" % (k.value, v.value))
     finally:
         print("Exiting.")

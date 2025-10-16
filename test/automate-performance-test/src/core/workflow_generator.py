@@ -158,21 +158,16 @@ class EBPFCentricWorkflowGenerator:
 
     def _get_performance_tests_for_env(self, env_name: str, perf_spec: Dict) -> List[Dict]:
         """Get performance test configurations for environment"""
-        # Generate PPS configs based on actual stream configuration
+        # Generate PPS configs - unified style (no stream count in config name)
         pps_configs = []
         if 'pps' in perf_spec['performance_tests']:
             pps_config = perf_spec['performance_tests']['pps']
             # Add single_stream if it exists
             if 'single_stream' in pps_config:
                 pps_configs.append('single_stream')
-            # Add multi_stream configs
+            # Add multi_stream config (without stream count suffix)
             if 'multi_stream' in pps_config:
-                streams = pps_config['multi_stream'].get('streams', [2])
-                pps_configs.extend([f"multi_stream_{stream}" for stream in streams])
-            # Fallback to old behavior if neither exists
-            elif 'streams' in pps_config:
-                streams = pps_config.get('streams', [2])
-                pps_configs = [f"multi_stream_{stream}" for stream in streams]
+                pps_configs.append('multi_stream')
 
         return [
             {
@@ -205,11 +200,16 @@ class EBPFCentricWorkflowGenerator:
                     "configs": ["tcp_rr", "udp_rr"]
                 })
             elif test_type == "pps":
-                # Generate PPS configs based on actual stream configuration
+                # Generate PPS configs - unified style (no stream count in config name)
                 pps_configs = []
                 if 'pps' in perf_spec['performance_tests']:
-                    streams = perf_spec['performance_tests']['pps'].get('streams', [4, 8])
-                    pps_configs = [f"multi_stream_{stream}" for stream in streams]
+                    pps_config = perf_spec['performance_tests']['pps']
+                    # Add single_stream if it exists
+                    if 'single_stream' in pps_config:
+                        pps_configs.append('single_stream')
+                    # Add multi_stream config (without stream count suffix)
+                    if 'multi_stream' in pps_config:
+                        pps_configs.append('multi_stream')
                 tests.append({
                     "type": "pps",
                     "configs": pps_configs

@@ -255,16 +255,13 @@ class InitHooks:
         if test_type in ["throughput", "pps"]:
             # Get test config to determine if multi-stream
             test_config = context.get('test_config', 'single_stream')
-            streams = 1
+
+            # Get streams from context (already read from global_config by test_executor)
+            # Default to 1 for single_stream, 2 for multi_stream if not specified
             if 'multi_stream' in test_config:
-                # Extract stream count from config name or use default
-                if '_' in test_config:
-                    try:
-                        streams = int(test_config.split('_')[-1])
-                    except:
-                        streams = 2  # Default
-                else:
-                    streams = 2
+                streams = context.get('streams', 2)  # Use value from global_config
+            else:
+                streams = 1
 
             # Kill any existing iperf3 servers
             self.ssh_manager.execute_command(server_host_ref, "pkill -f 'iperf3.*-s' || true")

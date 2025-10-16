@@ -9,7 +9,7 @@ performance_tests:
       target_bw: ["1G"]  # Only 1G test
       ports: [5001]
     multi_stream:
-      streams: [2]  # Only 2 streams
+      streams: [4]  # Only 2 streams
       base_port: 5001
       duration: 10  # Reduced from 30
 
@@ -29,7 +29,7 @@ performance_tests:
       target_bw: ["1G"]
       ports: [5001]
     multi_stream:
-      streams: [2]  # 2 streams
+      streams: [4]  # 2 streams
       base_port: 5001
       duration: 5   # 5 seconds
 

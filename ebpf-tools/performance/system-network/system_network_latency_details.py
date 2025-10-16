@@ -83,6 +83,7 @@ struct inet_cork;
 #define TARGET_IFINDEX1 %d
 #define TARGET_IFINDEX2 %d
 #define DIRECTION_FILTER %d  // 1=tx, 2=rx
+#define LATENCY_THRESHOLD_NS %d  // Minimum latency threshold in nanoseconds
 
 // TX direction stages (System -> Physical)
 #define TX_STAGE_0    0  // ip_queue_xmit (TCP) / ip_send_skb (UDP)
@@ -402,11 +403,12 @@ static __always_inline int parse_packet_key_userspace(
         }
         return 0;
     }
-    
-    if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER && ip.daddr != SRC_IP_FILTER) {
+
+    // Apply IP filters - use exact matching for packet direction
+    if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER) {
         return 0;
     }
-    if (DST_IP_FILTER != 0 && ip.saddr != DST_IP_FILTER && ip.daddr != DST_IP_FILTER) {
+    if (DST_IP_FILTER != 0 && ip.daddr != DST_IP_FILTER) {
         return 0;
     }
 
@@ -520,7 +522,7 @@ static __always_inline int parse_packet_key(
     key->src_ip = ip.saddr;
     key->dst_ip = ip.daddr;
     key->protocol = ip.protocol;
-    
+
     if (PROTOCOL_FILTER != 0 && ip.protocol != PROTOCOL_FILTER) {
         // Track what protocol we're filtering out (only for TX0)
         if (stage_id == TX_STAGE_0) {
@@ -531,14 +533,15 @@ static __always_inline int parse_packet_key(
         }
         return 0;
     }
-    
-    if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER && ip.daddr != SRC_IP_FILTER) {
+
+    // Apply IP filters - use exact matching for packet direction
+    if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER) {
         return 0;
     }
-    if (DST_IP_FILTER != 0 && ip.saddr != DST_IP_FILTER && ip.daddr != DST_IP_FILTER) {
+    if (DST_IP_FILTER != 0 && ip.daddr != DST_IP_FILTER) {
         return 0;
     }
-    
+
     switch (ip.protocol) {
         case IPPROTO_TCP:
             if (!parse_tcp_key(skb, key, stage_id)) return 0;
@@ -670,8 +673,29 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
     // Check for complete paths and submit events
     bool path1_complete = (stage_id == TX_STAGE_6 && flow_ptr->saw_path1_start && flow_ptr->saw_path1_end);
     bool path2_complete = (stage_id == RX_STAGE_6 && flow_ptr->saw_path2_start && flow_ptr->saw_path2_end);
-    
+
     if (path1_complete || path2_complete) {
+        // Check latency threshold before submitting
+        if (LATENCY_THRESHOLD_NS > 0) {
+            u64 start_ts = 0;
+            u64 end_ts = current_ts;
+
+            // Find the first valid timestamp
+            #pragma unroll
+            for (int i = 0; i < MAX_STAGES; i++) {
+                if (flow_ptr->ts[i] > 0) {
+                    start_ts = flow_ptr->ts[i];
+                    break;
+                }
+            }
+
+            // Skip if latency below threshold
+            if (start_ts == 0 || end_ts == 0 || (end_ts - start_ts) < LATENCY_THRESHOLD_NS) {
+                flow_sessions.delete(&key);
+                return;
+            }
+        }
+
         submit_event(ctx, &key, flow_ptr);
         flow_sessions.delete(&key);
     }
@@ -732,10 +756,11 @@ static __always_inline int parse_packet_key_tcp_early(
         return 0;
     }
 
-    if (SRC_IP_FILTER != 0 && key->src_ip != SRC_IP_FILTER && key->dst_ip != SRC_IP_FILTER) {
+    // Apply IP filters - use exact matching for packet direction
+    if (SRC_IP_FILTER != 0 && key->src_ip != SRC_IP_FILTER) {
         return 0;
     }
-    if (DST_IP_FILTER != 0 && key->src_ip != DST_IP_FILTER && key->dst_ip != DST_IP_FILTER) {
+    if (DST_IP_FILTER != 0 && key->dst_ip != DST_IP_FILTER) {
         return 0;
     }
 
@@ -1312,6 +1337,12 @@ Examples:
     sudo %(prog)s --src-ip 70.0.0.33 --dst-ip 70.0.0.34 \\
                   --protocol all \\
                   --phy-interface enp94s0f0np0
+
+  Monitor flows with latency > 100us:
+    sudo %(prog)s --src-ip 70.0.0.33 --dst-ip 70.0.0.34 \\
+                  --protocol tcp --direction tx \\
+                  --phy-interface enp94s0f0np0 \\
+                  --latency-us 100
 """
     )
     
@@ -1325,10 +1356,12 @@ Examples:
                         help='Destination port filter (TCP/UDP)')
     parser.add_argument('--protocol', type=str, choices=['tcp', 'udp', 'all'], 
                         default='all', help='Protocol filter (default: all)')
-    parser.add_argument('--direction', type=str, choices=['tx', 'rx'], 
+    parser.add_argument('--direction', type=str, choices=['tx', 'rx'],
                         required=True, help='Direction filter (tx or rx)')
     parser.add_argument('--phy-interface', type=str, required=True,
                         help='Physical interface to monitor (e.g., enp94s0f0np0)')
+    parser.add_argument('--latency-us', type=float, default=0,
+                        help='Minimum latency threshold in microseconds to report (default: 0, report all)')
     
     args = parser.parse_args()
     
@@ -1337,12 +1370,15 @@ Examples:
     dst_ip_hex = ip_to_hex(args.dst_ip) if args.dst_ip else 0
     src_port = args.src_port if args.src_port else 0
     dst_port = args.dst_port if args.dst_port else 0
-    
+
     protocol_map = {'tcp': 6, 'udp': 17, 'all': 0}
     protocol_filter = protocol_map[args.protocol]
-    
+
     direction_map = {'tx': 1, 'rx': 2}
     direction_filter = direction_map[args.direction]
+
+    # Convert latency threshold from microseconds to nanoseconds
+    latency_threshold_ns = int(args.latency_us * 1000)
     
     # Support multiple interfaces (split by comma)
     phy_interfaces = args.phy_interface.split(',')
@@ -1365,11 +1401,14 @@ Examples:
     if dst_port:
         print("Destination port filter: %d" % dst_port)
     print("Physical interfaces: %s (ifindex %d, %d)" % (args.phy_interface, ifindex1, ifindex2))
+    if latency_threshold_ns > 0:
+        print("Latency threshold: >= %.3f us (only reporting flows exceeding this latency)" % args.latency_us)
     
     try:
         b = BPF(text=bpf_text % (
             src_ip_hex, dst_ip_hex, src_port, dst_port,
-            protocol_filter, ifindex1, ifindex2, direction_filter
+            protocol_filter, ifindex1, ifindex2, direction_filter,
+            latency_threshold_ns
         ))
         print("BPF program loaded successfully")
 

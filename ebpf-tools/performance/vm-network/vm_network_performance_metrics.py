@@ -73,6 +73,7 @@ bpf_text = """
 #define VM_IFINDEX %d
 #define PHY_IFINDEX %d
 #define DIRECTION_FILTER %d  // 1=vnet_rx, 2=vnet_tx
+#define LATENCY_THRESHOLD_NS %d  // Minimum latency threshold in nanoseconds
 
 // Stage definitions - vnet perspective (reordered to match temporal sequence)
 // VNET RX path (VM TX, packets from VM to external)
@@ -219,8 +220,6 @@ BPF_PERF_OUTPUT(events);
 // Debug statistics framework
 BPF_HISTOGRAM(ifindex_seen, u32);       // Track which ifindex values we see
 
-// Debug function
-
 // Helper functions - reusing vm_network_latency.py proven logic
 static __always_inline bool is_target_vm_interface(const struct sk_buff *skb) {
     if (VM_IFINDEX == 0) return false;
@@ -320,22 +319,13 @@ static __always_inline int parse_packet_key(
     if (PROTOCOL_FILTER != 0 && ip.protocol != PROTOCOL_FILTER) {
         return 0;
     }
-    
-    // Direction-specific IP filtering
-    if (direction == 1) { // vnet_rx: packets from VM (source should be VM IP)
-        if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER) {
-            return 0;
-        }
-        if (DST_IP_FILTER != 0 && ip.daddr != DST_IP_FILTER) {
-            return 0;
-        }
-    } else if (direction == 2) { // vnet_tx: packets to VM (destination should be VM IP)
-        if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER) {
-            return 0;
-        }
-        if (DST_IP_FILTER != 0 && ip.daddr != DST_IP_FILTER) {
-            return 0;
-        }
+
+    // Apply IP filters - use exact matching for packet direction
+    if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER) {
+        return 0;
+    }
+    if (DST_IP_FILTER != 0 && ip.daddr != DST_IP_FILTER) {
+        return 0;
     }
     
     // Set canonical source/destination for consistent packet identification
@@ -462,11 +452,12 @@ static __always_inline int parse_packet_key_userspace(
     if (PROTOCOL_FILTER != 0 && ip.protocol != PROTOCOL_FILTER) {
         return 0;
     }
-    
-    if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER && ip.daddr != SRC_IP_FILTER) {
+
+    // Apply IP filters - use exact matching for packet direction
+    if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER) {
         return 0;
     }
-    if (DST_IP_FILTER != 0 && ip.saddr != DST_IP_FILTER && ip.daddr != DST_IP_FILTER) {
+    if (DST_IP_FILTER != 0 && ip.daddr != DST_IP_FILTER) {
         return 0;
     }
 
@@ -568,10 +559,10 @@ static __always_inline int parse_packet_key_userspace(
 
 // Main event handling function - tracks packets through all stages
 static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u8 stage_id, u8 direction) {
-    
+
     struct packet_key_t key = {};
     u64 current_ts = bpf_ktime_get_ns();
-    
+
     // Parse packet key for identification
     int parse_success = 0;
     // Use userspace parsing for OVS_USERSPACE stages, regular parsing for others
@@ -580,19 +571,20 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
     } else {
         parse_success = parse_packet_key(skb, &key, direction);
     }
-    
+
     if (!parse_success) {
         return;
     }
+
     // Check if this is the first stage for this direction
     bool is_first_stage = false;
     if ((direction == 1 && stage_id == STG_VNET_RX) ||  // vnet RX path starts
         (direction == 2 && stage_id == STG_PHY_RX)) {    // vnet TX path starts
         is_first_stage = true;
     }
-    
+
     struct flow_data_t *flow_ptr;
-    
+
     if (is_first_stage) {
         // Initialize new flow tracking using per-cpu map
         flow_sessions.delete(&key);  // Clean any old entries
@@ -641,8 +633,14 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
     } else {
         // Look up existing flow
         flow_ptr = flow_sessions.lookup(&key);
+        if (flow_ptr) {
+            // Check if flow direction matches current stage direction
+            if (flow_ptr->direction != direction) {
+                return;  // Direction mismatch, skip this stage
+            }
+        }
     }
-    
+
     if (!flow_ptr) {
         return;
     }
@@ -692,7 +690,7 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
     
     flow_sessions.update(&key, flow_ptr);
     
-    // Check if this is the last stage 
+    // Check if this is the last stage
     bool is_last_stage = false;
     if ((direction == 1 && stage_id == STG_TX_XMIT) ||   // vnet RX path ends
         (direction == 2 && stage_id == STG_VNET_TX)) {    // vnet TX path ends
@@ -701,31 +699,52 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
     
     // Only submit event at the last stage
     if (is_last_stage) {
+        // Check latency threshold before submitting
+        if (LATENCY_THRESHOLD_NS > 0) {
+            // Find first and last valid timestamps
+            u64 first_ts = 0;
+            u64 last_ts = current_ts;
+
+            #pragma unroll
+            for (int i = 0; i < MAX_STAGES; i++) {
+                if (flow_ptr->stages[i].valid && flow_ptr->stages[i].timestamp > 0) {
+                    first_ts = flow_ptr->stages[i].timestamp;
+                    break;
+                }
+            }
+
+            // Skip if latency below threshold
+            if (first_ts == 0 || last_ts == 0 || (last_ts - first_ts) < LATENCY_THRESHOLD_NS) {
+                flow_sessions.delete(&key);
+                return;
+            }
+        }
+
         u32 map_key_zero = 0;
         struct pkt_event *event_ptr = event_scratch_map.lookup(&map_key_zero);
         if (!event_ptr) {
             return;
         }
-        
+
         event_ptr->pkt_id = (u64)skb;
         event_ptr->key = key;
         event_ptr->timestamp = current_ts;
         event_ptr->cpu = bpf_get_smp_processor_id();
         event_ptr->stage = stage_id;
         event_ptr->event_type = 1;  // complete flow event
-        
+
         // Get current device info
         struct net_device *dev = NULL;
         if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) == 0 && dev != NULL) {
             bpf_probe_read_kernel(&event_ptr->ifindex, sizeof(event_ptr->ifindex), &dev->ifindex);
             bpf_probe_read_kernel_str(event_ptr->devname, IFNAMSIZ, dev->name);
         }
-        
+
         // Copy flow data and submit complete flow event
         if (bpf_probe_read_kernel(&event_ptr->flow, sizeof(event_ptr->flow), flow_ptr) == 0) {
             events.perf_submit(ctx, event_ptr, sizeof(*event_ptr));
         }
-        
+
         // Clean up flow tracking
         flow_sessions.delete(&key);
     }
@@ -756,13 +775,17 @@ RAW_TRACEPOINT_PROBE(netif_receive_skb) {
 
     // TX Direction: Physical interface receives packets for VM
     if (is_target_phy_interface(skb)) {
-        if (DIRECTION_FILTER == 1) return 0;  // Skip if vnet_rx only
+        if (DIRECTION_FILTER == 1) {
+            return 0;  // Skip if vnet_rx only
+        }
         handle_stage_event(ctx, skb, STG_PHY_RX, 2);  // direction=2 (vnet_tx)
     }
 
     // RX Direction: VM interface sends packets to physical
     if (is_target_vm_interface(skb)) {
-        if (DIRECTION_FILTER == 2) return 0;  // Skip if vnet_tx only
+        if (DIRECTION_FILTER == 2) {
+            return 0;  // Skip if vnet_tx only
+        }
         handle_stage_event(ctx, skb, STG_VNET_RX, 1);  // direction=1 (vnet_rx)
     }
 
@@ -1205,14 +1228,17 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  Monitor VNET RX traffic (VM TX):
-    sudo %(prog)s --vm-interface vnet37 --phy-interface enp94s0f0np0 --direction rx --src-ip 192.168.76.198
-    
-  Monitor VNET TX traffic (VM RX):
-    sudo %(prog)s --vm-interface vnet37 --phy-interface enp94s0f0np0 --direction tx --dst-ip 192.168.76.198
-    
-  Monitor TCP SSH traffic:
+  Monitor VM TX traffic (packets leaving VM):
+    sudo %(prog)s --vm-interface vnet37 --phy-interface enp94s0f0np0 --direction tx --src-ip 192.168.76.198
+
+  Monitor VM RX traffic (packets entering VM):
+    sudo %(prog)s --vm-interface vnet37 --phy-interface enp94s0f0np0 --direction rx --dst-ip 192.168.76.198
+
+  Monitor TCP SSH traffic to VM:
     sudo %(prog)s --vm-interface vnet37 --phy-interface enp94s0f0np0 --protocol tcp --dst-port 22 --direction rx
+
+  Monitor VM TX flows with latency > 100us:
+    sudo %(prog)s --vm-interface vnet37 --phy-interface enp94s0f0np0 --direction tx --src-ip 192.168.76.198 --latency-us 100
 """
     )
     
@@ -1232,8 +1258,10 @@ Examples:
                         help='Destination port filter (TCP/UDP)')
     parser.add_argument('--protocol', type=str, choices=['tcp', 'udp', 'icmp', 'all'], 
                         default='all', help='Protocol filter (default: all)')
-    parser.add_argument('--direction', type=str, choices=['rx', 'tx'], 
-                        required=True, help='Direction filter: rx=VNET_RX(VM_TX), tx=VNET_TX(VM_RX)')
+    parser.add_argument('--direction', type=str, choices=['rx', 'tx'],
+                        required=True, help='Direction filter: tx=VM TX (packets leaving VM), rx=VM RX (packets entering VM)')
+    parser.add_argument('--latency-us', type=float, default=0,
+                        help='Minimum latency threshold in microseconds to report (default: 0, report all)')
     parser.add_argument('--enable-ct', action='store_true',
                         help='Enable conntrack measurement')
     parser.add_argument('--verbose', action='store_true',
@@ -1254,10 +1282,13 @@ Examples:
     
     protocol_map = {'tcp': 6, 'udp': 17, 'icmp': 1, 'all': 0}
     protocol_filter = protocol_map[args.protocol]
-    
-    direction_map = {'rx': 1, 'tx': 2}
+
+    direction_map = {'tx': 1, 'rx': 2}  # tx=VM_TX(VNET_RX path), rx=VM_RX(VNET_TX path)
     direction_filter = direction_map[args.direction]
-    
+
+    # Convert latency threshold from microseconds to nanoseconds
+    latency_threshold_ns = int(args.latency_us * 1000)
+
     try:
         vm_ifindex = get_if_index(args.vm_interface)
         phy_ifindex = get_if_index(args.phy_interface)
@@ -1267,7 +1298,7 @@ Examples:
     
     print("=== VM Network Performance Tracer ===")
     print("Protocol filter: %s" % args.protocol.upper())
-    print("Direction filter: %s (1=VNET_RX/VM_TX, 2=VNET_TX/VM_RX)" % args.direction.upper())
+    print("Direction filter: %s (tx=VM_TX, rx=VM_RX)" % args.direction.upper())
     if args.vm_ip:
         print("VM IP filter: %s" % args.vm_ip)
     elif args.src_ip or args.dst_ip:
@@ -1282,7 +1313,9 @@ Examples:
     print("VM interface: %s (ifindex %d)" % (args.vm_interface, vm_ifindex))
     print("Physical interface: %s (ifindex %d)" % (args.phy_interface, phy_ifindex))
     print("Conntrack measurement: %s" % ("ENABLED" if args.enable_ct else "DISABLED"))
-    
+    if latency_threshold_ns > 0:
+        print("Latency threshold: >= %.3f us (only reporting flows exceeding this latency)" % args.latency_us)
+
     # Debug parameter values
     print("\nDebug: BPF parameters:")
     print("  src_ip_hex=0x%x, dst_ip_hex=0x%x" % (src_ip_hex, dst_ip_hex))
@@ -1293,13 +1326,14 @@ Examples:
     try:
         b = BPF(text=bpf_text % (
             src_ip_hex, dst_ip_hex, src_port, dst_port,
-            protocol_filter, vm_ifindex, phy_ifindex, direction_filter
+            protocol_filter, vm_ifindex, phy_ifindex, direction_filter,
+            latency_threshold_ns
         ))
         print("BPF program loaded successfully")
     except Exception as e:
         print("Error loading BPF program: %s" % e)
         print("\nActual format string substitution:")
-        print("Parameters passed: %d arguments" % len([src_ip_hex, dst_ip_hex, src_port, dst_port, protocol_filter, vm_ifindex, phy_ifindex, direction_filter]))
+        print("Parameters passed: %d arguments" % len([src_ip_hex, dst_ip_hex, src_port, dst_port, protocol_filter, vm_ifindex, phy_ifindex, direction_filter, latency_threshold_ns]))
         sys.exit(1)
     
     b["events"].open_perf_buffer(print_event)
@@ -1316,8 +1350,7 @@ Examples:
             b.perf_buffer_poll()
     except KeyboardInterrupt:
         print("\nDetaching...")
-        
-        
+
         print("\n=== Performance Statistics ===")
         
         print("Event counts by probe point:")

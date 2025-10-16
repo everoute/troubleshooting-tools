@@ -49,7 +49,7 @@ class stage_pair_key_t(ctypes.Structure):
     ]
 
 # Global configuration
-direction_filter = 1  # 1=vnet_rx(vm_tx), 2=vnet_tx(vm_rx)
+direction_filter = 1  # 1=VM TX (packets leaving VM), 2=VM RX (packets entering VM)
 
 # BPF Program
 bpf_text = """
@@ -411,11 +411,12 @@ static __always_inline int parse_packet_key_userspace(
     if (PROTOCOL_FILTER != 0 && ip.protocol != PROTOCOL_FILTER) {
         return 0;
     }
-    
-    if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER && ip.daddr != SRC_IP_FILTER) {
+
+    // Apply IP filters - use exact matching for packet direction
+    if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER) {
         return 0;
     }
-    if (DST_IP_FILTER != 0 && ip.saddr != DST_IP_FILTER && ip.daddr != DST_IP_FILTER) {
+    if (DST_IP_FILTER != 0 && ip.daddr != DST_IP_FILTER) {
         return 0;
     }
 
@@ -878,8 +879,8 @@ def print_histogram_summary(b, interval_start_time):
         dir_pairs = [p for p in sorted_pairs if p[2] == direction]
         if not dir_pairs:
             continue
-            
-        direction_str = "VNET_RX (VM->External)" if direction == 1 else "VNET_TX (External->VM)"
+
+        direction_str = "VM TX (VM->External)" if direction == 1 else "VM RX (External->VM)"
         print("\n%s:" % direction_str)
         print("-" * 60)
         
@@ -923,8 +924,8 @@ def print_histogram_summary(b, interval_start_time):
     # Print packet counters
     counters = b["packet_counters"]
     print("\nPacket Counters:")
-    print("  VNET_RX packets: %d" % counters[1].value)
-    print("  VNET_TX packets: %d" % counters[2].value)
+    print("  VM TX packets: %d" % counters[1].value)
+    print("  VM RX packets: %d" % counters[2].value)
     
     # Calculate incomplete flows using counter method
     flow_counters = b["flow_stage_counters"]
@@ -938,9 +939,9 @@ def print_histogram_summary(b, interval_start_time):
     incomplete_tx_count = first_stage_tx - last_stage_tx
     
     print("\nFlow Session Analysis (Counter-based):")
-    print("  VNET_RX started: %d, completed: %d, incomplete: %d" % (
+    print("  VM TX started: %d, completed: %d, incomplete: %d" % (
         first_stage_rx, last_stage_rx, incomplete_rx_count))
-    print("  VNET_TX started: %d, completed: %d, incomplete: %d" % (
+    print("  VM RX started: %d, completed: %d, incomplete: %d" % (
         first_stage_tx, last_stage_tx, incomplete_tx_count))
     
     # Also try to check flow_sessions table for additional debug info
@@ -1013,13 +1014,13 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  Monitor VNET RX traffic (VM TX):
-    sudo %(prog)s --vm-interface vnet37 --phy-interface enp94s0f0np0 --direction rx --src-ip 192.168.76.198
-    
-  Monitor VNET TX traffic (VM RX):
-    sudo %(prog)s --vm-interface vnet37 --phy-interface enp94s0f0np0 --direction tx --dst-ip 192.168.76.198
-    
-  Monitor TCP SSH traffic with 10 second intervals:
+  Monitor VM TX traffic (packets leaving VM, e.g., 192.168.76.198 -> external):
+    sudo %(prog)s --vm-interface vnet37 --phy-interface enp94s0f0np0 --direction tx --src-ip 192.168.76.198
+
+  Monitor VM RX traffic (packets entering VM, e.g., external -> 192.168.76.198):
+    sudo %(prog)s --vm-interface vnet37 --phy-interface enp94s0f0np0 --direction rx --dst-ip 192.168.76.198
+
+  Monitor TCP SSH traffic to VM with 10 second intervals:
     sudo %(prog)s --vm-interface vnet37 --phy-interface enp94s0f0np0 --protocol tcp --dst-port 22 --direction rx --interval 10
 """
     )
@@ -1040,8 +1041,8 @@ Examples:
                         help='Destination port filter (TCP/UDP)')
     parser.add_argument('--protocol', type=str, choices=['tcp', 'udp', 'icmp', 'all'], 
                         default='all', help='Protocol filter (default: all)')
-    parser.add_argument('--direction', type=str, choices=['rx', 'tx'], 
-                        required=True, help='Direction filter: rx=VNET_RX(VM_TX), tx=VNET_TX(VM_RX)')
+    parser.add_argument('--direction', type=str, choices=['rx', 'tx'],
+                        required=True, help='Direction filter: tx=VM TX (packets leaving VM), rx=VM RX (packets entering VM)')
     parser.add_argument('--interval', type=int, default=5,
                         help='Statistics output interval in seconds (default: 5)')
     parser.add_argument('--enable-ct', action='store_true',
@@ -1063,7 +1064,10 @@ Examples:
     protocol_map = {'tcp': 6, 'udp': 17, 'icmp': 1, 'all': 0}
     protocol_filter = protocol_map[args.protocol]
     
-    direction_map = {'rx': 1, 'tx': 2}
+    # Direction mapping from VM perspective:
+    # tx = VM TX (packets leaving VM) = vnet RX path (direction=1)
+    # rx = VM RX (packets entering VM) = vnet TX path (direction=2)
+    direction_map = {'tx': 1, 'rx': 2}
     direction_filter = direction_map[args.direction]
     
     try:
@@ -1075,7 +1079,7 @@ Examples:
     
     print("=== VM Network Adjacent Stage Latency Histogram Tool ===")
     print("Protocol filter: %s" % args.protocol.upper())
-    print("Direction filter: %s (1=VNET_RX/VM_TX, 2=VNET_TX/VM_RX)" % args.direction.upper())
+    print("Direction filter: %s (tx=VM TX, rx=VM RX)" % args.direction.upper())
     if args.vm_ip:
         print("VM IP filter: %s" % args.vm_ip)
     elif args.src_ip or args.dst_ip:

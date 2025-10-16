@@ -271,6 +271,13 @@ class ImprovedTestCaseGenerator:
                     'path': self.get_script_path(category, tool),
                 }
 
+                # Add tool-level configuration parameters (e.g., latency_threshold)
+                # These are optional parameters defined at the tool level
+                for key, value in tool.items():
+                    if key not in ['dir', 'script', 'template', 'parameters', 'protocols', 'directions']:
+                        # Add any additional tool-level configuration to variables
+                        variables[key] = value
+
                 # Add parameter values
                 variables.update(param_dict)
 

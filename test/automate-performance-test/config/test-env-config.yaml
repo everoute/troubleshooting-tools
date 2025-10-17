@@ -23,11 +23,13 @@ test_environments:
       test_ip: "172.21.153.114"
       interface: "ens4"
       vm_interface: "vnet0"
+      physical_host_ref: "host-server"  # eBPF monitoring runs on physical host
     client:
       ssh_ref: "vm-client"
       test_ip: "172.21.153.113"
       interface: "ens4"
       vm_interface: "vnet0"
+      physical_host_ref: "host-server"  # eBPF monitoring runs on physical host
     network_config:
       server_ip: "172.21.153.114"
       client_ip: "172.21.153.113"

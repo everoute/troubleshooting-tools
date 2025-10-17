@@ -152,31 +152,49 @@ class InitHooks:
         case_id = context.get('case_id')
         ebpf_command = context.get('ebpf_command')
         environment = context.get('environment')
+
+        # Performance test host (VM or physical host)
         host_ref = context.get('host_ref')
         workdir = context.get('workdir', '/home/smartx/lcc')
         result_path = context.get('result_path')
 
+        # eBPF monitoring host (physical host, may be different from host_ref)
+        ebpf_host_ref = context.get('ebpf_host_ref', host_ref)
+        ebpf_workdir = context.get('ebpf_workdir', workdir)
+        ebpf_result_path = context.get('ebpf_result_path', result_path)
+
         if not result_path:
             result_path = f"{workdir}/performance-test-results/ebpf/{tool_id}_case_{case_id}/{environment}"
+        if not ebpf_result_path:
+            ebpf_result_path = f"{ebpf_workdir}/performance-test-results/ebpf/{tool_id}_case_{case_id}/{environment}"
 
-        # Create case directories (only server_results and ebpf_monitoring on server)
-        cmd = f"mkdir -p {result_path}/{{server_results,ebpf_monitoring}}"
-        stdout, stderr, status = self.ssh_manager.execute_command(host_ref, cmd)
+        # Create performance test directories (server_results, client_results) on test host
+        # Note: client_results will be created on client host by test_init hook
+        perf_cmd = f"mkdir -p {result_path}/server_results"
+        stdout, stderr, status = self.ssh_manager.execute_command(host_ref, perf_cmd)
         results['tasks'].append({
-            'name': 'create_case_directories',
+            'name': 'create_performance_directories',
             'status': status == 0
         })
 
-        # Start eBPF program if provided
+        # Create eBPF monitoring directories on eBPF monitoring host (physical host)
+        ebpf_cmd = f"mkdir -p {ebpf_result_path}/ebpf_monitoring"
+        stdout, stderr, status = self.ssh_manager.execute_command(ebpf_host_ref, ebpf_cmd)
+        results['tasks'].append({
+            'name': 'create_ebpf_monitoring_directories',
+            'status': status == 0
+        })
+
+        # Start eBPF program if provided (on eBPF monitoring host - physical host)
         if ebpf_command:
             start_cmd = f"""
-                cd {workdir}
-                echo "Starting eBPF case {case_id}: {ebpf_command}" > {result_path}/ebpf_start_{timestamp}.log
-                echo "eBPF case start time: $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {result_path}/ebpf_start_{timestamp}.log
+                cd {ebpf_workdir}
+                echo "Starting eBPF case {case_id}: {ebpf_command}" > {ebpf_result_path}/ebpf_start_{timestamp}.log
+                echo "eBPF case start time: $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
 
-                nohup {ebpf_command} > {result_path}/ebpf_output_{timestamp}.log 2>&1 &
+                nohup {ebpf_command} > {ebpf_result_path}/ebpf_output_{timestamp}.log 2>&1 &
                 WRAPPER_PID=$!
-                echo "Wrapper PID: $WRAPPER_PID" >> {result_path}/ebpf_start_{timestamp}.log
+                echo "Wrapper PID: $WRAPPER_PID" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
 
                 # Wait a moment for the process to start
                 sleep 2
@@ -195,13 +213,13 @@ class InitHooks:
                     ACTUAL_PID=$WRAPPER_PID
                 fi
 
-                echo $WRAPPER_PID > {result_path}/wrapper_pid_{timestamp}.txt
-                echo $ACTUAL_PID > {result_path}/ebpf_pid_{timestamp}.txt
-                echo "Wrapper PID: $WRAPPER_PID, Actual eBPF PID: $ACTUAL_PID" >> {result_path}/ebpf_start_{timestamp}.log
-                echo "eBPF program started at $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {result_path}/ebpf_start_{timestamp}.log
+                echo $WRAPPER_PID > {ebpf_result_path}/wrapper_pid_{timestamp}.txt
+                echo $ACTUAL_PID > {ebpf_result_path}/ebpf_pid_{timestamp}.txt
+                echo "Wrapper PID: $WRAPPER_PID, Actual eBPF PID: $ACTUAL_PID" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
+                echo "eBPF program started at $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
                 echo $ACTUAL_PID
             """
-            stdout, stderr, status = self.ssh_manager.execute_command(host_ref, start_cmd)
+            stdout, stderr, status = self.ssh_manager.execute_command(ebpf_host_ref, start_cmd)
             if status == 0 and stdout:
                 ebpf_pid = stdout.strip()
                 results['ebpf_pid'] = ebpf_pid
@@ -211,12 +229,12 @@ class InitHooks:
                     'pid': ebpf_pid
                 })
 
-                # Start tool-level monitoring (covers entire tool lifecycle)
-                monitor_start_cmd = f'echo "eBPF monitoring start time: $(date "+%Y-%m-%d %H:%M:%S.%N"), PID: {ebpf_pid}" > {result_path}/ebpf_monitoring/monitor_start_{timestamp}.log'
+                # Start tool-level monitoring (covers entire tool lifecycle) on eBPF host
+                monitor_start_cmd = f'echo "eBPF monitoring start time: $(date "+%Y-%m-%d %H:%M:%S.%N"), PID: {ebpf_pid}" > {ebpf_result_path}/ebpf_monitoring/monitor_start_{timestamp}.log'
                 logger.info(f"DEBUG: monitor_start_cmd = {monitor_start_cmd}")
-                self.ssh_manager.execute_command(host_ref, monitor_start_cmd)
+                self.ssh_manager.execute_command(ebpf_host_ref, monitor_start_cmd)
 
-                self._start_tool_monitoring(host_ref, ebpf_pid, result_path, timestamp)
+                self._start_tool_monitoring(ebpf_host_ref, ebpf_pid, ebpf_result_path, timestamp)
                 results['tasks'].append({
                     'name': 'start_tool_monitoring',
                     'status': True
@@ -228,11 +246,13 @@ class InitHooks:
                 self.case_context[f"{tool_id}_{case_id}"] = {
                     'case_timestamp': timestamp,
                     'result_path': result_path,
+                    'ebpf_result_path': ebpf_result_path,  # Store eBPF result path
+                    'ebpf_host_ref': ebpf_host_ref,        # Store eBPF host ref
                     'ebpf_pid': ebpf_pid,
                     'tool_id': tool_id,
                     'case_id': case_id
                 }
-                logger.info(f"DEBUG: Stored case context for {tool_id}_{case_id}: timestamp={timestamp}, result_path={result_path}, ebpf_pid={ebpf_pid}")
+                logger.info(f"DEBUG: Stored case context for {tool_id}_{case_id}: timestamp={timestamp}, result_path={result_path}, ebpf_result_path={ebpf_result_path}, ebpf_host_ref={ebpf_host_ref}, ebpf_pid={ebpf_pid}")
 
         return results
 
@@ -269,13 +289,24 @@ class InitHooks:
             # Ensure log directory exists (result_path now already points to server_results)
             self.ssh_manager.execute_command(server_host_ref, f"mkdir -p {result_path}")
 
+            # Read server command from config with fallback
+            # Try: test_type.test_config.server_cmd first, then test_type.server_cmd
+            test_type_config = self.config.get('perf', {}).get('performance_tests', {}).get(test_type, {})
+            server_cmd_template = test_type_config.get(test_config, {}).get('server_cmd')
+            if not server_cmd_template:
+                server_cmd_template = test_type_config.get('server_cmd', 'iperf3 -s -p {port} -B {server_ip}')
+            logger.info(f"DEBUG: Using server_cmd_template for {test_type}/{test_config}: {server_cmd_template}")
+
             # Start multiple servers for multi-stream tests
             base_port = 5001
             started_ports = []
 
             for i in range(streams):
                 port = base_port + i
-                server_cmd = f"nohup iperf3 -s -p {port} -B {server_ip} > {result_path}/iperf3_server_{test_type}_port_{port}_{timestamp}.log 2>&1 &"
+                # Format server command from config template
+                server_cmd_base = server_cmd_template.format(port=port, server_ip=server_ip)
+                # Add nohup and output redirection
+                server_cmd = f"nohup {server_cmd_base} > {result_path}/iperf3_server_{test_type}_port_{port}_{timestamp}.log 2>&1 &"
                 self.ssh_manager.execute_command(server_host_ref, server_cmd)
                 started_ports.append(port)
 
@@ -298,23 +329,33 @@ class InitHooks:
             })
 
         elif test_type == "latency":
+            # Get port from config, default to 12865
+            port = self.config.get('perf', {}).get('performance_tests', {}).get('latency', {}).get('ports', [12865])[0]
+
             # Kill any existing netserver processes on the port
-            self.ssh_manager.execute_command(server_host_ref, "pkill -f 'netserver.*-p 12865' || true")
+            self.ssh_manager.execute_command(server_host_ref, f"pkill -f 'netserver.*-p {port}' || true")
 
             # Ensure log directory exists (result_path now already points to server_results)
             self.ssh_manager.execute_command(server_host_ref, f"mkdir -p {result_path}")
-            server_cmd = f"nohup netserver -L {server_ip} -p 12865 -D > {result_path}/netserver_{test_type}_{timestamp}.log 2>&1 &"
+
+            # Read server command from config
+            server_cmd_template = self.config.get('perf', {}).get('performance_tests', {}).get('latency', {}).get('server_cmd', 'netserver -L {server_ip} -p {port} -D')
+            logger.info(f"DEBUG: Using server_cmd_template for latency: {server_cmd_template}")
+            # Format server command from config template
+            server_cmd_base = server_cmd_template.format(port=port, server_ip=server_ip)
+            # Add nohup and output redirection
+            server_cmd = f"nohup {server_cmd_base} > {result_path}/netserver_{test_type}_{timestamp}.log 2>&1 &"
             self.ssh_manager.execute_command(server_host_ref, server_cmd)
 
             # Wait and verify server startup
             self.ssh_manager.execute_command(server_host_ref, "sleep 3")
-            stdout, stderr, exit_code = self.ssh_manager.execute_command(server_host_ref, "ss -tln | grep ':12865 ' || echo 'NOT_LISTENING'")
+            stdout, stderr, exit_code = self.ssh_manager.execute_command(server_host_ref, f"ss -tln | grep ':{port} ' || echo 'NOT_LISTENING'")
 
             server_status = 'NOT_LISTENING' not in stdout
             results['tasks'].append({
                 'name': 'start_netserver',
                 'status': server_status,
-                'details': f"Port 12865 listening: {server_status}"
+                'details': f"Port {port} listening: {server_status}"
             })
 
         return results
@@ -334,21 +375,12 @@ class InitHooks:
         # Get monitoring interval from config (default 2 seconds)
         interval = self.config.get('perf', {}).get('performance_tests', {}).get('monitoring', {}).get('interval', 2)
 
-        # Combined CPU and Memory monitoring using ps (single command, single file)
+        # Combined CPU and Memory monitoring using pidstat
         resource_cmd = f"""
             nohup bash -c '
-                echo "# eBPF Resource Monitoring - CPU and Memory statistics using ps" > {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
-                echo "# Timestamp                     PID         CPU_Percent  VSZ_KB    RSS_KB    MEM_Percent" >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
-                echo "# DEBUG: Starting resource monitoring for PID {ebpf_pid}" >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
-                while ps -p {ebpf_pid} >/dev/null 2>&1; do
-                    TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S.%N")
-                    CPU=$(ps -p {ebpf_pid} -o %cpu=)
-                    MEMLINE=$(ps -p {ebpf_pid} -o vsz= -o rss= -o pmem=)
-                    [ -z "$CPU" ] && CPU="0.00"
-                    [ -z "$MEMLINE" ] && MEMLINE="0 0 0.00"
-                    echo "$TIMESTAMP {ebpf_pid} $CPU $MEMLINE" >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
-                    sleep {interval}
-                done
+                echo "# eBPF Resource Monitoring - CPU and Memory statistics using pidstat" > {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
+                echo "# DEBUG: Starting resource monitoring for PID {ebpf_pid} with interval {interval}s" >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
+                pidstat -h -u -r -p {ebpf_pid} {interval} >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log 2>&1
                 echo "# DEBUG: resource monitoring ended for PID {ebpf_pid}" >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
             ' >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log 2>&1 &
         """

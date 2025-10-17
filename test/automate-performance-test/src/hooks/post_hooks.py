@@ -97,8 +97,14 @@ class PostHooks:
         tool_id = context.get('tool_id')
         case_id = context.get('case_id')
         environment = context.get('environment')
+
+        # Performance test host (VM or physical host)
         host_ref = context.get('host_ref')
         result_path = context.get('result_path')
+
+        # eBPF monitoring host (physical host, may be different from host_ref)
+        ebpf_host_ref = context.get('ebpf_host_ref', host_ref)
+        ebpf_result_path = context.get('ebpf_result_path', result_path)
         ebpf_command = context.get('ebpf_command')
 
         # Get case context with consistent timestamp from init_hooks
@@ -111,32 +117,40 @@ class PostHooks:
                 logger.info(f"DEBUG: Using case timestamp {case_timestamp} instead of current {timestamp}")
                 timestamp = case_timestamp
 
-        # Stop case monitoring if eBPF program was running
+                # Override eBPF paths from case_context if available
+                if 'ebpf_result_path' in case_context:
+                    ebpf_result_path = case_context['ebpf_result_path']
+                    logger.info(f"DEBUG: Using ebpf_result_path from case_context: {ebpf_result_path}")
+                if 'ebpf_host_ref' in case_context:
+                    ebpf_host_ref = case_context['ebpf_host_ref']
+                    logger.info(f"DEBUG: Using ebpf_host_ref from case_context: {ebpf_host_ref}")
+
+        # Stop case monitoring if eBPF program was running (on eBPF monitoring host - physical host)
         if ebpf_command:
             # Record monitoring stop time
             monitor_stop_timestamp = f"""
-                echo "Monitor stop time: $(date '+%Y-%m-%d %H:%M:%S.%N')" > {result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
+                echo "Monitor stop time: $(date '+%Y-%m-%d %H:%M:%S.%N')" > {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
             """
-            self.ssh_manager.execute_command(host_ref, monitor_stop_timestamp)
+            self.ssh_manager.execute_command(ebpf_host_ref, monitor_stop_timestamp)
 
             # Stop monitoring processes (updated for new pidstat monitoring)
             monitoring_cmd = f"""
-                echo "DEBUG: Stopping monitoring processes for case {case_id}" >> {result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
+                echo "DEBUG: Stopping monitoring processes for case {case_id}" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
                 pkill -f "ebpf_resource_monitor.*{case_id}" || true
                 pkill -f "ebpf_logsize_monitor.*{case_id}" || true
                 # Also try to kill by pattern matching the result path
-                pkill -f "{result_path}/ebpf_monitoring" || true
-                echo "Case monitoring stopped at: $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
-                echo "DEBUG: Monitoring stop commands completed" >> {result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
+                pkill -f "{ebpf_result_path}/ebpf_monitoring" || true
+                echo "Case monitoring stopped at: $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
+                echo "DEBUG: Monitoring stop commands completed" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
             """
             logger.info(f"DEBUG: monitoring_cmd = {monitoring_cmd}")
-            self.ssh_manager.execute_command(host_ref, monitoring_cmd)
+            self.ssh_manager.execute_command(ebpf_host_ref, monitoring_cmd)
             results['tasks'].append({
                 'name': 'stop_case_monitoring',
                 'status': True
             })
 
-            # Enhanced eBPF program cleanup with process tree termination
+            # Enhanced eBPF program cleanup with process tree termination (on eBPF monitoring host)
             stop_ebpf_cmd = f"""
                 # Function to kill process and its children
                 kill_process_tree() {{
@@ -162,34 +176,34 @@ class PostHooks:
                     fi
                 }}
 
-                echo "eBPF case stop time: $(date '+%Y-%m-%d %H:%M:%S.%N')" > {result_path}/ebpf_stop_{timestamp}.log
+                echo "eBPF case stop time: $(date '+%Y-%m-%d %H:%M:%S.%N')" > {ebpf_result_path}/ebpf_stop_{timestamp}.log
 
                 # DEBUG: List available PID files
-                echo "DEBUG: Available PID files in {result_path}:" >> {result_path}/ebpf_stop_{timestamp}.log
-                ls -la {result_path}/*pid*.txt >> {result_path}/ebpf_stop_{timestamp}.log 2>&1 || echo "No PID files found" >> {result_path}/ebpf_stop_{timestamp}.log
+                echo "DEBUG: Available PID files in {ebpf_result_path}:" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
+                ls -la {ebpf_result_path}/*pid*.txt >> {ebpf_result_path}/ebpf_stop_{timestamp}.log 2>&1 || echo "No PID files found" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
 
                 # Stop actual eBPF process
-                EBPF_PID_FILE="{result_path}/ebpf_pid_{timestamp}.txt"
+                EBPF_PID_FILE="{ebpf_result_path}/ebpf_pid_{timestamp}.txt"
                 if [ -f "$EBPF_PID_FILE" ]; then
                     EBPF_PID=$(cat "$EBPF_PID_FILE")
-                    echo "DEBUG: Found eBPF PID file with PID: $EBPF_PID" >> {result_path}/ebpf_stop_{timestamp}.log
+                    echo "DEBUG: Found eBPF PID file with PID: $EBPF_PID" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
                     kill_process_tree "$EBPF_PID" "eBPF"
                 else
-                    echo "DEBUG: eBPF PID file not found: $EBPF_PID_FILE" >> {result_path}/ebpf_stop_{timestamp}.log
+                    echo "DEBUG: eBPF PID file not found: $EBPF_PID_FILE" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
                     # Try to find PID files with any timestamp in same directory
-                    FOUND_EBPF_PID_FILE=$(find {result_path} -name "ebpf_pid_*.txt" -type f | head -1)
+                    FOUND_EBPF_PID_FILE=$(find {ebpf_result_path} -name "ebpf_pid_*.txt" -type f | head -1)
                     if [ -n "$FOUND_EBPF_PID_FILE" ]; then
                         EBPF_PID=$(cat "$FOUND_EBPF_PID_FILE")
-                        echo "DEBUG: Using fallback eBPF PID file: $FOUND_EBPF_PID_FILE with PID: $EBPF_PID" >> {result_path}/ebpf_stop_{timestamp}.log
+                        echo "DEBUG: Using fallback eBPF PID file: $FOUND_EBPF_PID_FILE with PID: $EBPF_PID" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
                         kill_process_tree "$EBPF_PID" "eBPF"
                     fi
                 fi
 
                 # Stop wrapper process if different
-                WRAPPER_PID_FILE="{result_path}/wrapper_pid_{timestamp}.txt"
+                WRAPPER_PID_FILE="{ebpf_result_path}/wrapper_pid_{timestamp}.txt"
                 if [ -f "$WRAPPER_PID_FILE" ]; then
                     WRAPPER_PID=$(cat "$WRAPPER_PID_FILE")
-                    echo "DEBUG: Found wrapper PID file with PID: $WRAPPER_PID" >> {result_path}/ebpf_stop_{timestamp}.log
+                    echo "DEBUG: Found wrapper PID file with PID: $WRAPPER_PID" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
                     if [ -f "$EBPF_PID_FILE" ]; then
                         EBPF_PID=$(cat "$EBPF_PID_FILE")
                         if [ "$WRAPPER_PID" != "$EBPF_PID" ]; then
@@ -199,41 +213,54 @@ class PostHooks:
                         kill_process_tree "$WRAPPER_PID" "Wrapper"
                     fi
                 else
-                    echo "DEBUG: Wrapper PID file not found: $WRAPPER_PID_FILE" >> {result_path}/ebpf_stop_{timestamp}.log
+                    echo "DEBUG: Wrapper PID file not found: $WRAPPER_PID_FILE" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
                     # Try to find wrapper PID files with any timestamp in same directory
-                    FOUND_WRAPPER_PID_FILE=$(find {result_path} -name "wrapper_pid_*.txt" -type f | head -1)
+                    FOUND_WRAPPER_PID_FILE=$(find {ebpf_result_path} -name "wrapper_pid_*.txt" -type f | head -1)
                     if [ -n "$FOUND_WRAPPER_PID_FILE" ]; then
                         WRAPPER_PID=$(cat "$FOUND_WRAPPER_PID_FILE")
-                        echo "DEBUG: Using fallback wrapper PID file: $FOUND_WRAPPER_PID_FILE with PID: $WRAPPER_PID" >> {result_path}/ebpf_stop_{timestamp}.log
+                        echo "DEBUG: Using fallback wrapper PID file: $FOUND_WRAPPER_PID_FILE with PID: $WRAPPER_PID" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
                         kill_process_tree "$WRAPPER_PID" "Wrapper"
                     fi
                 fi
 
-                echo "eBPF case cleanup completed at: $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {result_path}/ebpf_stop_{timestamp}.log
+                echo "eBPF case cleanup completed at: $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
             """
-            self.ssh_manager.execute_command(host_ref, stop_ebpf_cmd)
+            self.ssh_manager.execute_command(ebpf_host_ref, stop_ebpf_cmd)
             results['tasks'].append({
                 'name': 'stop_ebpf_program',
                 'status': True
             })
 
-        # Generate time range statistics
+        # Generate time range statistics (on eBPF monitoring host)
         if ebpf_command:
-            self._generate_time_statistics(host_ref, result_path, timestamp)
+            self._generate_time_statistics(ebpf_host_ref, ebpf_result_path, timestamp)
             results['tasks'].append({
                 'name': 'generate_time_statistics',
                 'status': True
             })
 
-        # Collect case data
-        collect_cmd = f"""
-            echo "Case {case_id} data collection completed at: $(date '+%Y-%m-%d %H:%M:%S.%N')" > {result_path}/case_complete_{timestamp}.log
-            du -sh {result_path}/* > {result_path}/case_data_size_{timestamp}.log 2>/dev/null || true
+        # Collect eBPF case data (on eBPF monitoring host)
+        if ebpf_command:
+            ebpf_collect_cmd = f"""
+                echo "eBPF case {case_id} data collection completed at: $(date '+%Y-%m-%d %H:%M:%S.%N')" > {ebpf_result_path}/ebpf_case_complete_{timestamp}.log
+                du -sh {ebpf_result_path}/* > {ebpf_result_path}/ebpf_case_data_size_{timestamp}.log 2>/dev/null || true
+                sync
+            """
+            self.ssh_manager.execute_command(ebpf_host_ref, ebpf_collect_cmd)
+            results['tasks'].append({
+                'name': 'collect_ebpf_case_data',
+                'status': True
+            })
+
+        # Collect performance test data (on performance test host)
+        perf_collect_cmd = f"""
+            echo "Performance test {case_id} data collection completed at: $(date '+%Y-%m-%d %H:%M:%S.%N')" > {result_path}/perf_case_complete_{timestamp}.log
+            du -sh {result_path}/* > {result_path}/perf_case_data_size_{timestamp}.log 2>/dev/null || true
             sync
         """
-        self.ssh_manager.execute_command(host_ref, collect_cmd)
+        self.ssh_manager.execute_command(host_ref, perf_collect_cmd)
         results['tasks'].append({
-            'name': 'collect_case_data',
+            'name': 'collect_performance_case_data',
             'status': True
         })
 

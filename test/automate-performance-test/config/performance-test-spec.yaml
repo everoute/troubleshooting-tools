@@ -2,13 +2,14 @@
 performance_tests:
   throughput:
     single_stream:
-      server_cmd: "iperf3 -s -p {port} -B {server_ip}"
+      server_cmd: "iperf3 -s -p {port} -B {server_ip} -J"
       client_cmd_tcp: "iperf3 -c {server_ip} -B {client_ip} -p {port} -t {duration} -b {target_bw} -l 65520 -J > {result_file}"
       client_cmd_udp: "iperf3 -c {server_ip} -B {client_ip} -p {port} -t {duration} -b {target_bw} -u -J > {result_file}"
       duration: 10  # Reduced from 30
       target_bw: ["1G"]  # Only 1G test
       ports: [5001]
     multi_stream:
+      server_cmd: "iperf3 -s -p {port} -B {server_ip} -J"
       streams: [4]  # Only 2 streams
       base_port: 5001
       duration: 10  # Reduced from 30
@@ -21,7 +22,7 @@ performance_tests:
     ports: [12865]
 
   pps:
-    server_cmd: "iperf3 -s -p {port} -B {server_ip}"
+    server_cmd: "iperf3 -s -p {port} -B {server_ip} -J"
     client_cmd_tcp: "iperf3 -c {server_ip} -B {client_ip} -p {port} -t {duration} -b {target_bw} -l 64 -J > {result_file}"
     client_cmd_udp: "iperf3 -c {server_ip} -B {client_ip} -p {port} -t {duration} -b {target_bw} -l 64 -u -J > {result_file}"
     single_stream:

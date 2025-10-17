@@ -483,28 +483,48 @@ class TestExecutor:
         # Get workdir from SSH config if available
         workdir = "/tmp"  # default
         host_ref = "host-server"  # default
+        ebpf_host_ref = "host-server"  # default
+        ebpf_workdir = "/tmp"  # default
 
         if 'ssh' in self.config and 'env' in self.config:
             env_config = self.config['env']['test_environments'].get(env_name, {})
             server_config = env_config.get('server', {})
+
+            # Get performance test host_ref (where tests run, could be VM or physical host)
             host_ref = server_config.get('ssh_ref', host_ref)
 
             if host_ref in self.config['ssh']['ssh_hosts']:
                 workdir = self.config['ssh']['ssh_hosts'][host_ref]['workdir']
 
-        # Generate result path
+            # Get eBPF monitoring host_ref (where eBPF programs run)
+            # For VM environment, use physical_host_ref; otherwise use same as host_ref
+            ebpf_host_ref = server_config.get('physical_host_ref', host_ref)
+
+            if ebpf_host_ref in self.config['ssh']['ssh_hosts']:
+                ebpf_workdir = self.config['ssh']['ssh_hosts'][ebpf_host_ref]['workdir']
+
+        # Generate result path for performance tests (on VM or physical host)
         if cycle['cycle_type'] == 'baseline':
             result_path = f"{workdir}/performance-test-results/baseline/{env_name}"
         else:
             result_path = f"{workdir}/performance-test-results/{cycle['result_path']}"
 
+        # Generate result path for eBPF monitoring (on physical host)
+        if cycle['cycle_type'] == 'baseline':
+            ebpf_result_path = f"{ebpf_workdir}/performance-test-results/baseline/{env_name}"
+        else:
+            ebpf_result_path = f"{ebpf_workdir}/performance-test-results/{cycle['result_path']}"
+
         return {
             'cycle': cycle,
             'timestamp': timestamp,
             'environment': env_name,
-            'host_ref': host_ref,
-            'workdir': workdir,
-            'result_path': result_path,
+            'host_ref': host_ref,              # Performance test host (VM or physical)
+            'ebpf_host_ref': ebpf_host_ref,    # eBPF monitoring host (physical host)
+            'workdir': workdir,                # Performance test workdir
+            'ebpf_workdir': ebpf_workdir,      # eBPF monitoring workdir
+            'result_path': result_path,        # Performance test result path
+            'ebpf_result_path': ebpf_result_path,  # eBPF monitoring result path
             'tool_id': cycle.get('ebpf_case', {}).get('tool_id'),
             'case_id': cycle.get('ebpf_case', {}).get('case_id'),
             'ebpf_command': cycle.get('ebpf_case', {}).get('command'),

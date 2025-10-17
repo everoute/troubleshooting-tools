@@ -1,0 +1,355 @@
+{
+  "metadata": {
+    "description": "KVM virtual network eBPF testing parameter specification",
+    "source": "Generated from spec config: KVM Virtual Network Test Specification",
+    "total_cases": 56,
+    "generated_at": "2025-10-20 09:54:30"
+  },
+  "test_cases": [
+    {
+      "id": 1,
+      "name": "kvm_irqfd_stats_summary_vhost_pid_45220_category_data_subcategory_rx",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45220 --category data --subcategory rx",
+      "duration": 10
+    },
+    {
+      "id": 2,
+      "name": "kvm_irqfd_stats_summary_vhost_pid_45220_category_data_subcategory_tx",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45220 --category data --subcategory tx",
+      "duration": 10
+    },
+    {
+      "id": 3,
+      "name": "kvm_irqfd_stats_summary_vhost_pid_45222_category_data_subcategory_rx",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45222 --category data --subcategory rx",
+      "duration": 10
+    },
+    {
+      "id": 4,
+      "name": "kvm_irqfd_stats_summary_vhost_pid_45222_category_data_subcategory_tx",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45222 --category data --subcategory tx",
+      "duration": 10
+    },
+    {
+      "id": 5,
+      "name": "kvm_irqfd_stats_summary_vhost_pid_45223_category_data_subcategory_rx",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45223 --category data --subcategory rx",
+      "duration": 10
+    },
+    {
+      "id": 6,
+      "name": "kvm_irqfd_stats_summary_vhost_pid_45223_category_data_subcategory_tx",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45223 --category data --subcategory tx",
+      "duration": 10
+    },
+    {
+      "id": 7,
+      "name": "kvm_irqfd_stats_summary_vhost_pid_45224_category_data_subcategory_rx",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45224 --category data --subcategory rx",
+      "duration": 10
+    },
+    {
+      "id": 8,
+      "name": "kvm_irqfd_stats_summary_vhost_pid_45224_category_data_subcategory_tx",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45224 --category data --subcategory tx",
+      "duration": 10
+    },
+    {
+      "id": 9,
+      "name": "kvm_irqfd_stats_summary_vhost_pid_45225_category_data_subcategory_rx",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45225 --category data --subcategory rx",
+      "duration": 10
+    },
+    {
+      "id": 10,
+      "name": "kvm_irqfd_stats_summary_vhost_pid_45225_category_data_subcategory_tx",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45225 --category data --subcategory tx",
+      "duration": 10
+    },
+    {
+      "id": 11,
+      "name": "kvm_irqfd_stats_summary_vhost_pid_45226_category_data_subcategory_rx",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45226 --category data --subcategory rx",
+      "duration": 10
+    },
+    {
+      "id": 12,
+      "name": "kvm_irqfd_stats_summary_vhost_pid_45226_category_data_subcategory_tx",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45226 --category data --subcategory tx",
+      "duration": 10
+    },
+    {
+      "id": 13,
+      "name": "kvm_irqfd_stats_summary_vhost_pid_45227_category_data_subcategory_rx",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45227 --category data --subcategory rx",
+      "duration": 10
+    },
+    {
+      "id": 14,
+      "name": "kvm_irqfd_stats_summary_vhost_pid_45227_category_data_subcategory_tx",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45227 --category data --subcategory tx",
+      "duration": 10
+    },
+    {
+      "id": 15,
+      "name": "kvm_irqfd_stats_summary_vhost_pid_45228_category_data_subcategory_rx",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45228 --category data --subcategory rx",
+      "duration": 10
+    },
+    {
+      "id": 16,
+      "name": "kvm_irqfd_stats_summary_vhost_pid_45228_category_data_subcategory_tx",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45228 --category data --subcategory tx",
+      "duration": 10
+    },
+    {
+      "id": 17,
+      "name": "kvm_irqfd_stats_summary",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --category control",
+      "duration": 10
+    },
+    {
+      "id": 18,
+      "name": "vhost_queue_correlation_details_queue_0",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 0 --verbose",
+      "duration": 10
+    },
+    {
+      "id": 19,
+      "name": "vhost_queue_correlation_details_queue_1",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 1 --verbose",
+      "duration": 10
+    },
+    {
+      "id": 20,
+      "name": "vhost_queue_correlation_details_queue_2",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 2 --verbose",
+      "duration": 10
+    },
+    {
+      "id": 21,
+      "name": "vhost_queue_correlation_details_queue_3",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 3 --verbose",
+      "duration": 10
+    },
+    {
+      "id": 22,
+      "name": "vhost_queue_correlation_details_queue_4",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 4 --verbose",
+      "duration": 10
+    },
+    {
+      "id": 23,
+      "name": "vhost_queue_correlation_details_queue_5",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 5 --verbose",
+      "duration": 10
+    },
+    {
+      "id": 24,
+      "name": "vhost_queue_correlation_details_queue_6",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 6 --verbose",
+      "duration": 10
+    },
+    {
+      "id": 25,
+      "name": "vhost_queue_correlation_details_queue_7",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 7 --verbose",
+      "duration": 10
+    },
+    {
+      "id": 26,
+      "name": "vhost_queue_correlation_details",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --verbose",
+      "duration": 10
+    },
+    {
+      "id": 27,
+      "name": "vhost_queue_correlation_simple_queue_0",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 0",
+      "duration": 10
+    },
+    {
+      "id": 28,
+      "name": "vhost_queue_correlation_simple_queue_1",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 1",
+      "duration": 10
+    },
+    {
+      "id": 29,
+      "name": "vhost_queue_correlation_simple_queue_2",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 2",
+      "duration": 10
+    },
+    {
+      "id": 30,
+      "name": "vhost_queue_correlation_simple_queue_3",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 3",
+      "duration": 10
+    },
+    {
+      "id": 31,
+      "name": "vhost_queue_correlation_simple_queue_4",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 4",
+      "duration": 10
+    },
+    {
+      "id": 32,
+      "name": "vhost_queue_correlation_simple_queue_5",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 5",
+      "duration": 10
+    },
+    {
+      "id": 33,
+      "name": "vhost_queue_correlation_simple_queue_6",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 6",
+      "duration": 10
+    },
+    {
+      "id": 34,
+      "name": "vhost_queue_correlation_simple_queue_7",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 7",
+      "duration": 10
+    },
+    {
+      "id": 35,
+      "name": "vhost_queue_correlation_simple",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246",
+      "duration": 10
+    },
+    {
+      "id": 36,
+      "name": "tun_ring_monitor_protocol_tcp",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_ring_monitor.py --device vnet246 --protocol tcp --all",
+      "duration": 10
+    },
+    {
+      "id": 37,
+      "name": "tun_ring_monitor_protocol_udp",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_ring_monitor.py --device vnet246 --protocol udp --all",
+      "duration": 10
+    },
+    {
+      "id": 38,
+      "name": "tun_ring_monitor_protocol_icmp",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_ring_monitor.py --device vnet246 --protocol icmp --all",
+      "duration": 10
+    },
+    {
+      "id": 39,
+      "name": "tun_to_vhost_queue_stats_details_queue_0",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 0",
+      "duration": 10
+    },
+    {
+      "id": 40,
+      "name": "tun_to_vhost_queue_stats_details_queue_1",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 1",
+      "duration": 10
+    },
+    {
+      "id": 41,
+      "name": "tun_to_vhost_queue_stats_details_queue_2",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 2",
+      "duration": 10
+    },
+    {
+      "id": 42,
+      "name": "tun_to_vhost_queue_stats_details_queue_3",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 3",
+      "duration": 10
+    },
+    {
+      "id": 43,
+      "name": "tun_to_vhost_queue_stats_details_queue_4",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 4",
+      "duration": 10
+    },
+    {
+      "id": 44,
+      "name": "tun_to_vhost_queue_stats_details_queue_5",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 5",
+      "duration": 10
+    },
+    {
+      "id": 45,
+      "name": "tun_to_vhost_queue_stats_details_queue_6",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 6",
+      "duration": 10
+    },
+    {
+      "id": 46,
+      "name": "tun_to_vhost_queue_stats_details_queue_7",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 7",
+      "duration": 10
+    },
+    {
+      "id": 47,
+      "name": "tun_to_vhost_queue_stats_details",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246",
+      "duration": 10
+    },
+    {
+      "id": 48,
+      "name": "tun_to_vhost_queue_status_simple_queue_0",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 0",
+      "duration": 10
+    },
+    {
+      "id": 49,
+      "name": "tun_to_vhost_queue_status_simple_queue_1",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 1",
+      "duration": 10
+    },
+    {
+      "id": 50,
+      "name": "tun_to_vhost_queue_status_simple_queue_2",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 2",
+      "duration": 10
+    },
+    {
+      "id": 51,
+      "name": "tun_to_vhost_queue_status_simple_queue_3",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 3",
+      "duration": 10
+    },
+    {
+      "id": 52,
+      "name": "tun_to_vhost_queue_status_simple_queue_4",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 4",
+      "duration": 10
+    },
+    {
+      "id": 53,
+      "name": "tun_to_vhost_queue_status_simple_queue_5",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 5",
+      "duration": 10
+    },
+    {
+      "id": 54,
+      "name": "tun_to_vhost_queue_status_simple_queue_6",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 6",
+      "duration": 10
+    },
+    {
+      "id": 55,
+      "name": "tun_to_vhost_queue_status_simple_queue_7",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 7",
+      "duration": 10
+    },
+    {
+      "id": 56,
+      "name": "tun_to_vhost_queue_status_simple",
+      "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246",
+      "duration": 10
+    }
+  ],
+  "summary": {
+    "total_cases": 56,
+    "tools": {
+      "kvm": 17,
+      "vhost": 18,
+      "tun": 21
+    },
+    "parameters": {}
+  }
+}

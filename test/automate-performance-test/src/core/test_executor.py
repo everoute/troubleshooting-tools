@@ -588,13 +588,17 @@ class TestExecutor:
             if config == "single_stream":
                 single_spec = throughput_spec.get('single_stream', {})
                 duration = single_spec.get('duration', 30)
-                target_bw_list = single_spec.get('target_bw', ['10G'])
-                target_bw = target_bw_list[0] if target_bw_list else '10G'
+                # Read target_bw if configured, otherwise None (unlimited)
+                target_bw_list = single_spec.get('target_bw', None)
+                target_bw = target_bw_list[0] if target_bw_list else None
             elif config == "multi_stream":
                 multi_spec = throughput_spec.get('multi_stream', {})
                 duration = multi_spec.get('duration', 30)
                 streams_list = multi_spec.get('streams', [2])
                 streams = streams_list[0] if streams_list else 2
+                # Read target_bw if configured, otherwise None (unlimited)
+                target_bw_list = multi_spec.get('target_bw', None)
+                target_bw = target_bw_list[0] if target_bw_list else None
 
         elif test_type == "latency":
             latency_spec = perf_specs.get('latency', {})
@@ -613,6 +617,9 @@ class TestExecutor:
                 # Read streams from global_config
                 streams_list = multi_spec.get('streams', [2])
                 streams = streams_list[0] if streams_list else 2
+                # Read target_bw for multi_stream, default to 1G per stream
+                target_bw_list = multi_spec.get('target_bw', ['1G'])
+                target_bw = target_bw_list[0] if target_bw_list else '1G'
 
         # NOW determine result path after we have streams - organized by test_type then config
         conn_type = self._get_connection_type(config, streams)
@@ -682,7 +689,7 @@ class TestExecutor:
         if config == "single_stream":
             # Get configuration from test_context
             duration = test_context.get('duration', 30)
-            target_bw = test_context.get('target_bw', '10G')
+            target_bw = test_context.get('target_bw', None)
 
             # Record test start time and run TCP throughput test
             start_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
@@ -693,7 +700,11 @@ class TestExecutor:
             timing_cmd = f"echo 'Test: throughput_single_tcp' > {timing_file} && echo 'Start: {start_time}' >> {timing_file}"
             self.ssh_manager.execute_command(client_host, timing_cmd)
 
-            cmd = f"iperf3 -c {server_ip} -B {client_ip} -p 5001 -t {duration} -b {target_bw} -l 65520 -J > {result_file} 2>&1"
+            # Build command with optional -b parameter
+            if target_bw:
+                cmd = f"iperf3 -c {server_ip} -B {client_ip} -p 5001 -t {duration} -b {target_bw} -l 65520 -J > {result_file} 2>&1"
+            else:
+                cmd = f"iperf3 -c {server_ip} -B {client_ip} -p 5001 -t {duration} -l 65520 -J > {result_file} 2>&1"
             stdout, stderr, status = self.ssh_manager.execute_command(client_host, cmd)
 
             # Record test end time
@@ -711,6 +722,7 @@ class TestExecutor:
             # Get configuration from test_context
             streams = test_context.get('streams', 2)  # Default 2 streams
             duration = test_context.get('duration', 30)
+            target_bw = test_context.get('target_bw', None)  # Read from config, None = unlimited
 
             base_port = 5001
             result['client_files'] = []
@@ -733,7 +745,11 @@ class TestExecutor:
                 timing_cmd = f"echo 'Test: throughput_multi_stream_process_{i+1}_port_{port}' > {timing_file} && echo 'Process_Start: {process_start}' >> {timing_file}"
                 self.ssh_manager.execute_command(client_host, timing_cmd)
 
-                client_cmd = f"iperf3 -c {server_ip} -B {client_ip} -p {port} -t {duration} -b 1G -J > {client_file} 2>&1 &"
+                # Build command with optional -b parameter
+                if target_bw:
+                    client_cmd = f"iperf3 -c {server_ip} -B {client_ip} -p {port} -t {duration} -b {target_bw} -J > {client_file} 2>&1 &"
+                else:
+                    client_cmd = f"iperf3 -c {server_ip} -B {client_ip} -p {port} -t {duration} -J > {client_file} 2>&1 &"
                 client_cmds.append(client_cmd)
                 result['client_files'].append(client_file)
                 result['timing_files'].append(timing_file)
@@ -804,6 +820,7 @@ class TestExecutor:
 
         # Get configuration from test_context
         duration = test_context.get('duration', 5)
+        target_bw = test_context.get('target_bw', '1G')  # Read from config
 
         # Determine stream count from test_context
         if config == "single_stream":
@@ -851,8 +868,8 @@ class TestExecutor:
             timing_cmd = f"echo 'Test: pps_{config}_process_{i+1}_port_{port}' > {timing_file} && echo 'Process_Start: {process_start}' >> {timing_file}"
             self.ssh_manager.execute_command(client_host, timing_cmd)
 
-            # Use small packets (64 bytes) for PPS testing
-            client_cmd = f"iperf3 -c {server_ip} -B {client_ip} -p {port} -t {duration} -b 1G -l 64 -J > {client_file} 2>&1 &"
+            # Use small packets (64 bytes) for PPS testing with configured target_bw
+            client_cmd = f"iperf3 -c {server_ip} -B {client_ip} -p {port} -t {duration} -b {target_bw} -l 64 -J > {client_file} 2>&1 &"
             client_cmds.append(client_cmd)
             result['client_files'].append(client_file)
             result['timing_files'].append(timing_file)

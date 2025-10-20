@@ -21,21 +21,21 @@ test_matrix:
       # ovs_upcall_latency_summary.py - 支持协议和方向
       - dir: ""
         script: "ovs_upcall_latency_summary.py"
-        template: "sudo python3 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --protocol {protocol}"
+        template: "sudo python2 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --protocol {protocol}"
         parameters:
           protocol: ["tcp", "udp", "icmp"]
 
       # ovs_userspace_megaflow.py - 支持协议和方向
       - dir: ""
         script: "ovs_userspace_megaflow.py"
-        template: "sudo python3 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --protocol {protocol}"
+        template: "sudo python2 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --protocol {protocol}"
         parameters:
           protocol: ["tcp", "udp", "icmp"]
 
       # ovs-kernel-module-drop-monitor.py - 支持协议和方向
       - dir: ""
         script: "ovs-kernel-module-drop-monitor.py"
-        template: "sudo python3 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --protocol {protocol}"
+        template: "sudo python2 {path} --src-ip {SRC_IP} --dst-ip {DST_IP} --protocol {protocol}"
         parameters:
           protocol: ["tcp", "udp", "icmp"]
 

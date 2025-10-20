@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "generation_time": "2025-10-20T10:06:28.485841",
+    "generation_time": "2025-10-20T11:29:53.124020",
     "total_test_cycles": 125,
     "environments": [
       "host",
@@ -122,7 +122,7 @@
         "case_id": 1,
         "tool_id": "system_network_performance",
         "program": "system_network_perfomance_metrics_rx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-mgt --phy-interface enp24s0f0np0 --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --direction rx --protocol tcp --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-mgt --phy-interface enp24s0f0np0 --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --direction rx --protocol tcp --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -139,7 +139,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-mgt --phy-interface enp24s0f0np0 --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --direction rx --protocol tcp --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-mgt --phy-interface enp24s0f0np0 --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --direction rx --protocol tcp --latency-us 200"
         },
         "performance_tests": [
           {
@@ -198,7 +198,7 @@
         "case_id": 2,
         "tool_id": "system_network_performance",
         "program": "system_network_perfomance_metrics_tx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-mgt --phy-interface enp24s0f0np0 --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --direction tx --protocol tcp --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-mgt --phy-interface enp24s0f0np0 --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --direction tx --protocol tcp --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -215,7 +215,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-mgt --phy-interface enp24s0f0np0 --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --direction tx --protocol tcp --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-mgt --phy-interface enp24s0f0np0 --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --direction tx --protocol tcp --latency-us 200"
         },
         "performance_tests": [
           {
@@ -274,7 +274,7 @@
         "case_id": 3,
         "tool_id": "system_network_performance",
         "program": "system_network_perfomance_metrics_rx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-mgt --phy-interface enp24s0f0np0 --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --direction rx --protocol udp --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-mgt --phy-interface enp24s0f0np0 --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --direction rx --protocol udp --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -291,7 +291,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-mgt --phy-interface enp24s0f0np0 --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --direction rx --protocol udp --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-mgt --phy-interface enp24s0f0np0 --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --direction rx --protocol udp --latency-us 200"
         },
         "performance_tests": [
           {
@@ -350,7 +350,7 @@
         "case_id": 4,
         "tool_id": "system_network_performance",
         "program": "system_network_perfomance_metrics_tx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-mgt --phy-interface enp24s0f0np0 --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --direction tx --protocol udp --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-mgt --phy-interface enp24s0f0np0 --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --direction tx --protocol udp --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -367,7 +367,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-mgt --phy-interface enp24s0f0np0 --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --direction tx --protocol udp --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-mgt --phy-interface enp24s0f0np0 --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --direction tx --protocol udp --latency-us 200"
         },
         "performance_tests": [
           {
@@ -426,7 +426,7 @@
         "case_id": 5,
         "tool_id": "system_network_performance",
         "program": "system_network_latency_details_rx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface enp24s0f0np0 --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --direction rx --protocol tcp --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface enp24s0f0np0 --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --direction rx --protocol tcp --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -443,7 +443,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface enp24s0f0np0 --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --direction rx --protocol tcp --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface enp24s0f0np0 --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --direction rx --protocol tcp --latency-us 200"
         },
         "performance_tests": [
           {
@@ -502,7 +502,7 @@
         "case_id": 6,
         "tool_id": "system_network_performance",
         "program": "system_network_latency_details_tx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface enp24s0f0np0 --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --direction tx --protocol tcp --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface enp24s0f0np0 --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --direction tx --protocol tcp --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -519,7 +519,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface enp24s0f0np0 --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --direction tx --protocol tcp --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface enp24s0f0np0 --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --direction tx --protocol tcp --latency-us 200"
         },
         "performance_tests": [
           {
@@ -578,7 +578,7 @@
         "case_id": 7,
         "tool_id": "system_network_performance",
         "program": "system_network_latency_details_rx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface enp24s0f0np0 --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --direction rx --protocol udp --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface enp24s0f0np0 --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --direction rx --protocol udp --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -595,7 +595,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface enp24s0f0np0 --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --direction rx --protocol udp --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface enp24s0f0np0 --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --direction rx --protocol udp --latency-us 200"
         },
         "performance_tests": [
           {
@@ -654,7 +654,7 @@
         "case_id": 8,
         "tool_id": "system_network_performance",
         "program": "system_network_latency_details_tx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface enp24s0f0np0 --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --direction tx --protocol udp --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface enp24s0f0np0 --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --direction tx --protocol udp --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -671,7 +671,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface enp24s0f0np0 --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --direction tx --protocol udp --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/system-network/system_network_latency_details.py --phy-interface enp24s0f0np0 --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --direction tx --protocol udp --latency-us 200"
         },
         "performance_tests": [
           {
@@ -730,7 +730,7 @@
         "case_id": 9,
         "tool_id": "system_network_performance",
         "program": "system_network_icmp_rtt_rx_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/performance/system-network/system_network_icmp_rtt.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --direction rx --phy-iface1 enp24s0f0np0 --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/system-network/system_network_icmp_rtt.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --direction rx --phy-iface1 enp24s0f0np0 --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -747,7 +747,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/system-network/system_network_icmp_rtt.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --direction rx --phy-iface1 enp24s0f0np0 --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/system-network/system_network_icmp_rtt.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --direction rx --phy-iface1 enp24s0f0np0 --latency-us 200"
         },
         "performance_tests": [
           {
@@ -806,7 +806,7 @@
         "case_id": 10,
         "tool_id": "system_network_performance",
         "program": "system_network_icmp_rtt_tx_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/performance/system-network/system_network_icmp_rtt.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --direction tx --phy-iface1 enp24s0f0np0 --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/system-network/system_network_icmp_rtt.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --direction tx --phy-iface1 enp24s0f0np0 --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -823,7 +823,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/system-network/system_network_icmp_rtt.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --direction tx --phy-iface1 enp24s0f0np0 --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/system-network/system_network_icmp_rtt.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --direction tx --phy-iface1 enp24s0f0np0 --latency-us 200"
         },
         "performance_tests": [
           {
@@ -882,7 +882,7 @@
         "case_id": 11,
         "tool_id": "vm_network_performance",
         "program": "vm_network_latency_summary_tx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp",
+        "command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -899,7 +899,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp"
         },
         "performance_tests": [
           {
@@ -958,7 +958,7 @@
         "case_id": 12,
         "tool_id": "vm_network_performance",
         "program": "vm_network_latency_summary_rx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp",
+        "command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -975,7 +975,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp"
         },
         "performance_tests": [
           {
@@ -1034,7 +1034,7 @@
         "case_id": 13,
         "tool_id": "vm_network_performance",
         "program": "vm_network_latency_summary_tx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp",
+        "command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -1051,7 +1051,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp"
         },
         "performance_tests": [
           {
@@ -1110,7 +1110,7 @@
         "case_id": 14,
         "tool_id": "vm_network_performance",
         "program": "vm_network_latency_summary_rx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp",
+        "command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -1127,7 +1127,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp"
         },
         "performance_tests": [
           {
@@ -1186,7 +1186,7 @@
         "case_id": 15,
         "tool_id": "vm_network_performance",
         "program": "vm_network_latency_summary_tx_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp",
+        "command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -1203,7 +1203,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp"
         },
         "performance_tests": [
           {
@@ -1262,7 +1262,7 @@
         "case_id": 16,
         "tool_id": "vm_network_performance",
         "program": "vm_network_latency_summary_rx_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp",
+        "command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -1279,7 +1279,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp"
         },
         "performance_tests": [
           {
@@ -1338,7 +1338,7 @@
         "case_id": 17,
         "tool_id": "vm_network_performance",
         "program": "vm_network_latency_details_tx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -1355,7 +1355,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp --latency-us 200"
         },
         "performance_tests": [
           {
@@ -1414,7 +1414,7 @@
         "case_id": 18,
         "tool_id": "vm_network_performance",
         "program": "vm_network_latency_details_rx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -1431,7 +1431,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp --latency-us 200"
         },
         "performance_tests": [
           {
@@ -1490,7 +1490,7 @@
         "case_id": 19,
         "tool_id": "vm_network_performance",
         "program": "vm_network_latency_details_tx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -1507,7 +1507,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp --latency-us 200"
         },
         "performance_tests": [
           {
@@ -1566,7 +1566,7 @@
         "case_id": 20,
         "tool_id": "vm_network_performance",
         "program": "vm_network_latency_details_rx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -1583,7 +1583,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp --latency-us 200"
         },
         "performance_tests": [
           {
@@ -1642,7 +1642,7 @@
         "case_id": 21,
         "tool_id": "vm_network_performance",
         "program": "vm_network_latency_details_tx_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -1659,7 +1659,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp --latency-us 200"
         },
         "performance_tests": [
           {
@@ -1718,7 +1718,7 @@
         "case_id": 22,
         "tool_id": "vm_network_performance",
         "program": "vm_network_latency_details_rx_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -1735,7 +1735,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_latency_details.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp --latency-us 200"
         },
         "performance_tests": [
           {
@@ -1794,7 +1794,7 @@
         "case_id": 23,
         "tool_id": "vm_network_performance",
         "program": "vm_network_performance_metrics_tx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -1811,7 +1811,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp --latency-us 200"
         },
         "performance_tests": [
           {
@@ -1870,7 +1870,7 @@
         "case_id": 24,
         "tool_id": "vm_network_performance",
         "program": "vm_network_performance_metrics_rx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -1887,7 +1887,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp --latency-us 200"
         },
         "performance_tests": [
           {
@@ -1946,7 +1946,7 @@
         "case_id": 25,
         "tool_id": "vm_network_performance",
         "program": "vm_network_performance_metrics_tx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -1963,7 +1963,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp --latency-us 200"
         },
         "performance_tests": [
           {
@@ -2022,7 +2022,7 @@
         "case_id": 26,
         "tool_id": "vm_network_performance",
         "program": "vm_network_performance_metrics_rx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -2039,7 +2039,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp --latency-us 200"
         },
         "performance_tests": [
           {
@@ -2098,7 +2098,7 @@
         "case_id": 27,
         "tool_id": "vm_network_performance",
         "program": "vm_network_performance_metrics_tx_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -2115,7 +2115,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction tx --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp --latency-us 200"
         },
         "performance_tests": [
           {
@@ -2174,7 +2174,7 @@
         "case_id": 28,
         "tool_id": "vm_network_performance",
         "program": "vm_network_performance_metrics_rx_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp --latency-us 100",
+        "command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp --latency-us 200",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -2191,7 +2191,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp --latency-us 100"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py --vm-interface vnet246 --phy-interface enp24s0f0np0 --direction rx --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp --latency-us 200"
         },
         "performance_tests": [
           {
@@ -2250,7 +2250,7 @@
         "case_id": 1,
         "tool_id": "linux_network_stack",
         "program": "eth_drop_rx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol tcp",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol tcp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -2267,7 +2267,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol tcp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol tcp"
         },
         "performance_tests": [
           {
@@ -2326,7 +2326,7 @@
         "case_id": 2,
         "tool_id": "linux_network_stack",
         "program": "eth_drop_tx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol tcp",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol tcp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -2343,7 +2343,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol tcp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol tcp"
         },
         "performance_tests": [
           {
@@ -2402,7 +2402,7 @@
         "case_id": 3,
         "tool_id": "linux_network_stack",
         "program": "eth_drop_rx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol udp",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol udp",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -2419,7 +2419,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol udp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol udp"
         },
         "performance_tests": [
           {
@@ -2478,7 +2478,7 @@
         "case_id": 4,
         "tool_id": "linux_network_stack",
         "program": "eth_drop_tx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol udp",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol udp",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -2495,7 +2495,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol udp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol udp"
         },
         "performance_tests": [
           {
@@ -2554,7 +2554,7 @@
         "case_id": 5,
         "tool_id": "linux_network_stack",
         "program": "eth_drop_rx_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol icmp",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol icmp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -2571,7 +2571,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol icmp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol icmp"
         },
         "performance_tests": [
           {
@@ -2630,7 +2630,7 @@
         "case_id": 6,
         "tool_id": "linux_network_stack",
         "program": "eth_drop_tx_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol icmp",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol icmp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -2647,7 +2647,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol icmp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol icmp"
         },
         "performance_tests": [
           {
@@ -2706,7 +2706,7 @@
         "case_id": 7,
         "tool_id": "linux_network_stack",
         "program": "kernel_drop_stack_stats_summary_all_rx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol tcp",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol tcp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -2723,7 +2723,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol tcp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol tcp"
         },
         "performance_tests": [
           {
@@ -2782,7 +2782,7 @@
         "case_id": 8,
         "tool_id": "linux_network_stack",
         "program": "kernel_drop_stack_stats_summary_all_tx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol tcp",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol tcp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -2799,7 +2799,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol tcp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol tcp"
         },
         "performance_tests": [
           {
@@ -2858,7 +2858,7 @@
         "case_id": 9,
         "tool_id": "linux_network_stack",
         "program": "kernel_drop_stack_stats_summary_all_rx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol udp",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol udp",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -2875,7 +2875,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol udp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol udp"
         },
         "performance_tests": [
           {
@@ -2934,7 +2934,7 @@
         "case_id": 10,
         "tool_id": "linux_network_stack",
         "program": "kernel_drop_stack_stats_summary_all_tx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol udp",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol udp",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -2951,7 +2951,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol udp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol udp"
         },
         "performance_tests": [
           {
@@ -3010,7 +3010,7 @@
         "case_id": 11,
         "tool_id": "linux_network_stack",
         "program": "kernel_drop_stack_stats_summary_all_rx_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol icmp",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol icmp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -3027,7 +3027,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol icmp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --l4-protocol icmp"
         },
         "performance_tests": [
           {
@@ -3086,7 +3086,7 @@
         "case_id": 12,
         "tool_id": "linux_network_stack",
         "program": "kernel_drop_stack_stats_summary_all_tx_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol icmp",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol icmp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -3103,7 +3103,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol icmp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --l4-protocol icmp"
         },
         "performance_tests": [
           {
@@ -3162,7 +3162,7 @@
         "case_id": 13,
         "tool_id": "linux_network_stack",
         "program": "qdisc_drop_trace",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/qdisc_drop_trace.py",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/qdisc_drop_trace.py",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -3179,7 +3179,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/packet-drop/qdisc_drop_trace.py"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/packet-drop/qdisc_drop_trace.py"
         },
         "performance_tests": [
           {
@@ -3238,7 +3238,7 @@
         "case_id": 14,
         "tool_id": "linux_network_stack",
         "program": "trace_conntrack_rx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --protocol tcp",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --protocol tcp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -3255,7 +3255,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --protocol tcp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --protocol tcp"
         },
         "performance_tests": [
           {
@@ -3314,7 +3314,7 @@
         "case_id": 15,
         "tool_id": "linux_network_stack",
         "program": "trace_conntrack_tx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --protocol tcp",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --protocol tcp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -3331,7 +3331,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --protocol tcp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --protocol tcp"
         },
         "performance_tests": [
           {
@@ -3390,7 +3390,7 @@
         "case_id": 16,
         "tool_id": "linux_network_stack",
         "program": "trace_conntrack_rx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --protocol udp",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --protocol udp",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -3407,7 +3407,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --protocol udp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --protocol udp"
         },
         "performance_tests": [
           {
@@ -3466,7 +3466,7 @@
         "case_id": 17,
         "tool_id": "linux_network_stack",
         "program": "trace_conntrack_tx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --protocol udp",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --protocol udp",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -3483,7 +3483,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --protocol udp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --protocol udp"
         },
         "performance_tests": [
           {
@@ -3542,7 +3542,7 @@
         "case_id": 18,
         "tool_id": "linux_network_stack",
         "program": "trace_conntrack_rx_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --protocol icmp",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --protocol icmp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -3559,7 +3559,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --protocol icmp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --protocol icmp"
         },
         "performance_tests": [
           {
@@ -3618,7 +3618,7 @@
         "case_id": 19,
         "tool_id": "linux_network_stack",
         "program": "trace_conntrack_tx_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --protocol icmp",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --protocol icmp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -3635,7 +3635,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --protocol icmp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/trace_conntrack.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --protocol icmp"
         },
         "performance_tests": [
           {
@@ -3694,7 +3694,7 @@
         "case_id": 20,
         "tool_id": "linux_network_stack",
         "program": "trace_ip_defrag_rx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/trace_ip_defrag.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --protocol udp",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/trace_ip_defrag.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --protocol udp",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -3711,7 +3711,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/trace_ip_defrag.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --protocol udp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/trace_ip_defrag.py --src-ip 192.168.70.32 --dst-ip 192.168.70.31 --protocol udp"
         },
         "performance_tests": [
           {
@@ -3770,7 +3770,7 @@
         "case_id": 21,
         "tool_id": "linux_network_stack",
         "program": "trace_ip_defrag_tx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/linux-network-stack/trace_ip_defrag.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --protocol udp",
+        "command": "sudo python2 ebpf-tools/linux-network-stack/trace_ip_defrag.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --protocol udp",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -3787,7 +3787,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/linux-network-stack/trace_ip_defrag.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --protocol udp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/linux-network-stack/trace_ip_defrag.py --src-ip 192.168.70.31 --dst-ip 192.168.70.32 --protocol udp"
         },
         "performance_tests": [
           {
@@ -3846,7 +3846,7 @@
         "case_id": 1,
         "tool_id": "ovs_monitoring",
         "program": "ovs_upcall_latency_summary_rx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp",
+        "command": "sudo python2 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -3863,7 +3863,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp"
         },
         "performance_tests": [
           {
@@ -3922,7 +3922,7 @@
         "case_id": 2,
         "tool_id": "ovs_monitoring",
         "program": "ovs_upcall_latency_summary_tx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp",
+        "command": "sudo python2 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -3939,7 +3939,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp"
         },
         "performance_tests": [
           {
@@ -3998,7 +3998,7 @@
         "case_id": 3,
         "tool_id": "ovs_monitoring",
         "program": "ovs_upcall_latency_summary_rx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp",
+        "command": "sudo python2 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -4015,7 +4015,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp"
         },
         "performance_tests": [
           {
@@ -4074,7 +4074,7 @@
         "case_id": 4,
         "tool_id": "ovs_monitoring",
         "program": "ovs_upcall_latency_summary_tx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp",
+        "command": "sudo python2 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -4091,7 +4091,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp"
         },
         "performance_tests": [
           {
@@ -4150,7 +4150,7 @@
         "case_id": 5,
         "tool_id": "ovs_monitoring",
         "program": "ovs_upcall_latency_summary_rx_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp",
+        "command": "sudo python2 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -4167,7 +4167,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp"
         },
         "performance_tests": [
           {
@@ -4226,7 +4226,7 @@
         "case_id": 6,
         "tool_id": "ovs_monitoring",
         "program": "ovs_upcall_latency_summary_tx_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp",
+        "command": "sudo python2 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -4243,7 +4243,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/ovs/ovs_upcall_latency_summary.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp"
         },
         "performance_tests": [
           {
@@ -4302,7 +4302,7 @@
         "case_id": 7,
         "tool_id": "ovs_monitoring",
         "program": "ovs_userspace_megaflow_rx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp",
+        "command": "sudo python2 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -4319,7 +4319,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp"
         },
         "performance_tests": [
           {
@@ -4378,7 +4378,7 @@
         "case_id": 8,
         "tool_id": "ovs_monitoring",
         "program": "ovs_userspace_megaflow_tx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp",
+        "command": "sudo python2 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -4395,7 +4395,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp"
         },
         "performance_tests": [
           {
@@ -4454,7 +4454,7 @@
         "case_id": 9,
         "tool_id": "ovs_monitoring",
         "program": "ovs_userspace_megaflow_rx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp",
+        "command": "sudo python2 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -4471,7 +4471,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp"
         },
         "performance_tests": [
           {
@@ -4530,7 +4530,7 @@
         "case_id": 10,
         "tool_id": "ovs_monitoring",
         "program": "ovs_userspace_megaflow_tx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp",
+        "command": "sudo python2 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -4547,7 +4547,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp"
         },
         "performance_tests": [
           {
@@ -4606,7 +4606,7 @@
         "case_id": 11,
         "tool_id": "ovs_monitoring",
         "program": "ovs_userspace_megaflow_rx_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp",
+        "command": "sudo python2 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -4623,7 +4623,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp"
         },
         "performance_tests": [
           {
@@ -4682,7 +4682,7 @@
         "case_id": 12,
         "tool_id": "ovs_monitoring",
         "program": "ovs_userspace_megaflow_tx_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp",
+        "command": "sudo python2 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -4699,7 +4699,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/ovs/ovs_userspace_megaflow.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp"
         },
         "performance_tests": [
           {
@@ -4758,7 +4758,7 @@
         "case_id": 13,
         "tool_id": "ovs_monitoring",
         "program": "ovs_kernel_module_drop_monitor_rx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp",
+        "command": "sudo python2 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -4775,7 +4775,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol tcp"
         },
         "performance_tests": [
           {
@@ -4834,7 +4834,7 @@
         "case_id": 14,
         "tool_id": "ovs_monitoring",
         "program": "ovs_kernel_module_drop_monitor_tx_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp",
+        "command": "sudo python2 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -4851,7 +4851,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol tcp"
         },
         "performance_tests": [
           {
@@ -4910,7 +4910,7 @@
         "case_id": 15,
         "tool_id": "ovs_monitoring",
         "program": "ovs_kernel_module_drop_monitor_rx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp",
+        "command": "sudo python2 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -4927,7 +4927,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol udp"
         },
         "performance_tests": [
           {
@@ -4986,7 +4986,7 @@
         "case_id": 16,
         "tool_id": "ovs_monitoring",
         "program": "ovs_kernel_module_drop_monitor_tx_protocol_udp",
-        "command": "sudo python3 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp",
+        "command": "sudo python2 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -5003,7 +5003,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol udp"
         },
         "performance_tests": [
           {
@@ -5062,7 +5062,7 @@
         "case_id": 17,
         "tool_id": "ovs_monitoring",
         "program": "ovs_kernel_module_drop_monitor_rx_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp",
+        "command": "sudo python2 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -5079,7 +5079,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.83 --dst-ip 192.168.77.253 --protocol icmp"
         },
         "performance_tests": [
           {
@@ -5138,7 +5138,7 @@
         "case_id": 18,
         "tool_id": "ovs_monitoring",
         "program": "ovs_kernel_module_drop_monitor_tx_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp",
+        "command": "sudo python2 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -5155,7 +5155,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py --src-ip 192.168.77.253 --dst-ip 192.168.77.83 --protocol icmp"
         },
         "performance_tests": [
           {
@@ -5214,7 +5214,7 @@
         "case_id": 1,
         "tool_id": "kvm_virt_network",
         "program": "kvm_irqfd_stats_summary_vhost_pid_45220_category_data_subcategory_rx",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45220 --category data --subcategory rx",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45220 --category data --subcategory rx",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -5231,7 +5231,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45220 --category data --subcategory rx"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45220 --category data --subcategory rx"
         },
         "performance_tests": [
           {
@@ -5290,7 +5290,7 @@
         "case_id": 2,
         "tool_id": "kvm_virt_network",
         "program": "kvm_irqfd_stats_summary_vhost_pid_45220_category_data_subcategory_tx",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45220 --category data --subcategory tx",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45220 --category data --subcategory tx",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -5307,7 +5307,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45220 --category data --subcategory tx"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45220 --category data --subcategory tx"
         },
         "performance_tests": [
           {
@@ -5366,7 +5366,7 @@
         "case_id": 3,
         "tool_id": "kvm_virt_network",
         "program": "kvm_irqfd_stats_summary_vhost_pid_45222_category_data_subcategory_rx",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45222 --category data --subcategory rx",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45222 --category data --subcategory rx",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -5383,7 +5383,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45222 --category data --subcategory rx"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45222 --category data --subcategory rx"
         },
         "performance_tests": [
           {
@@ -5442,7 +5442,7 @@
         "case_id": 4,
         "tool_id": "kvm_virt_network",
         "program": "kvm_irqfd_stats_summary_vhost_pid_45222_category_data_subcategory_tx",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45222 --category data --subcategory tx",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45222 --category data --subcategory tx",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -5459,7 +5459,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45222 --category data --subcategory tx"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45222 --category data --subcategory tx"
         },
         "performance_tests": [
           {
@@ -5518,7 +5518,7 @@
         "case_id": 5,
         "tool_id": "kvm_virt_network",
         "program": "kvm_irqfd_stats_summary_vhost_pid_45223_category_data_subcategory_rx",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45223 --category data --subcategory rx",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45223 --category data --subcategory rx",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -5535,7 +5535,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45223 --category data --subcategory rx"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45223 --category data --subcategory rx"
         },
         "performance_tests": [
           {
@@ -5594,7 +5594,7 @@
         "case_id": 6,
         "tool_id": "kvm_virt_network",
         "program": "kvm_irqfd_stats_summary_vhost_pid_45223_category_data_subcategory_tx",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45223 --category data --subcategory tx",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45223 --category data --subcategory tx",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -5611,7 +5611,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45223 --category data --subcategory tx"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45223 --category data --subcategory tx"
         },
         "performance_tests": [
           {
@@ -5670,7 +5670,7 @@
         "case_id": 7,
         "tool_id": "kvm_virt_network",
         "program": "kvm_irqfd_stats_summary_vhost_pid_45224_category_data_subcategory_rx",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45224 --category data --subcategory rx",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45224 --category data --subcategory rx",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -5687,7 +5687,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45224 --category data --subcategory rx"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45224 --category data --subcategory rx"
         },
         "performance_tests": [
           {
@@ -5746,7 +5746,7 @@
         "case_id": 8,
         "tool_id": "kvm_virt_network",
         "program": "kvm_irqfd_stats_summary_vhost_pid_45224_category_data_subcategory_tx",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45224 --category data --subcategory tx",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45224 --category data --subcategory tx",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -5763,7 +5763,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45224 --category data --subcategory tx"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45224 --category data --subcategory tx"
         },
         "performance_tests": [
           {
@@ -5822,7 +5822,7 @@
         "case_id": 9,
         "tool_id": "kvm_virt_network",
         "program": "kvm_irqfd_stats_summary_vhost_pid_45225_category_data_subcategory_rx",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45225 --category data --subcategory rx",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45225 --category data --subcategory rx",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -5839,7 +5839,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45225 --category data --subcategory rx"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45225 --category data --subcategory rx"
         },
         "performance_tests": [
           {
@@ -5898,7 +5898,7 @@
         "case_id": 10,
         "tool_id": "kvm_virt_network",
         "program": "kvm_irqfd_stats_summary_vhost_pid_45225_category_data_subcategory_tx",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45225 --category data --subcategory tx",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45225 --category data --subcategory tx",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -5915,7 +5915,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45225 --category data --subcategory tx"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45225 --category data --subcategory tx"
         },
         "performance_tests": [
           {
@@ -5974,7 +5974,7 @@
         "case_id": 11,
         "tool_id": "kvm_virt_network",
         "program": "kvm_irqfd_stats_summary_vhost_pid_45226_category_data_subcategory_rx",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45226 --category data --subcategory rx",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45226 --category data --subcategory rx",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -5991,7 +5991,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45226 --category data --subcategory rx"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45226 --category data --subcategory rx"
         },
         "performance_tests": [
           {
@@ -6050,7 +6050,7 @@
         "case_id": 12,
         "tool_id": "kvm_virt_network",
         "program": "kvm_irqfd_stats_summary_vhost_pid_45226_category_data_subcategory_tx",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45226 --category data --subcategory tx",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45226 --category data --subcategory tx",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -6067,7 +6067,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45226 --category data --subcategory tx"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45226 --category data --subcategory tx"
         },
         "performance_tests": [
           {
@@ -6126,7 +6126,7 @@
         "case_id": 13,
         "tool_id": "kvm_virt_network",
         "program": "kvm_irqfd_stats_summary_vhost_pid_45227_category_data_subcategory_rx",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45227 --category data --subcategory rx",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45227 --category data --subcategory rx",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -6143,7 +6143,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45227 --category data --subcategory rx"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45227 --category data --subcategory rx"
         },
         "performance_tests": [
           {
@@ -6202,7 +6202,7 @@
         "case_id": 14,
         "tool_id": "kvm_virt_network",
         "program": "kvm_irqfd_stats_summary_vhost_pid_45227_category_data_subcategory_tx",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45227 --category data --subcategory tx",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45227 --category data --subcategory tx",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -6219,7 +6219,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45227 --category data --subcategory tx"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45227 --category data --subcategory tx"
         },
         "performance_tests": [
           {
@@ -6278,7 +6278,7 @@
         "case_id": 15,
         "tool_id": "kvm_virt_network",
         "program": "kvm_irqfd_stats_summary_vhost_pid_45228_category_data_subcategory_rx",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45228 --category data --subcategory rx",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45228 --category data --subcategory rx",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -6295,7 +6295,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45228 --category data --subcategory rx"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45228 --category data --subcategory rx"
         },
         "performance_tests": [
           {
@@ -6354,7 +6354,7 @@
         "case_id": 16,
         "tool_id": "kvm_virt_network",
         "program": "kvm_irqfd_stats_summary_vhost_pid_45228_category_data_subcategory_tx",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45228 --category data --subcategory tx",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45228 --category data --subcategory tx",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -6371,7 +6371,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45228 --category data --subcategory tx"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --vhost-pid 45228 --category data --subcategory tx"
         },
         "performance_tests": [
           {
@@ -6430,7 +6430,7 @@
         "case_id": 17,
         "tool_id": "kvm_virt_network",
         "program": "kvm_irqfd_stats_summary",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --category control",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --category control",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -6447,7 +6447,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --category control"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py 45194 --interval 5 --category control"
         },
         "performance_tests": [
           {
@@ -6506,7 +6506,7 @@
         "case_id": 18,
         "tool_id": "kvm_virt_network",
         "program": "vhost_queue_correlation_details_queue_0",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 0 --verbose",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 0 --verbose",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -6523,7 +6523,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 0 --verbose"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 0 --verbose"
         },
         "performance_tests": [
           {
@@ -6582,7 +6582,7 @@
         "case_id": 19,
         "tool_id": "kvm_virt_network",
         "program": "vhost_queue_correlation_details_queue_1",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 1 --verbose",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 1 --verbose",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -6599,7 +6599,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 1 --verbose"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 1 --verbose"
         },
         "performance_tests": [
           {
@@ -6658,7 +6658,7 @@
         "case_id": 20,
         "tool_id": "kvm_virt_network",
         "program": "vhost_queue_correlation_details_queue_2",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 2 --verbose",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 2 --verbose",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -6675,7 +6675,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 2 --verbose"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 2 --verbose"
         },
         "performance_tests": [
           {
@@ -6734,7 +6734,7 @@
         "case_id": 21,
         "tool_id": "kvm_virt_network",
         "program": "vhost_queue_correlation_details_queue_3",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 3 --verbose",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 3 --verbose",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -6751,7 +6751,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 3 --verbose"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 3 --verbose"
         },
         "performance_tests": [
           {
@@ -6810,7 +6810,7 @@
         "case_id": 22,
         "tool_id": "kvm_virt_network",
         "program": "vhost_queue_correlation_details_queue_4",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 4 --verbose",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 4 --verbose",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -6827,7 +6827,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 4 --verbose"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 4 --verbose"
         },
         "performance_tests": [
           {
@@ -6886,7 +6886,7 @@
         "case_id": 23,
         "tool_id": "kvm_virt_network",
         "program": "vhost_queue_correlation_details_queue_5",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 5 --verbose",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 5 --verbose",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -6903,7 +6903,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 5 --verbose"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 5 --verbose"
         },
         "performance_tests": [
           {
@@ -6962,7 +6962,7 @@
         "case_id": 24,
         "tool_id": "kvm_virt_network",
         "program": "vhost_queue_correlation_details_queue_6",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 6 --verbose",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 6 --verbose",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -6979,7 +6979,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 6 --verbose"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 6 --verbose"
         },
         "performance_tests": [
           {
@@ -7038,7 +7038,7 @@
         "case_id": 25,
         "tool_id": "kvm_virt_network",
         "program": "vhost_queue_correlation_details_queue_7",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 7 --verbose",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 7 --verbose",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -7055,7 +7055,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 7 --verbose"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --queue 7 --verbose"
         },
         "performance_tests": [
           {
@@ -7114,7 +7114,7 @@
         "case_id": 26,
         "tool_id": "kvm_virt_network",
         "program": "vhost_queue_correlation_details",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --verbose",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --verbose",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -7131,7 +7131,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --verbose"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py --device vnet246 --verbose"
         },
         "performance_tests": [
           {
@@ -7190,7 +7190,7 @@
         "case_id": 27,
         "tool_id": "kvm_virt_network",
         "program": "vhost_queue_correlation_simple_queue_0",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 0",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 0",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -7207,7 +7207,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 0"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 0"
         },
         "performance_tests": [
           {
@@ -7266,7 +7266,7 @@
         "case_id": 28,
         "tool_id": "kvm_virt_network",
         "program": "vhost_queue_correlation_simple_queue_1",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 1",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 1",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -7283,7 +7283,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 1"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 1"
         },
         "performance_tests": [
           {
@@ -7342,7 +7342,7 @@
         "case_id": 29,
         "tool_id": "kvm_virt_network",
         "program": "vhost_queue_correlation_simple_queue_2",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 2",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 2",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -7359,7 +7359,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 2"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 2"
         },
         "performance_tests": [
           {
@@ -7418,7 +7418,7 @@
         "case_id": 30,
         "tool_id": "kvm_virt_network",
         "program": "vhost_queue_correlation_simple_queue_3",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 3",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 3",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -7435,7 +7435,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 3"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 3"
         },
         "performance_tests": [
           {
@@ -7494,7 +7494,7 @@
         "case_id": 31,
         "tool_id": "kvm_virt_network",
         "program": "vhost_queue_correlation_simple_queue_4",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 4",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 4",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -7511,7 +7511,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 4"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 4"
         },
         "performance_tests": [
           {
@@ -7570,7 +7570,7 @@
         "case_id": 32,
         "tool_id": "kvm_virt_network",
         "program": "vhost_queue_correlation_simple_queue_5",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 5",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 5",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -7587,7 +7587,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 5"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 5"
         },
         "performance_tests": [
           {
@@ -7646,7 +7646,7 @@
         "case_id": 33,
         "tool_id": "kvm_virt_network",
         "program": "vhost_queue_correlation_simple_queue_6",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 6",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 6",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -7663,7 +7663,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 6"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 6"
         },
         "performance_tests": [
           {
@@ -7722,7 +7722,7 @@
         "case_id": 34,
         "tool_id": "kvm_virt_network",
         "program": "vhost_queue_correlation_simple_queue_7",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 7",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 7",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -7739,7 +7739,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 7"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246 --queue 7"
         },
         "performance_tests": [
           {
@@ -7798,7 +7798,7 @@
         "case_id": 35,
         "tool_id": "kvm_virt_network",
         "program": "vhost_queue_correlation_simple",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -7815,7 +7815,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_simple.py --device vnet246"
         },
         "performance_tests": [
           {
@@ -7874,7 +7874,7 @@
         "case_id": 36,
         "tool_id": "kvm_virt_network",
         "program": "tun_ring_monitor_protocol_tcp",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_ring_monitor.py --device vnet246 --protocol tcp --all",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_ring_monitor.py --device vnet246 --protocol tcp --all",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -7891,7 +7891,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_ring_monitor.py --device vnet246 --protocol tcp --all"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_ring_monitor.py --device vnet246 --protocol tcp --all"
         },
         "performance_tests": [
           {
@@ -7950,7 +7950,7 @@
         "case_id": 37,
         "tool_id": "kvm_virt_network",
         "program": "tun_ring_monitor_protocol_udp",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_ring_monitor.py --device vnet246 --protocol udp --all",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_ring_monitor.py --device vnet246 --protocol udp --all",
         "duration": 10,
         "test_params": {
           "protocol": "udp",
@@ -7967,7 +7967,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_ring_monitor.py --device vnet246 --protocol udp --all"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_ring_monitor.py --device vnet246 --protocol udp --all"
         },
         "performance_tests": [
           {
@@ -8026,7 +8026,7 @@
         "case_id": 38,
         "tool_id": "kvm_virt_network",
         "program": "tun_ring_monitor_protocol_icmp",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_ring_monitor.py --device vnet246 --protocol icmp --all",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_ring_monitor.py --device vnet246 --protocol icmp --all",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -8043,7 +8043,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_ring_monitor.py --device vnet246 --protocol icmp --all"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_ring_monitor.py --device vnet246 --protocol icmp --all"
         },
         "performance_tests": [
           {
@@ -8102,7 +8102,7 @@
         "case_id": 39,
         "tool_id": "kvm_virt_network",
         "program": "tun_to_vhost_queue_stats_details_queue_0",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 0",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 0",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -8119,7 +8119,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 0"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 0"
         },
         "performance_tests": [
           {
@@ -8178,7 +8178,7 @@
         "case_id": 40,
         "tool_id": "kvm_virt_network",
         "program": "tun_to_vhost_queue_stats_details_queue_1",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 1",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 1",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -8195,7 +8195,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 1"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 1"
         },
         "performance_tests": [
           {
@@ -8254,7 +8254,7 @@
         "case_id": 41,
         "tool_id": "kvm_virt_network",
         "program": "tun_to_vhost_queue_stats_details_queue_2",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 2",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 2",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -8271,7 +8271,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 2"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 2"
         },
         "performance_tests": [
           {
@@ -8330,7 +8330,7 @@
         "case_id": 42,
         "tool_id": "kvm_virt_network",
         "program": "tun_to_vhost_queue_stats_details_queue_3",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 3",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 3",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -8347,7 +8347,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 3"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 3"
         },
         "performance_tests": [
           {
@@ -8406,7 +8406,7 @@
         "case_id": 43,
         "tool_id": "kvm_virt_network",
         "program": "tun_to_vhost_queue_stats_details_queue_4",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 4",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 4",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -8423,7 +8423,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 4"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 4"
         },
         "performance_tests": [
           {
@@ -8482,7 +8482,7 @@
         "case_id": 44,
         "tool_id": "kvm_virt_network",
         "program": "tun_to_vhost_queue_stats_details_queue_5",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 5",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 5",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -8499,7 +8499,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 5"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 5"
         },
         "performance_tests": [
           {
@@ -8558,7 +8558,7 @@
         "case_id": 45,
         "tool_id": "kvm_virt_network",
         "program": "tun_to_vhost_queue_stats_details_queue_6",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 6",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 6",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -8575,7 +8575,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 6"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 6"
         },
         "performance_tests": [
           {
@@ -8634,7 +8634,7 @@
         "case_id": 46,
         "tool_id": "kvm_virt_network",
         "program": "tun_to_vhost_queue_stats_details_queue_7",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 7",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 7",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -8651,7 +8651,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 7"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246 --queue 7"
         },
         "performance_tests": [
           {
@@ -8710,7 +8710,7 @@
         "case_id": 47,
         "tool_id": "kvm_virt_network",
         "program": "tun_to_vhost_queue_stats_details",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -8727,7 +8727,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py --device vnet246"
         },
         "performance_tests": [
           {
@@ -8786,7 +8786,7 @@
         "case_id": 48,
         "tool_id": "kvm_virt_network",
         "program": "tun_to_vhost_queue_status_simple_queue_0",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 0",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 0",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -8803,7 +8803,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 0"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 0"
         },
         "performance_tests": [
           {
@@ -8862,7 +8862,7 @@
         "case_id": 49,
         "tool_id": "kvm_virt_network",
         "program": "tun_to_vhost_queue_status_simple_queue_1",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 1",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 1",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -8879,7 +8879,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 1"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 1"
         },
         "performance_tests": [
           {
@@ -8938,7 +8938,7 @@
         "case_id": 50,
         "tool_id": "kvm_virt_network",
         "program": "tun_to_vhost_queue_status_simple_queue_2",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 2",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 2",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -8955,7 +8955,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 2"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 2"
         },
         "performance_tests": [
           {
@@ -9014,7 +9014,7 @@
         "case_id": 51,
         "tool_id": "kvm_virt_network",
         "program": "tun_to_vhost_queue_status_simple_queue_3",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 3",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 3",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -9031,7 +9031,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 3"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 3"
         },
         "performance_tests": [
           {
@@ -9090,7 +9090,7 @@
         "case_id": 52,
         "tool_id": "kvm_virt_network",
         "program": "tun_to_vhost_queue_status_simple_queue_4",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 4",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 4",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -9107,7 +9107,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 4"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 4"
         },
         "performance_tests": [
           {
@@ -9166,7 +9166,7 @@
         "case_id": 53,
         "tool_id": "kvm_virt_network",
         "program": "tun_to_vhost_queue_status_simple_queue_5",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 5",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 5",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -9183,7 +9183,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 5"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 5"
         },
         "performance_tests": [
           {
@@ -9242,7 +9242,7 @@
         "case_id": 54,
         "tool_id": "kvm_virt_network",
         "program": "tun_to_vhost_queue_status_simple_queue_6",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 6",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 6",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -9259,7 +9259,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 6"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 6"
         },
         "performance_tests": [
           {
@@ -9318,7 +9318,7 @@
         "case_id": 55,
         "tool_id": "kvm_virt_network",
         "program": "tun_to_vhost_queue_status_simple_queue_7",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 7",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 7",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -9335,7 +9335,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 7"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246 --queue 7"
         },
         "performance_tests": [
           {
@@ -9394,7 +9394,7 @@
         "case_id": 56,
         "tool_id": "kvm_virt_network",
         "program": "tun_to_vhost_queue_status_simple",
-        "command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246",
+        "command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246",
         "duration": 10,
         "test_params": {
           "protocol": "tcp",
@@ -9411,7 +9411,7 @@
             "start_custom_monitoring"
           ],
           "custom_monitoring": true,
-          "ebpf_startup_command": "sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246"
+          "ebpf_startup_command": "sudo python2 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple.py --device vnet246"
         },
         "performance_tests": [
           {
@@ -9493,9 +9493,6 @@
           "client_cmd_tcp": "iperf3 -c {server_ip} -B {client_ip} -p {port} -t {duration} -b {target_bw} -l 65520 -J > {result_file}",
           "client_cmd_udp": "iperf3 -c {server_ip} -B {client_ip} -p {port} -t {duration} -b {target_bw} -u -J > {result_file}",
           "duration": 15,
-          "target_bw": [
-            "1G"
-          ],
           "ports": [
             5001
           ]
@@ -9525,7 +9522,7 @@
         "single_stream": {
           "duration": 15,
           "target_bw": [
-            "1G"
+            "5G"
           ],
           "ports": [
             5001
@@ -9534,6 +9531,9 @@
         "multi_stream": {
           "streams": [
             4
+          ],
+          "target_bw": [
+            "5G"
           ],
           "base_port": 5001,
           "duration": 15

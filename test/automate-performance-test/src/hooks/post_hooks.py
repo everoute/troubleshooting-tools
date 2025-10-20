@@ -252,6 +252,24 @@ class PostHooks:
                 'status': True
             })
 
+            # Delete eBPF output file to save disk space
+            delete_output_cmd = f"""
+                OUTPUT_FILE="{ebpf_result_path}/ebpf_output_{timestamp}.log"
+                if [ -f "$OUTPUT_FILE" ]; then
+                    OUTPUT_SIZE=$(stat -c %s "$OUTPUT_FILE" 2>/dev/null || echo 0)
+                    echo "Deleting eBPF output file: $OUTPUT_FILE (size: $OUTPUT_SIZE bytes)" >> {ebpf_result_path}/ebpf_case_complete_{timestamp}.log
+                    rm -f "$OUTPUT_FILE"
+                    echo "eBPF output file deleted at: $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {ebpf_result_path}/ebpf_case_complete_{timestamp}.log
+                else
+                    echo "eBPF output file not found: $OUTPUT_FILE" >> {ebpf_result_path}/ebpf_case_complete_{timestamp}.log
+                fi
+            """
+            self.ssh_manager.execute_command(ebpf_host_ref, delete_output_cmd)
+            results['tasks'].append({
+                'name': 'delete_ebpf_output_file',
+                'status': True
+            })
+
         # Collect performance test data (on performance test host)
         perf_collect_cmd = f"""
             echo "Performance test {case_id} data collection completed at: $(date '+%Y-%m-%d %H:%M:%S.%N')" > {result_path}/perf_case_complete_{timestamp}.log

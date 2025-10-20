@@ -13,3 +13,5 @@ CLAUDE.md
 AGENTS.md
 bcc-program/*
 test/workflow/result/*
+*.log
+

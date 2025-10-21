@@ -20,7 +20,14 @@ class EBPFCentricWorkflowGenerator:
             base_path: Base path for testcase files
         """
         self.testcase_loader = testcase_loader
-        self.base_path = base_path or '/Users/admin/workspace/troubleshooting-tools'
+        # Auto-detect base_path if not provided
+        if base_path is None:
+            # Try to auto-detect from current file location
+            # This file is at: <repo>/test/automate-performance-test/src/core/workflow_generator.py
+            current_file = os.path.abspath(__file__)
+            # Go up: core -> src -> automate-performance-test -> test -> repo
+            base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file)))))
+        self.base_path = base_path
 
     def generate_workflow_spec(self, ssh_config: Dict, env_config: Dict,
                              perf_spec: Dict, ebpf_config: Dict) -> Dict:

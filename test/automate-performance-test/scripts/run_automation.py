@@ -83,8 +83,11 @@ def main():
             configs['env']['test_environments'] = filtered_envs
             logger.info(f"Filtered to environments: {args.environments}")
 
-        # Initialize testcase loader
-        base_path = '/Users/admin/workspace/troubleshooting-tools'
+        # Initialize testcase loader - auto-detect base path
+        # Go up from test/automate-performance-test/scripts/ to repo root
+        script_dir = os.path.dirname(os.path.dirname(__file__))  # test/automate-performance-test
+        base_path = os.path.dirname(os.path.dirname(script_dir))  # repo root
+        logger.info(f"Auto-detected base path: {base_path}")
         testcase_loader = TestcaseLoader(base_path)
 
         # Generate workflow with testcase loader

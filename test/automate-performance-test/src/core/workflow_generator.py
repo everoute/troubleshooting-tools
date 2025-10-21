@@ -27,6 +27,9 @@ class EBPFCentricWorkflowGenerator:
             current_file = os.path.abspath(__file__)
             # Go up: core -> src -> automate-performance-test -> test -> repo
             base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(current_file)))))
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"WorkflowGenerator auto-detected base_path: {base_path}")
         self.base_path = base_path
 
     def generate_workflow_spec(self, ssh_config: Dict, env_config: Dict,

@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "generation_time": "2025-10-20T18:10:20.238991",
+    "generation_time": "2025-10-21T09:58:06.731274",
     "total_test_cycles": 125,
     "environments": [
       "host",
@@ -58,7 +58,7 @@
           ]
         }
       },
-      "expected_duration": 150,
+      "expected_duration": 120,
       "result_path": "baseline/host"
     },
     {
@@ -111,7 +111,7 @@
           ]
         }
       },
-      "expected_duration": 150,
+      "expected_duration": 120,
       "result_path": "baseline/vm"
     },
     {
@@ -187,7 +187,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/system_network_performance_case_1_tcp_rx_e5620a/host"
     },
     {
@@ -263,7 +263,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/system_network_performance_case_2_tcp_tx_8dc4aa/host"
     },
     {
@@ -339,7 +339,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/system_network_performance_case_3_udp_rx_b58f1e/host"
     },
     {
@@ -415,7 +415,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/system_network_performance_case_4_udp_tx_1deecb/host"
     },
     {
@@ -491,7 +491,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/system_network_performance_case_5_tcp_rx_9d5e19/host"
     },
     {
@@ -567,7 +567,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/system_network_performance_case_6_tcp_tx_0388a9/host"
     },
     {
@@ -643,7 +643,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/system_network_performance_case_7_udp_rx_3689b0/host"
     },
     {
@@ -719,7 +719,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/system_network_performance_case_8_udp_tx_314e44/host"
     },
     {
@@ -795,7 +795,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/system_network_performance_case_9_tcp_rx_9d5e19/host"
     },
     {
@@ -871,7 +871,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/system_network_performance_case_10_tcp_tx_0388a9/host"
     },
     {
@@ -947,7 +947,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/vm_network_performance_case_11_tcp_tx_0388a9/vm"
     },
     {
@@ -1023,7 +1023,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/vm_network_performance_case_12_tcp_rx_9d5e19/vm"
     },
     {
@@ -1099,7 +1099,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/vm_network_performance_case_13_udp_tx_314e44/vm"
     },
     {
@@ -1175,7 +1175,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/vm_network_performance_case_14_udp_rx_3689b0/vm"
     },
     {
@@ -1251,7 +1251,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/vm_network_performance_case_15_tcp_tx_0388a9/vm"
     },
     {
@@ -1327,7 +1327,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/vm_network_performance_case_16_tcp_rx_9d5e19/vm"
     },
     {
@@ -1403,7 +1403,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/vm_network_performance_case_17_tcp_tx_0388a9/vm"
     },
     {
@@ -1479,7 +1479,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/vm_network_performance_case_18_tcp_rx_9d5e19/vm"
     },
     {
@@ -1555,7 +1555,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/vm_network_performance_case_19_udp_tx_314e44/vm"
     },
     {
@@ -1631,7 +1631,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/vm_network_performance_case_20_udp_rx_3689b0/vm"
     },
     {
@@ -1707,7 +1707,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/vm_network_performance_case_21_tcp_tx_0388a9/vm"
     },
     {
@@ -1783,7 +1783,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/vm_network_performance_case_22_tcp_rx_9d5e19/vm"
     },
     {
@@ -1859,7 +1859,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/vm_network_performance_case_23_tcp_tx_0388a9/vm"
     },
     {
@@ -1935,7 +1935,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/vm_network_performance_case_24_tcp_rx_9d5e19/vm"
     },
     {
@@ -2011,7 +2011,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/vm_network_performance_case_25_udp_tx_314e44/vm"
     },
     {
@@ -2087,7 +2087,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/vm_network_performance_case_26_udp_rx_3689b0/vm"
     },
     {
@@ -2163,7 +2163,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/vm_network_performance_case_27_tcp_tx_0388a9/vm"
     },
     {
@@ -2239,7 +2239,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/vm_network_performance_case_28_tcp_rx_9d5e19/vm"
     },
     {
@@ -2315,7 +2315,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_1_tcp_rx_9d5e19/host"
     },
     {
@@ -2391,7 +2391,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_2_tcp_tx_0388a9/host"
     },
     {
@@ -2467,7 +2467,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_3_udp_rx_3689b0/host"
     },
     {
@@ -2543,7 +2543,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_4_udp_tx_314e44/host"
     },
     {
@@ -2619,7 +2619,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_5_tcp_rx_9d5e19/host"
     },
     {
@@ -2695,7 +2695,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_6_tcp_tx_0388a9/host"
     },
     {
@@ -2771,7 +2771,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_7_tcp_rx_9d5e19/host"
     },
     {
@@ -2847,7 +2847,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_8_tcp_tx_0388a9/host"
     },
     {
@@ -2923,7 +2923,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_9_udp_rx_3689b0/host"
     },
     {
@@ -2999,7 +2999,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_10_udp_tx_314e44/host"
     },
     {
@@ -3075,7 +3075,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_11_tcp_rx_9d5e19/host"
     },
     {
@@ -3151,7 +3151,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_12_tcp_tx_0388a9/host"
     },
     {
@@ -3227,7 +3227,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_13_tcp_rx_9d5e19/host"
     },
     {
@@ -3303,7 +3303,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_14_tcp_rx_9d5e19/host"
     },
     {
@@ -3379,7 +3379,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_15_tcp_tx_0388a9/host"
     },
     {
@@ -3455,7 +3455,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_16_udp_rx_3689b0/host"
     },
     {
@@ -3531,7 +3531,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_17_udp_tx_314e44/host"
     },
     {
@@ -3607,7 +3607,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_18_tcp_rx_9d5e19/host"
     },
     {
@@ -3683,7 +3683,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_19_tcp_tx_0388a9/host"
     },
     {
@@ -3759,7 +3759,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_20_udp_rx_3689b0/host"
     },
     {
@@ -3835,7 +3835,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/linux_network_stack_case_21_udp_tx_314e44/host"
     },
     {
@@ -3911,7 +3911,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/ovs_monitoring_case_1_tcp_rx_9d5e19/vm"
     },
     {
@@ -3987,7 +3987,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/ovs_monitoring_case_2_tcp_tx_0388a9/vm"
     },
     {
@@ -4063,7 +4063,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/ovs_monitoring_case_3_udp_rx_3689b0/vm"
     },
     {
@@ -4139,7 +4139,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/ovs_monitoring_case_4_udp_tx_314e44/vm"
     },
     {
@@ -4215,7 +4215,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/ovs_monitoring_case_5_tcp_rx_9d5e19/vm"
     },
     {
@@ -4291,7 +4291,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/ovs_monitoring_case_6_tcp_tx_0388a9/vm"
     },
     {
@@ -4367,7 +4367,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/ovs_monitoring_case_7_tcp_rx_9d5e19/vm"
     },
     {
@@ -4443,7 +4443,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/ovs_monitoring_case_8_tcp_tx_0388a9/vm"
     },
     {
@@ -4519,7 +4519,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/ovs_monitoring_case_9_udp_rx_3689b0/vm"
     },
     {
@@ -4595,7 +4595,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/ovs_monitoring_case_10_udp_tx_314e44/vm"
     },
     {
@@ -4671,7 +4671,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/ovs_monitoring_case_11_tcp_rx_9d5e19/vm"
     },
     {
@@ -4747,7 +4747,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/ovs_monitoring_case_12_tcp_tx_0388a9/vm"
     },
     {
@@ -4823,7 +4823,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/ovs_monitoring_case_13_tcp_rx_9d5e19/vm"
     },
     {
@@ -4899,7 +4899,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/ovs_monitoring_case_14_tcp_tx_0388a9/vm"
     },
     {
@@ -4975,7 +4975,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/ovs_monitoring_case_15_udp_rx_3689b0/vm"
     },
     {
@@ -5051,7 +5051,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/ovs_monitoring_case_16_udp_tx_314e44/vm"
     },
     {
@@ -5127,7 +5127,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/ovs_monitoring_case_17_tcp_rx_9d5e19/vm"
     },
     {
@@ -5203,7 +5203,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/ovs_monitoring_case_18_tcp_tx_0388a9/vm"
     },
     {
@@ -5279,7 +5279,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_1_tcp_rx_9d5e19/vm"
     },
     {
@@ -5355,7 +5355,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_2_tcp_rx_9d5e19/vm"
     },
     {
@@ -5431,7 +5431,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_3_tcp_rx_9d5e19/vm"
     },
     {
@@ -5507,7 +5507,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_4_tcp_rx_9d5e19/vm"
     },
     {
@@ -5583,7 +5583,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_5_tcp_rx_9d5e19/vm"
     },
     {
@@ -5659,7 +5659,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_6_tcp_rx_9d5e19/vm"
     },
     {
@@ -5735,7 +5735,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_7_tcp_rx_9d5e19/vm"
     },
     {
@@ -5811,7 +5811,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_8_tcp_rx_9d5e19/vm"
     },
     {
@@ -5887,7 +5887,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_9_tcp_rx_9d5e19/vm"
     },
     {
@@ -5963,7 +5963,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_10_tcp_rx_9d5e19/vm"
     },
     {
@@ -6039,7 +6039,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_11_tcp_rx_9d5e19/vm"
     },
     {
@@ -6115,7 +6115,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_12_tcp_rx_9d5e19/vm"
     },
     {
@@ -6191,7 +6191,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_13_tcp_rx_9d5e19/vm"
     },
     {
@@ -6267,7 +6267,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_14_tcp_rx_9d5e19/vm"
     },
     {
@@ -6343,7 +6343,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_15_tcp_rx_9d5e19/vm"
     },
     {
@@ -6419,7 +6419,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_16_tcp_rx_9d5e19/vm"
     },
     {
@@ -6495,7 +6495,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_17_tcp_rx_9d5e19/vm"
     },
     {
@@ -6571,7 +6571,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_18_tcp_rx_9d5e19/vm"
     },
     {
@@ -6647,7 +6647,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_19_tcp_rx_9d5e19/vm"
     },
     {
@@ -6723,7 +6723,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_20_tcp_rx_9d5e19/vm"
     },
     {
@@ -6799,7 +6799,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_21_tcp_rx_9d5e19/vm"
     },
     {
@@ -6875,7 +6875,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_22_tcp_rx_9d5e19/vm"
     },
     {
@@ -6951,7 +6951,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_23_tcp_rx_9d5e19/vm"
     },
     {
@@ -7027,7 +7027,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_24_tcp_rx_9d5e19/vm"
     },
     {
@@ -7103,7 +7103,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_25_tcp_rx_9d5e19/vm"
     },
     {
@@ -7179,7 +7179,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_26_tcp_rx_9d5e19/vm"
     },
     {
@@ -7255,7 +7255,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_27_tcp_rx_9d5e19/vm"
     },
     {
@@ -7331,7 +7331,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_28_tcp_rx_9d5e19/vm"
     },
     {
@@ -7407,7 +7407,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_29_tcp_rx_9d5e19/vm"
     },
     {
@@ -7483,7 +7483,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_30_tcp_rx_9d5e19/vm"
     },
     {
@@ -7559,7 +7559,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_31_tcp_rx_9d5e19/vm"
     },
     {
@@ -7635,7 +7635,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_32_tcp_rx_9d5e19/vm"
     },
     {
@@ -7711,7 +7711,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_33_tcp_rx_9d5e19/vm"
     },
     {
@@ -7787,7 +7787,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_34_tcp_rx_9d5e19/vm"
     },
     {
@@ -7863,7 +7863,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_35_tcp_rx_9d5e19/vm"
     },
     {
@@ -7939,7 +7939,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_36_tcp_rx_9d5e19/vm"
     },
     {
@@ -8015,7 +8015,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_37_udp_rx_3689b0/vm"
     },
     {
@@ -8091,7 +8091,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_38_tcp_rx_9d5e19/vm"
     },
     {
@@ -8167,7 +8167,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_39_tcp_rx_9d5e19/vm"
     },
     {
@@ -8243,7 +8243,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_40_tcp_rx_9d5e19/vm"
     },
     {
@@ -8319,7 +8319,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_41_tcp_rx_9d5e19/vm"
     },
     {
@@ -8395,7 +8395,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_42_tcp_rx_9d5e19/vm"
     },
     {
@@ -8471,7 +8471,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_43_tcp_rx_9d5e19/vm"
     },
     {
@@ -8547,7 +8547,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_44_tcp_rx_9d5e19/vm"
     },
     {
@@ -8623,7 +8623,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_45_tcp_rx_9d5e19/vm"
     },
     {
@@ -8699,7 +8699,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_46_tcp_rx_9d5e19/vm"
     },
     {
@@ -8775,7 +8775,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_47_tcp_rx_9d5e19/vm"
     },
     {
@@ -8851,7 +8851,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_48_tcp_rx_9d5e19/vm"
     },
     {
@@ -8927,7 +8927,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_49_tcp_rx_9d5e19/vm"
     },
     {
@@ -9003,7 +9003,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_50_tcp_rx_9d5e19/vm"
     },
     {
@@ -9079,7 +9079,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_51_tcp_rx_9d5e19/vm"
     },
     {
@@ -9155,7 +9155,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_52_tcp_rx_9d5e19/vm"
     },
     {
@@ -9231,7 +9231,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_53_tcp_rx_9d5e19/vm"
     },
     {
@@ -9307,7 +9307,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_54_tcp_rx_9d5e19/vm"
     },
     {
@@ -9383,7 +9383,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_55_tcp_rx_9d5e19/vm"
     },
     {
@@ -9459,7 +9459,7 @@
           "peak"
         ]
       },
-      "expected_duration": 160,
+      "expected_duration": 130,
       "result_path": "ebpf/kvm_virt_network_case_56_tcp_rx_9d5e19/vm"
     }
   ],
@@ -9492,7 +9492,7 @@
           "server_cmd": "iperf3 -s -p {port} -B {server_ip} -J",
           "client_cmd_tcp": "iperf3 -c {server_ip} -B {client_ip} -p {port} -t {duration} -b {target_bw} -l 65520 -J > {result_file}",
           "client_cmd_udp": "iperf3 -c {server_ip} -B {client_ip} -p {port} -t {duration} -b {target_bw} -u -J > {result_file}",
-          "duration": 15,
+          "duration": 10,
           "ports": [
             5001
           ]
@@ -9503,14 +9503,14 @@
             4
           ],
           "base_port": 5001,
-          "duration": 15
+          "duration": 10
         }
       },
       "latency": {
         "server_cmd": "netserver -L {server_ip} -p {port} -D",
         "client_cmd_tcp": "netperf -H {server_ip} -p {port} -t TCP_RR -l 10 -- -o min_latency,mean_latency,max_latency,p99_latency,p90_latency > {result_file}",
         "client_cmd_udp": "netperf -H {server_ip} -p {port} -t UDP_RR -l 10 -- -o min_latency,mean_latency,max_latency,p99_latency,p90_latency > {result_file}",
-        "duration": 15,
+        "duration": 10,
         "ports": [
           12865
         ]
@@ -9520,7 +9520,7 @@
         "client_cmd_tcp": "iperf3 -c {server_ip} -B {client_ip} -p {port} -t {duration} -b {target_bw} -l 64 -J > {result_file}",
         "client_cmd_udp": "iperf3 -c {server_ip} -B {client_ip} -p {port} -t {duration} -b {target_bw} -l 64 -u -J > {result_file}",
         "single_stream": {
-          "duration": 15,
+          "duration": 10,
           "target_bw": [
             "5G"
           ],
@@ -9536,7 +9536,7 @@
             "5G"
           ],
           "base_port": 5001,
-          "duration": 15
+          "duration": 10
         }
       }
     }

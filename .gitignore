@@ -7,11 +7,6 @@ bpftools/__pycache__/
 *.pyo
 __pycache__/
 .tmp/
-.claude/
-claude_local*
-CLAUDE.md
-AGENTS.md
 bcc-program/*
 test/workflow/result/*
 *.log
-

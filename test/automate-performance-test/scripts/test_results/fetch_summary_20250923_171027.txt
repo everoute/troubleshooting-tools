@@ -1,7 +1,0 @@
-Fetch Summary
-=============
-Host: host-server
-Remote path: /home/smartx/lcc/performance-test-results/ebpf/tool_001_case_1
-Local path: ./test_results/tool_001_case_1
-Compressed: False
-Fetch time: 2025-09-23T17:10:27.688170

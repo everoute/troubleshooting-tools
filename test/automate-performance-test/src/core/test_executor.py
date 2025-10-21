@@ -136,6 +136,8 @@ class TestExecutor:
             logger.error(f"Test cycle failed: {str(e)}")
             cycle_result['status'] = "failed"
             cycle_result['error'] = str(e)
+            # Re-raise exception to stop workflow execution
+            raise
         finally:
             cycle_result['end_time'] = datetime.now().isoformat()
 
@@ -480,6 +482,10 @@ class TestExecutor:
         timestamp = self.path_manager.get_timestamp()
         env_name = cycle['environment']
 
+        # DEBUG: Log cycle data
+        logger.info(f"DEBUG: _prepare_cycle_context for cycle_id={cycle.get('cycle_id')}")
+        logger.info(f"DEBUG: cycle['ebpf_case'] = {cycle.get('ebpf_case')}")
+
         # Get workdir from SSH config if available
         workdir = "/tmp"  # default
         host_ref = "host-server"  # default
@@ -515,7 +521,7 @@ class TestExecutor:
         else:
             ebpf_result_path = f"{ebpf_workdir}/performance-test-results/{cycle['result_path']}"
 
-        return {
+        context = {
             'cycle': cycle,
             'timestamp': timestamp,
             'environment': env_name,
@@ -530,6 +536,12 @@ class TestExecutor:
             'ebpf_command': cycle.get('ebpf_case', {}).get('command'),
             'workflow': workflow_spec  # Add workflow_spec to context
         }
+
+        # DEBUG: Log final context
+        logger.info(f"DEBUG: Prepared context - tool_id={context['tool_id']}, case_id={context['case_id']}")
+        logger.info(f"DEBUG: Prepared context - ebpf_command={repr(context['ebpf_command'])}")
+
+        return context
 
     def _prepare_tool_context(self, tool_id: str, cycle: Dict, workflow_spec: Dict) -> Dict:
         """Prepare tool context for hooks"""

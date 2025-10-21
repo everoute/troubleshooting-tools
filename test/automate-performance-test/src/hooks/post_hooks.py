@@ -133,13 +133,74 @@ class PostHooks:
             """
             self.ssh_manager.execute_command(ebpf_host_ref, monitor_stop_timestamp)
 
-            # Stop monitoring processes (updated for new pidstat monitoring)
+            # Stop monitoring processes using saved PID files
             monitoring_cmd = f"""
-                echo "DEBUG: Stopping monitoring processes for case {case_id}" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
-                pkill -f "ebpf_resource_monitor.*{case_id}" || true
-                pkill -f "ebpf_logsize_monitor.*{case_id}" || true
-                # Also try to kill by pattern matching the result path
-                pkill -f "{ebpf_result_path}/ebpf_monitoring" || true
+                # Function to kill process and its entire process group by PID file
+                kill_by_pidfile() {{
+                    local PIDFILE=$1
+                    local NAME=$2
+                    if [ -f "$PIDFILE" ]; then
+                        PID=$(cat "$PIDFILE")
+                        if [ -n "$PID" ] && ps -p $PID >/dev/null 2>&1; then
+                            # Get process group ID
+                            PGID=$(ps -o pgid= -p $PID 2>/dev/null | tr -d ' ')
+                            echo "Stopping $NAME process PID $PID (PGID: $PGID)" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
+
+                            # Kill the entire process group (negative PID = process group)
+                            # This ensures all child processes (like pidstat) are also killed
+                            if [ -n "$PGID" ]; then
+                                echo "Sending SIGTERM to process group -$PGID" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
+                                kill -TERM -$PGID 2>/dev/null || true
+                                sleep 1
+
+                                # Check if any process in the group is still alive
+                                if ps -g $PGID >/dev/null 2>&1; then
+                                    echo "Force killing process group -$PGID" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
+                                    kill -KILL -$PGID 2>/dev/null || true
+                                fi
+                            else
+                                # Fallback: kill just the process
+                                echo "WARNING: Could not get PGID, killing process $PID only" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
+                                kill -TERM $PID 2>/dev/null || true
+                                sleep 1
+                                if ps -p $PID >/dev/null 2>&1; then
+                                    kill -KILL $PID 2>/dev/null || true
+                                fi
+                            fi
+
+                            echo "$NAME process stopped at: $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
+                        else
+                            echo "$NAME process PID $PID not running or invalid" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
+                        fi
+                        rm -f "$PIDFILE"
+                    else
+                        echo "$NAME PID file not found: $PIDFILE" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
+                    fi
+                }}
+
+                echo "DEBUG: Stopping monitoring processes for case {case_id} with timestamp {timestamp}" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
+
+                # Stop resource monitor using PID file
+                kill_by_pidfile "{ebpf_result_path}/ebpf_monitoring/resource_monitor_pid_{timestamp}.txt" "Resource Monitor"
+
+                # Stop logsize monitor using PID file
+                kill_by_pidfile "{ebpf_result_path}/ebpf_monitoring/logsize_monitor_pid_{timestamp}.txt" "Logsize Monitor"
+
+                # Fallback: try to find and kill by any timestamp if exact timestamp fails
+                if [ ! -f "{ebpf_result_path}/ebpf_monitoring/resource_monitor_pid_{timestamp}.txt" ]; then
+                    echo "DEBUG: Exact timestamp PID files not found, searching for any PID files in {ebpf_result_path}/ebpf_monitoring/" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
+                    for pidfile in {ebpf_result_path}/ebpf_monitoring/resource_monitor_pid_*.txt; do
+                        if [ -f "$pidfile" ]; then
+                            kill_by_pidfile "$pidfile" "Resource Monitor (fallback)"
+                        fi
+                    done
+                    for pidfile in {ebpf_result_path}/ebpf_monitoring/logsize_monitor_pid_*.txt; do
+                        if [ -f "$pidfile" ]; then
+                            kill_by_pidfile "$pidfile" "Logsize Monitor (fallback)"
+                        fi
+                    done
+                fi
+
                 echo "Case monitoring stopped at: $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
                 echo "DEBUG: Monitoring stop commands completed" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
             """
@@ -150,86 +211,164 @@ class PostHooks:
                 'status': True
             })
 
-            # Enhanced eBPF program cleanup with process tree termination (on eBPF monitoring host)
+            # Enhanced eBPF program cleanup using process group kill (on eBPF monitoring host)
             stop_ebpf_cmd = f"""
-                # Function to kill process and its children
-                kill_process_tree() {{
-                    local PID=$1
+                # Function to kill process group
+                kill_process_group() {{
+                    local PGID_FILE=$1
                     local NAME=$2
-                    if [ -n "$PID" ]; then
-                        if ps -p $PID -o pid= >/dev/null 2>&1; then
-                            echo "Terminating $NAME process $PID and its children"
-                            # Kill all children first
-                            pkill -P $PID 2>/dev/null || true
-                            sleep 1
-                            # Try graceful termination
-                            kill -TERM $PID 2>/dev/null || true
-                            sleep 2
-                            # Force kill if still alive
-                            if ps -p $PID -o pid= >/dev/null 2>&1; then
-                                kill -KILL $PID 2>/dev/null || true
+
+                    if [ -f "$PGID_FILE" ]; then
+                        PGID=$(cat "$PGID_FILE")
+                        if [ -n "$PGID" ]; then
+                            echo "Stopping $NAME process group $PGID" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
+
+                            # Helper: check if any process in group alive
+                            group_alive() {{
+                                if command -v pgrep >/dev/null 2>&1; then
+                                    pgrep -g "$1" >/dev/null 2>&1
+                                else
+                                    ps -o pid= --pgrp "$1" >/dev/null 2>&1
+                                fi
+                            }}
+
+                            # Check if any process in the group exists
+                            if group_alive "$PGID"; then
+                                # List all processes in the group before killing
+                                echo "Processes in group $PGID:" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
+                                (ps -o pid,pgid,stat,cmd --pgrp "$PGID" 2>/dev/null || true) >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
+
+                                # Kill the entire process group (use sudo for root-run processes)
+                                echo "Sending SIGTERM to process group -$PGID" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
+                                sudo -n kill -TERM -- -$PGID 2>/dev/null || true
+                                sleep 2
+
+                                # Check if any process in the group is still alive
+                                if group_alive "$PGID"; then
+                                    echo "Processes still alive after SIGTERM, sending SIGKILL to process group -$PGID" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
+                                    (ps -o pid,pgid,stat,cmd --pgrp "$PGID" 2>/dev/null || true) >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
+                                    sudo -n kill -KILL -- -$PGID 2>/dev/null || true
+
+                                    # Poll for process termination (max 10 seconds)
+                                    MAX_WAIT=20
+                                    WAIT_COUNT=0
+                                    while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
+                                        if ! group_alive "$PGID"; then
+                                            echo "Process group $PGID terminated after $((WAIT_COUNT / 2)) seconds" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
+                                            break
+                                        fi
+                                        sleep 0.5
+                                        WAIT_COUNT=$((WAIT_COUNT + 1))
+                                    done
+                                fi
+
+                                # Final verification - CRITICAL for preventing concurrent eBPF programs
+                                if group_alive "$PGID"; then
+                                    echo "ERROR: Failed to kill process group $PGID after 10 seconds!" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
+                                    echo "ERROR: Still running processes:" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
+                                    (ps -o pid,pgid,stat,time,cmd --pgrp "$PGID" 2>/dev/null || true) >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
+                                    echo "ERROR: Cannot proceed to next test case - processes still running" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
+                                    # Return non-zero exit code to signal failure
+                                    exit 1
+                                else
+                                    echo "Process group $PGID terminated successfully" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
+                                fi
+                            else
+                                echo "$NAME process group $PGID already stopped" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
                             fi
-                            echo "$NAME process $PID terminated at: $(date '+%Y-%m-%d %H:%M:%S.%N')"
+
+                            rm -f "$PGID_FILE"
                         else
-                            echo "$NAME process $PID already stopped"
+                            echo "WARNING: Empty PGID in file $PGID_FILE" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
                         fi
+                    else
+                        echo "WARNING: PGID file not found: $PGID_FILE" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
                     fi
                 }}
 
                 echo "eBPF case stop time: $(date '+%Y-%m-%d %H:%M:%S.%N')" > {ebpf_result_path}/ebpf_stop_{timestamp}.log
 
-                # DEBUG: List available PID files
-                echo "DEBUG: Available PID files in {ebpf_result_path}:" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
+                # DEBUG: List available PID/PGID files
+                echo "DEBUG: Available PID/PGID files in {ebpf_result_path}:" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
                 ls -la {ebpf_result_path}/*pid*.txt >> {ebpf_result_path}/ebpf_stop_{timestamp}.log 2>&1 || echo "No PID files found" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
 
-                # Stop actual eBPF process
-                EBPF_PID_FILE="{ebpf_result_path}/ebpf_pid_{timestamp}.txt"
-                if [ -f "$EBPF_PID_FILE" ]; then
-                    EBPF_PID=$(cat "$EBPF_PID_FILE")
-                    echo "DEBUG: Found eBPF PID file with PID: $EBPF_PID" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
-                    kill_process_tree "$EBPF_PID" "eBPF"
+                # Stop eBPF process group using PGID file
+                PGID_FILE="{ebpf_result_path}/ebpf_pgid_{timestamp}.txt"
+                if [ -f "$PGID_FILE" ]; then
+                    echo "DEBUG: Found PGID file, using process group kill" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
+                    kill_process_group "$PGID_FILE" "eBPF tool"
                 else
-                    echo "DEBUG: eBPF PID file not found: $EBPF_PID_FILE" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
-                    # Try to find PID files with any timestamp in same directory
-                    FOUND_EBPF_PID_FILE=$(find {ebpf_result_path} -name "ebpf_pid_*.txt" -type f | head -1)
-                    if [ -n "$FOUND_EBPF_PID_FILE" ]; then
-                        EBPF_PID=$(cat "$FOUND_EBPF_PID_FILE")
-                        echo "DEBUG: Using fallback eBPF PID file: $FOUND_EBPF_PID_FILE with PID: $EBPF_PID" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
-                        kill_process_tree "$EBPF_PID" "eBPF"
-                    fi
-                fi
+                    echo "DEBUG: PGID file not found, falling back to individual PID kill" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
 
-                # Stop wrapper process if different
-                WRAPPER_PID_FILE="{ebpf_result_path}/wrapper_pid_{timestamp}.txt"
-                if [ -f "$WRAPPER_PID_FILE" ]; then
-                    WRAPPER_PID=$(cat "$WRAPPER_PID_FILE")
-                    echo "DEBUG: Found wrapper PID file with PID: $WRAPPER_PID" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
+                    # Fallback: try to kill by individual PIDs (old method, for compatibility)
+                    EBPF_PID_FILE="{ebpf_result_path}/ebpf_pid_{timestamp}.txt"
                     if [ -f "$EBPF_PID_FILE" ]; then
                         EBPF_PID=$(cat "$EBPF_PID_FILE")
-                        if [ "$WRAPPER_PID" != "$EBPF_PID" ]; then
-                            kill_process_tree "$WRAPPER_PID" "Wrapper"
+                        echo "DEBUG: Found eBPF PID file with PID: $EBPF_PID" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
+
+                        if [ -n "$EBPF_PID" ] && ps -p $EBPF_PID >/dev/null 2>&1; then
+                            # Get PGID from the process
+                            PGID=$(ps -o pgid= -p $EBPF_PID 2>/dev/null | tr -d ' ')
+                            if [ -n "$PGID" ]; then
+                                echo "Detected PGID $PGID from process $EBPF_PID, killing process group" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
+                                sudo -n kill -TERM -- -$PGID 2>/dev/null || true
+                                sleep 2
+                                if command -v pgrep >/dev/null 2>&1; then
+                                    if pgrep -g "$PGID" >/dev/null 2>&1; then sudo -n kill -KILL -- -$PGID 2>/dev/null || true; fi
+                                else
+                                    if ps -o pid= --pgrp "$PGID" >/dev/null 2>&1; then sudo -n kill -KILL -- -$PGID 2>/dev/null || true; fi
+                                fi
+                            else
+                                # Last resort: kill just the process
+                                echo "Could not get PGID, killing process $EBPF_PID only" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
+                                sudo -n kill -TERM $EBPF_PID 2>/dev/null || true
+                                sleep 1
+                                if ps -p $EBPF_PID >/dev/null 2>&1; then
+                                    sudo -n kill -KILL $EBPF_PID 2>/dev/null || true
+                                fi
+                            fi
                         fi
-                    else
-                        kill_process_tree "$WRAPPER_PID" "Wrapper"
+                        rm -f "$EBPF_PID_FILE"
                     fi
-                else
-                    echo "DEBUG: Wrapper PID file not found: $WRAPPER_PID_FILE" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
-                    # Try to find wrapper PID files with any timestamp in same directory
-                    FOUND_WRAPPER_PID_FILE=$(find {ebpf_result_path} -name "wrapper_pid_*.txt" -type f | head -1)
-                    if [ -n "$FOUND_WRAPPER_PID_FILE" ]; then
-                        WRAPPER_PID=$(cat "$FOUND_WRAPPER_PID_FILE")
-                        echo "DEBUG: Using fallback wrapper PID file: $FOUND_WRAPPER_PID_FILE with PID: $WRAPPER_PID" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
-                        kill_process_tree "$WRAPPER_PID" "Wrapper"
+
+                    # Also try wrapper PID file
+                    WRAPPER_PID_FILE="{ebpf_result_path}/wrapper_pid_{timestamp}.txt"
+                    if [ -f "$WRAPPER_PID_FILE" ]; then
+                        WRAPPER_PID=$(cat "$WRAPPER_PID_FILE")
+                        if [ -n "$WRAPPER_PID" ] && ps -p $WRAPPER_PID >/dev/null 2>&1; then
+                            echo "Killing wrapper process $WRAPPER_PID (with sudo)" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
+                            sudo -n kill -TERM $WRAPPER_PID 2>/dev/null || true
+                            sleep 1
+                            if ps -p $WRAPPER_PID >/dev/null 2>&1; then
+                                sudo -n kill -KILL $WRAPPER_PID 2>/dev/null || true
+                            fi
+                        fi
+                        rm -f "$WRAPPER_PID_FILE"
                     fi
                 fi
 
                 echo "eBPF case cleanup completed at: $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {ebpf_result_path}/ebpf_stop_{timestamp}.log
             """
-            self.ssh_manager.execute_command(ebpf_host_ref, stop_ebpf_cmd)
-            results['tasks'].append({
-                'name': 'stop_ebpf_program',
-                'status': True
-            })
+            stdout, stderr, status = self.ssh_manager.execute_command(ebpf_host_ref, stop_ebpf_cmd)
+
+            # CRITICAL: Check if cleanup succeeded
+            if status != 0:
+                error_msg = f"CRITICAL: Failed to stop eBPF program for {tool_id}_case_{case_id}. Exit code: {status}"
+                logger.error(error_msg)
+                logger.error(f"stderr: {stderr}")
+                results['tasks'].append({
+                    'name': 'stop_ebpf_program',
+                    'status': False,
+                    'error': error_msg
+                })
+                # Raise exception to stop test execution
+                raise RuntimeError(f"{error_msg}. Previous eBPF program still running - cannot start next test case!")
+            else:
+                logger.info(f"eBPF program stopped successfully for {tool_id}_case_{case_id}")
+                results['tasks'].append({
+                    'name': 'stop_ebpf_program',
+                    'status': True
+                })
 
         # Generate time range statistics (on eBPF monitoring host)
         if ebpf_command:

@@ -153,6 +153,11 @@ class InitHooks:
         ebpf_command = context.get('ebpf_command')
         environment = context.get('environment')
 
+        # DEBUG: Log context to verify ebpf_command is passed correctly
+        logger.info(f"DEBUG: _execute_case_init called with tool_id={tool_id}, case_id={case_id}, environment={environment}")
+        logger.info(f"DEBUG: ebpf_command = {repr(ebpf_command)}")
+        logger.info(f"DEBUG: ebpf_command type = {type(ebpf_command)}, bool = {bool(ebpf_command)}")
+
         # Performance test host (VM or physical host)
         host_ref = context.get('host_ref')
         workdir = context.get('workdir', '/home/smartx/lcc')
@@ -186,41 +191,134 @@ class InitHooks:
         })
 
         # Start eBPF program if provided (on eBPF monitoring host - physical host)
+        logger.info(f"DEBUG: Checking if ebpf_command exists: ebpf_command={repr(ebpf_command)}, will_execute={bool(ebpf_command)}")
         if ebpf_command:
+            logger.info(f"DEBUG: ENTERED if ebpf_command block! About to start eBPF program")
+
+            # Escape single quotes in ebpf_command for safe embedding in bash single-quoted string
+            ebpf_command_escaped = ebpf_command.replace("'", "'\"'\"'")
+
             start_cmd = f"""
                 cd {ebpf_workdir}
                 echo "Starting eBPF case {case_id}: {ebpf_command}" > {ebpf_result_path}/ebpf_start_{timestamp}.log
                 echo "eBPF case start time: $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
+                echo "Command: {ebpf_command}" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
 
-                nohup {ebpf_command} > {ebpf_result_path}/ebpf_output_{timestamp}.log 2>&1 &
-                WRAPPER_PID=$!
-                echo "Wrapper PID: $WRAPPER_PID" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
+                # Use setsid to create a new process group for the eBPF tool
+                # This ensures all processes (sudo + python) are in the same group for easy cleanup
+                setsid bash -c '
+                    # Save the session leader PID (this bash process)
+                    BASH_PID=$$
+                    echo $BASH_PID > {ebpf_result_path}/ebpf_pgid_{timestamp}.txt
+                    echo "Process group leader PID: $BASH_PID" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
 
-                # Wait a moment for the process to start
-                sleep 2
+                    # Start the eBPF tool
+                    {ebpf_command_escaped} > {ebpf_result_path}/ebpf_output_{timestamp}.log 2>&1 &
+                    TOOL_PID=$!
+                    echo "Tool wrapper PID: $TOOL_PID" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
 
-                # If command starts with sudo, find the actual child process
-                if echo "{ebpf_command}" | grep -q '^sudo'; then
-                    ACTUAL_PID=$(pgrep -P $WRAPPER_PID | head -1)
+                    # Detect actual python process if using sudo
+                    # Poll for python child process (max 10 seconds)
+                    ACTUAL_PID=""
+                    MAX_ATTEMPTS=20
+                    ATTEMPT=0
+
+                    while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+                        # Find python process that is child of TOOL_PID
+                        # Using simple grep + awk pipeline to avoid complex quote escaping
+                        FOUND_PID=$(ps -eo pid,ppid,cmd | grep " $TOOL_PID " | grep python2 | grep "ebpf-tools/performance" | head -1 | awk "{{print \$1}}")
+
+                        if [ -n "$FOUND_PID" ]; then
+                            ACTUAL_PID=$FOUND_PID
+                            echo "DEBUG: Found python child process PID $ACTUAL_PID after $((ATTEMPT * 500))ms" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
+                            break
+                        fi
+
+                        ATTEMPT=$((ATTEMPT + 1))
+                        sleep 0.5
+                    done
+
                     if [ -z "$ACTUAL_PID" ]; then
-                        # Fallback: look for python process in the process group
-                        ACTUAL_PID=$(ps -eo pid,ppid,cmd | grep -v grep | grep "$WRAPPER_PID" | grep -E "python|python2|python3" | awk '{{print $1}}' | head -1)
+                        echo "DEBUG: Could not detect python child PID after 10s, using wrapper PID" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
+                        ACTUAL_PID=$TOOL_PID
+                    else
+                        # Verify process exists and get PGID
+                        VERIFY_INFO=$(ps -p $ACTUAL_PID -o pid,pgid,cmd 2>/dev/null | tail -1)
+                        if [ -n "$VERIFY_INFO" ]; then
+                            echo "DEBUG: Verified process: $VERIFY_INFO" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
+                        fi
                     fi
-                    if [ -z "$ACTUAL_PID" ]; then
-                        ACTUAL_PID=$WRAPPER_PID
-                    fi
+
+                    # Save PIDs
+                    echo $TOOL_PID > {ebpf_result_path}/wrapper_pid_{timestamp}.txt
+                    echo $ACTUAL_PID > {ebpf_result_path}/ebpf_pid_{timestamp}.txt
+                    echo "Wrapper PID: $TOOL_PID, Actual eBPF PID: $ACTUAL_PID" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
+
+                    # Verify all processes are in the same process group
+                    echo "DEBUG: Process group info:" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
+                    ps -o pid,pgid,sid,comm -p $BASH_PID,$TOOL_PID,$ACTUAL_PID 2>&1 >> {ebpf_result_path}/ebpf_start_{timestamp}.log || true
+
+                    echo "eBPF program started at $(date +%Y-%m-%d_%H:%M:%S)" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
+
+                    # Setup signal handlers to forward signals to child processes
+                    # This ensures we can cleanly kill the entire process group
+                    cleanup() {{
+                        echo "Received termination signal at $(date +%Y-%m-%d_%H:%M:%S)" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
+                        # Kill child processes first (sudo and python)
+                        if [ -n "$TOOL_PID" ] && ps -p $TOOL_PID >/dev/null 2>&1; then
+                            echo "Killing wrapper process $TOOL_PID (with sudo)" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
+                            sudo -n kill -TERM $TOOL_PID 2>/dev/null || true
+                        fi
+                        if [ -n "$ACTUAL_PID" ] && ps -p $ACTUAL_PID >/dev/null 2>&1; then
+                            echo "Killing actual process $ACTUAL_PID (with sudo)" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
+                            sudo -n kill -TERM $ACTUAL_PID 2>/dev/null || true
+                        fi
+                        # Wait a moment for processes to exit
+                        sleep 1
+                        # Force kill if still alive
+                        if [ -n "$TOOL_PID" ] && ps -p $TOOL_PID >/dev/null 2>&1; then
+                            sudo -n kill -KILL $TOOL_PID 2>/dev/null || true
+                        fi
+                        if [ -n "$ACTUAL_PID" ] && ps -p $ACTUAL_PID >/dev/null 2>&1; then
+                            sudo -n kill -KILL $ACTUAL_PID 2>/dev/null || true
+                        fi
+                        echo "Cleanup completed at $(date +%Y-%m-%d_%H:%M:%S)" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
+                        exit 0
+                    }}
+                    trap cleanup SIGTERM SIGINT
+
+                    # Keep this bash process alive to maintain the process group
+                    # Wait for the actual eBPF process to complete
+                    while ps -p $ACTUAL_PID >/dev/null 2>&1; do
+                        sleep 2
+                    done
+
+                    echo "eBPF process $ACTUAL_PID exited at $(date +%Y-%m-%d_%H:%M:%S)" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
+                ' >> {ebpf_result_path}/ebpf_start_{timestamp}.log 2>&1 &
+
+                # Wait longer for PID files to be created (轮询最多 10 秒,所以等待至少 1 秒)
+                sleep 1
+
+                # Read and output the actual PID for monitoring (轮询等待 PID 文件创建)
+                MAX_WAIT=10
+                WAITED=0
+                while [ ! -f {ebpf_result_path}/ebpf_pid_{timestamp}.txt ] && [ $WAITED -lt $MAX_WAIT ]; do
+                    sleep 0.5
+                    WAITED=$((WAITED + 1))
+                done
+
+                if [ -f {ebpf_result_path}/ebpf_pid_{timestamp}.txt ]; then
+                    cat {ebpf_result_path}/ebpf_pid_{timestamp}.txt
                 else
-                    ACTUAL_PID=$WRAPPER_PID
+                    echo "ERROR: Failed to create PID file after $((WAITED / 2))s" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
+                    echo ""
                 fi
-
-                echo $WRAPPER_PID > {ebpf_result_path}/wrapper_pid_{timestamp}.txt
-                echo $ACTUAL_PID > {ebpf_result_path}/ebpf_pid_{timestamp}.txt
-                echo "Wrapper PID: $WRAPPER_PID, Actual eBPF PID: $ACTUAL_PID" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
-                echo "eBPF program started at $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
-                echo $ACTUAL_PID
             """
+            logger.info(f"DEBUG: About to execute SSH command to start eBPF on host {ebpf_host_ref}")
             stdout, stderr, status = self.ssh_manager.execute_command(ebpf_host_ref, start_cmd)
+            logger.info(f"DEBUG: SSH command returned - status={status}, stdout={repr(stdout)}, stderr={repr(stderr)}")
             if status == 0 and stdout:
+                logger.info(f"DEBUG: SSH command succeeded and has stdout, continuing with monitoring setup")
                 ebpf_pid = stdout.strip()
                 results['ebpf_pid'] = ebpf_pid
                 results['tasks'].append({
@@ -253,7 +351,10 @@ class InitHooks:
                     'case_id': case_id
                 }
                 logger.info(f"DEBUG: Stored case context for {tool_id}_{case_id}: timestamp={timestamp}, result_path={result_path}, ebpf_result_path={ebpf_result_path}, ebpf_host_ref={ebpf_host_ref}, ebpf_pid={ebpf_pid}")
+            else:
+                logger.warning(f"DEBUG: SSH command failed or no stdout - status={status}, stdout={repr(stdout)}, will NOT start monitoring")
 
+        logger.info(f"DEBUG: Returning from _execute_case_init with results={results}")
         return results
 
     def _execute_test_init(self, context: Dict) -> Dict:
@@ -376,24 +477,45 @@ class InitHooks:
         interval = self.config.get('perf', {}).get('performance_tests', {}).get('monitoring', {}).get('interval', 2)
 
         # Combined CPU and Memory monitoring using pidstat
+        # IMPORTANT: Use setsid to create new process group for reliable cleanup
+        # Strategy: Monitor process runs in its own process group, making cleanup easier
         resource_cmd = f"""
-            nohup bash -c '
-                echo "# eBPF Resource Monitoring - CPU and Memory statistics using pidstat" > {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
-                echo "# DEBUG: Starting resource monitoring for PID {ebpf_pid} with interval {interval}s" >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
+            # Start monitoring in background with new process group
+            setsid bash -lc "
+                # Save process group ID (same as PID for session leader)
+                echo $$ > {result_path}/ebpf_monitoring/resource_monitor_pid_{timestamp}.txt
+                echo '# eBPF Resource Monitoring - CPU and Memory statistics using pidstat' > {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
+                echo '# DEBUG: Starting resource monitoring for PID {ebpf_pid} with interval {interval}s' >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
+
+                # Write start timestamp header for absolute time reference
+                echo '# START_DATETIME: '$(date '+%Y-%m-%d %H:%M:%S.%N')'  START_EPOCH: '$(date +%s)'  INTERVAL: {interval}s  PID: {ebpf_pid}' >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
+                # Stream pidstat with -h; Time column is epoch seconds; use START_EPOCH to map
                 pidstat -h -u -r -p {ebpf_pid} {interval} >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log 2>&1
+
                 echo "# DEBUG: resource monitoring ended for PID {ebpf_pid}" >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
-            ' >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log 2>&1 &
+            " >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log 2>&1 &
+
+            # Wait a moment for PID file to be created
+            sleep 0.2
         """
         logger.info(f"DEBUG: resource_cmd = {resource_cmd}")
         self.ssh_manager.execute_command(host_ref, resource_cmd)
 
         # Log size monitoring with header and human-readable conversion
+        # IMPORTANT: Use setsid to create new process group for reliable cleanup
+        # Strategy: Monitor process runs in its own process group
         log_file = f"{result_path}/ebpf_output_{timestamp}.log"
         logsize_cmd = f"""
-            nohup bash -c '
+            # Start monitoring in background with new process group
+            setsid bash -c '
+                # Save process group ID
+                echo $$ > {result_path}/ebpf_monitoring/logsize_monitor_pid_{timestamp}.txt
                 echo "# eBPF Log Size Monitoring - Log file size (instantaneous)" > {result_path}/ebpf_monitoring/ebpf_logsize_monitor_{timestamp}.log
                 echo "# Timestamp                     Size_Bytes  Size_Human" >> {result_path}/ebpf_monitoring/ebpf_logsize_monitor_{timestamp}.log
                 echo "# DEBUG: Starting logsize monitoring for {log_file}" >> {result_path}/ebpf_monitoring/ebpf_logsize_monitor_{timestamp}.log
+                echo "# DEBUG: Monitor process PID: $$, PGID: $(ps -o pgid= -p $$ | tr -d \" \")" >> {result_path}/ebpf_monitoring/ebpf_logsize_monitor_{timestamp}.log
+
+                # Monitoring loop
                 while ps -p {ebpf_pid} >/dev/null 2>&1; do
                     TIMESTAMP=$(date "+%Y-%m-%d %H:%M:%S.%N")
                     SIZE=$(stat -c %s "{log_file}" 2>/dev/null || echo 0)
@@ -409,8 +531,12 @@ class InitHooks:
                     echo "$TIMESTAMP $SIZE $HUMAN" >> {result_path}/ebpf_monitoring/ebpf_logsize_monitor_{timestamp}.log
                     sleep {interval}
                 done
+
                 echo "# DEBUG: logsize monitoring ended for {log_file}" >> {result_path}/ebpf_monitoring/ebpf_logsize_monitor_{timestamp}.log
             ' >> {result_path}/ebpf_monitoring/ebpf_logsize_monitor_{timestamp}.log 2>&1 &
+
+            # Wait a moment for PID file to be created
+            sleep 0.2
         """
         logger.info(f"DEBUG: logsize_cmd = {logsize_cmd}")
         self.ssh_manager.execute_command(host_ref, logsize_cmd)

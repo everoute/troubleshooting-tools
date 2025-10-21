@@ -62,8 +62,7 @@ def run_automation_test(config_dir: str, iteration: int, logger: logging.Logger)
         result = subprocess.run(
             cmd,
             capture_output=True,
-            text=True,
-            timeout=3600  # 1 hour timeout
+            text=True
         )
 
         if result.returncode == 0:

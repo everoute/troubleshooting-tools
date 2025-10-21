@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(grep:*)",
+      "Bash(chmod:*)",
+      "mcp__ssh__execute_remote_command",
+      "mcp__ssh__scp_to_remote",
+      "Bash(ssh:*)",
+      "Bash(scp:*)",
+      "Bash(python3:*)"
+    ],
+    "deny": []
+  }
+}

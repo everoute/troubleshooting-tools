@@ -5,6 +5,8 @@ import sys
 import os
 import logging
 import argparse
+import signal
+import atexit
 from datetime import datetime
 
 # Add src to path
@@ -16,6 +18,11 @@ from core.workflow_generator import EBPFCentricWorkflowGenerator
 from core.test_executor import TestExecutor
 from utils.config_loader import ConfigLoader
 from utils.testcase_loader import TestcaseLoader
+
+# Global variables for cleanup
+_ssh_manager = None
+_test_executor = None
+_cleanup_executed = False
 
 
 def setup_logging(log_level: str = "INFO"):
@@ -30,8 +37,79 @@ def setup_logging(log_level: str = "INFO"):
     )
 
 
+def cleanup_on_exit():
+    """Cleanup function called on exit or interruption"""
+    global _cleanup_executed
+
+    if _cleanup_executed:
+        return
+
+    _cleanup_executed = True
+    logger = logging.getLogger(__name__)
+
+    logger.warning("=" * 60)
+    logger.warning("Performing emergency cleanup...")
+    logger.warning("=" * 60)
+
+    if _ssh_manager and _test_executor:
+        try:
+            logger.info("Attempting to stop all running eBPF tools and monitoring processes...")
+
+            # Get all configured hosts
+            for host_ref in _ssh_manager.clients.keys():
+                logger.info(f"Cleaning up processes on {host_ref}...")
+
+                cleanup_cmd = """
+                    echo "Emergency cleanup started at: $(date '+%Y-%m-%d %H:%M:%S.%N')"
+
+                    # Stop all eBPF tool processes
+                    echo "Stopping eBPF tool processes..."
+                    sudo pkill -f "python2.*ebpf-tools/performance" 2>/dev/null || true
+                    sudo pkill -f "python.*ebpf-tools/performance" 2>/dev/null || true
+
+                    # Stop monitoring processes (as smartx user)
+                    echo "Stopping monitoring processes..."
+                    pkill -f "pidstat.*ebpf" 2>/dev/null || true
+                    pkill -f "while ps -p.*ebpf" 2>/dev/null || true
+
+                    # Stop performance test servers
+                    echo "Stopping performance test servers..."
+                    sudo pkill -f "iperf3.*-s" 2>/dev/null || true
+                    sudo pkill -f "netserver" 2>/dev/null || true
+
+                    echo "Emergency cleanup completed at: $(date '+%Y-%m-%d %H:%M:%S.%N')"
+                """
+
+                try:
+                    _ssh_manager.execute_command(host_ref, cleanup_cmd)
+                    logger.info(f"Cleanup completed on {host_ref}")
+                except Exception as e:
+                    logger.error(f"Failed to cleanup {host_ref}: {e}")
+
+            logger.warning("Emergency cleanup finished")
+
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+
+    if _ssh_manager:
+        try:
+            _ssh_manager.close_all()
+        except:
+            pass
+
+
+def signal_handler(signum, frame):
+    """Handle interrupt signals"""
+    logger = logging.getLogger(__name__)
+    logger.warning(f"\nReceived signal {signum}, initiating cleanup...")
+    cleanup_on_exit()
+    sys.exit(130)
+
+
 def main():
     """Main execution function"""
+    global _ssh_manager, _test_executor
+
     parser = argparse.ArgumentParser(description='Automated eBPF Performance Testing')
     parser.add_argument('--config-dir', default='../config',
                        help='Configuration directory path')
@@ -52,6 +130,11 @@ def main():
     # Setup logging
     setup_logging(args.log_level)
     logger = logging.getLogger(__name__)
+
+    # Register signal handlers and cleanup
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    atexit.register(cleanup_on_exit)
 
     try:
         # Get absolute config directory path
@@ -118,6 +201,7 @@ def main():
 
         # Initialize managers
         ssh_manager = SSHManager(configs['ssh'])
+        _ssh_manager = ssh_manager  # Store globally for cleanup
 
         # Get workdir from first available host
         first_host = list(configs['ssh']['ssh_hosts'].keys())[0]
@@ -126,6 +210,7 @@ def main():
 
         # Initialize test executor with full config
         test_executor = TestExecutor(ssh_manager, path_manager, configs)
+        _test_executor = test_executor  # Store globally for cleanup
 
         # Execute workflow
         with ssh_manager:
@@ -152,10 +237,12 @@ def main():
         return 0 if successful_cycles == total_cycles else 1
 
     except KeyboardInterrupt:
-        logger.info("Execution interrupted by user")
+        logger.warning("Execution interrupted by user")
+        # cleanup_on_exit will be called automatically by signal_handler
         return 130
     except Exception as e:
         logger.error(f"Execution failed: {str(e)}", exc_info=True)
+        # cleanup_on_exit will be called automatically by atexit
         return 1
 
 

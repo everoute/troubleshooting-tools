@@ -155,10 +155,29 @@ def main():
 
         # Filter configurations based on arguments
         if args.tools:
-            filtered_tools = {k: v for k, v in configs['ebpf']['ebpf_tools'].items()
-                            if v['id'] in args.tools}
+            def _normalize_tool_id(value: str) -> str:
+                return value.strip().lower().replace('-', '_')
+
+            requested_tool_ids = {_normalize_tool_id(tool) for tool in args.tools}
+            available_tools = configs['ebpf']['ebpf_tools']
+            matched_tool_ids = {
+                tool_def['id']
+                for tool_def in available_tools.values()
+                if _normalize_tool_id(tool_def['id']) in requested_tool_ids
+            }
+
+            filtered_tools = {
+                key: tool_def
+                for key, tool_def in available_tools.items()
+                if tool_def['id'] in matched_tool_ids
+            }
+
+            unmatched = requested_tool_ids - {_normalize_tool_id(tid) for tid in matched_tool_ids}
+            if unmatched:
+                logger.warning(f"No matching tool definitions found for: {sorted(unmatched)}")
+
             configs['ebpf']['ebpf_tools'] = filtered_tools
-            logger.info(f"Filtered to tools: {args.tools}")
+            logger.info(f"Filtered to tools: {sorted(matched_tool_ids) if matched_tool_ids else []}")
 
         if args.environments:
             filtered_envs = {k: v for k, v in configs['env']['test_environments'].items()

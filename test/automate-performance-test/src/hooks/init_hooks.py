@@ -224,9 +224,22 @@ class InitHooks:
                     ATTEMPT=0
 
                     while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
-                        # Find python process that is child of TOOL_PID
-                        # Using simple grep + awk pipeline to avoid complex quote escaping
-                        FOUND_PID=$(ps -eo pid,ppid,cmd | grep " $TOOL_PID " | grep python2 | grep "ebpf-tools/performance" | head -1 | awk "{{print \$1}}")
+                        # Prefer direct child python processes (handles python, python2, python3)
+                        FOUND_PID=$(ps -eo pid,ppid,comm,args --no-headers | awk -v target="$TOOL_PID" "(\$2 == target && \$3 ~ /^python/ && index(\$0, \\\"ebpf-tools/\\\")) {{print \$1; exit}}")
+                        if [ -n "$FOUND_PID" ]; then
+                            echo "DEBUG: Direct child lookup located python PID $FOUND_PID" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
+                        fi
+
+                        # Fallback: search entire process group for python (covers sudo -> bash -> python)
+                        if [ -z "$FOUND_PID" ]; then
+                            PGID=$(ps -o pgid= -p $TOOL_PID 2>/dev/null | tr -d " ")
+                            if [ -n "$PGID" ]; then
+                                FOUND_PID=$(ps -eo pid,pgid,comm,args --no-headers | awk -v target="$PGID" "(\$2 == target && \$3 ~ /^python/ && index(\$0, \\\"ebpf-tools/\\\")) {{print \$1; exit}}")
+                                if [ -n "$FOUND_PID" ]; then
+                                    echo "DEBUG: Process-group lookup located python child PID $FOUND_PID" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
+                                fi
+                            fi
+                        fi
 
                         if [ -n "$FOUND_PID" ]; then
                             ACTUAL_PID=$FOUND_PID
@@ -300,7 +313,7 @@ class InitHooks:
                 sleep 1
 
                 # Read and output the actual PID for monitoring (轮询等待 PID 文件创建)
-                MAX_WAIT=10
+                MAX_WAIT=20
                 WAITED=0
                 while [ ! -f {ebpf_result_path}/ebpf_pid_{timestamp}.txt ] && [ $WAITED -lt $MAX_WAIT ]; do
                     sleep 0.5
@@ -317,9 +330,9 @@ class InitHooks:
             logger.info(f"DEBUG: About to execute SSH command to start eBPF on host {ebpf_host_ref}")
             stdout, stderr, status = self.ssh_manager.execute_command(ebpf_host_ref, start_cmd)
             logger.info(f"DEBUG: SSH command returned - status={status}, stdout={repr(stdout)}, stderr={repr(stderr)}")
-            if status == 0 and stdout:
-                logger.info(f"DEBUG: SSH command succeeded and has stdout, continuing with monitoring setup")
-                ebpf_pid = stdout.strip()
+            ebpf_pid = (stdout or "").strip()
+            if status == 0 and ebpf_pid:
+                logger.info(f"DEBUG: SSH command succeeded and detected eBPF PID {ebpf_pid}, continuing with monitoring setup")
                 results['ebpf_pid'] = ebpf_pid
                 results['tasks'].append({
                     'name': 'start_ebpf_program',
@@ -333,6 +346,43 @@ class InitHooks:
                 self.ssh_manager.execute_command(ebpf_host_ref, monitor_start_cmd)
 
                 self._start_tool_monitoring(ebpf_host_ref, ebpf_pid, ebpf_result_path, timestamp)
+
+                # Annotate monitor_start with monitor PIDs (resource + logsize)
+                monitor_pid_annotate_cmd = f"""
+                    RESOURCE_PID_FILE="{ebpf_result_path}/ebpf_monitoring/resource_monitor_pid_{timestamp}.txt"
+                    LOGSIZE_PID_FILE="{ebpf_result_path}/ebpf_monitoring/logsize_monitor_pid_{timestamp}.txt"
+                    MONITOR_START_FILE="{ebpf_result_path}/ebpf_monitoring/monitor_start_{timestamp}.log"
+
+                    # Wait briefly for PID files to appear
+                    ATTEMPTS=0
+                    while [ ! -f "$RESOURCE_PID_FILE" ] && [ $ATTEMPTS -lt 20 ]; do
+                        sleep 0.2
+                        ATTEMPTS=$((ATTEMPTS + 1))
+                    done
+
+                    if [ -f "$RESOURCE_PID_FILE" ]; then
+                        RESOURCE_PID=$(cat "$RESOURCE_PID_FILE" 2>/dev/null)
+                        if [ -n "$RESOURCE_PID" ]; then
+                            echo "Resource monitor PID: $RESOURCE_PID" >> "$MONITOR_START_FILE"
+                        else
+                            echo "Resource monitor PID: unavailable" >> "$MONITOR_START_FILE"
+                        fi
+                    else
+                        echo "Resource monitor PID file missing: $RESOURCE_PID_FILE" >> "$MONITOR_START_FILE"
+                    fi
+
+                    if [ -f "$LOGSIZE_PID_FILE" ]; then
+                        LOGSIZE_PID=$(cat "$LOGSIZE_PID_FILE" 2>/dev/null)
+                        if [ -n "$LOGSIZE_PID" ]; then
+                            echo "Logsize monitor PID: $LOGSIZE_PID" >> "$MONITOR_START_FILE"
+                        else
+                            echo "Logsize monitor PID: unavailable" >> "$MONITOR_START_FILE"
+                        fi
+                    else
+                        echo "Logsize monitor PID file missing: $LOGSIZE_PID_FILE" >> "$MONITOR_START_FILE"
+                    fi
+                """
+                self.ssh_manager.execute_command(ebpf_host_ref, monitor_pid_annotate_cmd)
                 results['tasks'].append({
                     'name': 'start_tool_monitoring',
                     'status': True
@@ -352,7 +402,7 @@ class InitHooks:
                 }
                 logger.info(f"DEBUG: Stored case context for {tool_id}_{case_id}: timestamp={timestamp}, result_path={result_path}, ebpf_result_path={ebpf_result_path}, ebpf_host_ref={ebpf_host_ref}, ebpf_pid={ebpf_pid}")
             else:
-                logger.warning(f"DEBUG: SSH command failed or no stdout - status={status}, stdout={repr(stdout)}, will NOT start monitoring")
+                logger.warning(f"DEBUG: SSH command failed or did not return a PID - status={status}, stdout={repr(stdout)}, stderr={repr(stderr)}. Skipping monitoring setup.")
 
         logger.info(f"DEBUG: Returning from _execute_case_init with results={results}")
         return results
@@ -477,29 +527,88 @@ class InitHooks:
         interval = self.config.get('perf', {}).get('performance_tests', {}).get('monitoring', {}).get('interval', 2)
 
         # Combined CPU and Memory monitoring using pidstat
-        # IMPORTANT: Use setsid to create new process group for reliable cleanup
-        # Strategy: Monitor process runs in its own process group, making cleanup easier
-        resource_cmd = f"""
-            # Start monitoring in background with new process group
-            setsid bash -lc "
-                # Save process group ID (same as PID for session leader)
-                echo $$ > {result_path}/ebpf_monitoring/resource_monitor_pid_{timestamp}.txt
-                echo '# eBPF Resource Monitoring - CPU and Memory statistics using pidstat' > {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
-                echo '# DEBUG: Starting resource monitoring for PID {ebpf_pid} with interval {interval}s' >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
+        # NEW APPROACH: Use a script file to avoid bash -lc and complex quoting issues
+        # This eliminates the problems with nested quotes and command substitutions
 
-                # Write start timestamp header for absolute time reference
-                echo '# START_DATETIME: '$(date '+%Y-%m-%d %H:%M:%S.%N')'  START_EPOCH: '$(date +%s)'  INTERVAL: {interval}s  PID: {ebpf_pid}' >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
-                # Stream pidstat with -h; Time column is epoch seconds; use START_EPOCH to map
-                pidstat -h -u -r -p {ebpf_pid} {interval} >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log 2>&1
+        monitor_script_path = f"{result_path}/ebpf_monitoring/resource_monitor_{timestamp}.sh"
 
-                echo "# DEBUG: resource monitoring ended for PID {ebpf_pid}" >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log
-            " >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log 2>&1 &
+        # Generate monitoring script content
+        monitor_script_content = f"""#!/bin/bash
+# eBPF Resource Monitor Script
+# Auto-generated at {timestamp}
 
-            # Wait a moment for PID file to be created
-            sleep 0.2
+RESULT_PATH="{result_path}/ebpf_monitoring"
+TIMESTAMP="{timestamp}"
+EBPF_PID="{ebpf_pid}"
+INTERVAL="{interval}"
+
+# Save our PID
+echo $$ > "$RESULT_PATH/resource_monitor_pid_$TIMESTAMP.txt"
+
+# Write log headers
+echo '# eBPF Resource Monitoring - CPU and Memory statistics using pidstat' > "$RESULT_PATH/ebpf_resource_monitor_$TIMESTAMP.log"
+echo "# DEBUG: Starting resource monitoring for PID $EBPF_PID with interval ${{INTERVAL}}s" >> "$RESULT_PATH/ebpf_resource_monitor_$TIMESTAMP.log"
+
+# Get and log our PGID
+MY_PGID=$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')
+echo "# DEBUG: Resource monitor process PID: $$, PGID: $MY_PGID" >> "$RESULT_PATH/ebpf_resource_monitor_$TIMESTAMP.log"
+
+# Check pidstat availability
+if ! command -v pidstat >/dev/null 2>&1; then
+    echo '# ERROR: pidstat binary not found in PATH' >> "$RESULT_PATH/ebpf_resource_monitor_$TIMESTAMP.log"
+    exit 1
+fi
+
+# Write start timestamp header
+START_DATETIME=$(date '+%Y-%m-%d %H:%M:%S.%N')
+START_EPOCH=$(date +%s)
+echo "# START_DATETIME: $START_DATETIME  START_EPOCH: $START_EPOCH  INTERVAL: ${{INTERVAL}}s  PID: $EBPF_PID" >> "$RESULT_PATH/ebpf_resource_monitor_$TIMESTAMP.log"
+
+# Run pidstat monitoring
+pidstat -h -u -r -p "$EBPF_PID" "$INTERVAL" >> "$RESULT_PATH/ebpf_resource_monitor_$TIMESTAMP.log" 2>&1
+PIDSTAT_STATUS=$?
+
+# Log exit status
+echo "# DEBUG: pidstat exit code: $PIDSTAT_STATUS" >> "$RESULT_PATH/ebpf_resource_monitor_$TIMESTAMP.log"
+echo "# DEBUG: resource monitoring ended for PID $EBPF_PID" >> "$RESULT_PATH/ebpf_resource_monitor_$TIMESTAMP.log"
+
+exit 0
+"""
+
+        # Write script to remote file using heredoc
+        write_script_cmd = f"""cat > {monitor_script_path} << 'MONITOR_SCRIPT_EOF'
+{monitor_script_content}
+MONITOR_SCRIPT_EOF
+chmod +x {monitor_script_path}"""
+
+        logger.info(f"DEBUG: Writing resource monitor script to {monitor_script_path}")
+        stdout, stderr, status = self.ssh_manager.execute_command(host_ref, write_script_cmd)
+        if status != 0:
+            logger.error(f"Failed to create resource monitor script: {stderr}")
+            return
+
+        # Execute script in background with setsid for process group management
+        execute_script_cmd = f"""
+            setsid bash {monitor_script_path} >> {result_path}/ebpf_monitoring/ebpf_resource_monitor_{timestamp}.log 2>&1 &
+            sleep 0.3
         """
-        logger.info(f"DEBUG: resource_cmd = {resource_cmd}")
-        self.ssh_manager.execute_command(host_ref, resource_cmd)
+
+        logger.info(f"DEBUG: Executing resource monitor script: {monitor_script_path}")
+        self.ssh_manager.execute_command(host_ref, execute_script_cmd)
+
+        # Verify PID file creation
+        verify_cmd = f"""
+            if [ -f {result_path}/ebpf_monitoring/resource_monitor_pid_{timestamp}.txt ]; then
+                cat {result_path}/ebpf_monitoring/resource_monitor_pid_{timestamp}.txt
+            else
+                echo "ERROR: PID file not created"
+            fi
+        """
+        stdout, stderr, status = self.ssh_manager.execute_command(host_ref, verify_cmd)
+        if status == 0 and stdout.strip() and "ERROR" not in stdout:
+            logger.info(f"DEBUG: Resource monitor started with PID: {stdout.strip()}")
+        else:
+            logger.warning(f"DEBUG: Could not verify resource monitor PID: {stdout.strip()}")
 
         # Log size monitoring with header and human-readable conversion
         # IMPORTANT: Use setsid to create new process group for reliable cleanup

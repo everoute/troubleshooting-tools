@@ -141,7 +141,9 @@ class PostHooks:
                     local NAME=$2
                     if [ -f "$PIDFILE" ]; then
                         PID=$(cat "$PIDFILE")
-                        if [ -n "$PID" ] && ps -p $PID >/dev/null 2>&1; then
+                        if [ -z "$PID" ]; then
+                            echo "$NAME PID file $PIDFILE did not contain a PID" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
+                        elif ps -p $PID >/dev/null 2>&1; then
                             # Get process group ID
                             PGID=$(ps -o pgid= -p $PID 2>/dev/null | tr -d ' ')
                             echo "Stopping $NAME process PID $PID (PGID: $PGID)" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
@@ -170,7 +172,7 @@ class PostHooks:
 
                             echo "$NAME process stopped at: $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
                         else
-                            echo "$NAME process PID $PID not running or invalid" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
+                            echo "$NAME process PID $PID already exited before cleanup" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
                         fi
                         rm -f "$PIDFILE"
                     else
@@ -188,7 +190,6 @@ class PostHooks:
 
                 # Fallback: try to find and kill by any timestamp if exact timestamp fails
                 if [ ! -f "{ebpf_result_path}/ebpf_monitoring/resource_monitor_pid_{timestamp}.txt" ]; then
-                    echo "DEBUG: Exact timestamp PID files not found, searching for any PID files in {ebpf_result_path}/ebpf_monitoring/" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
                     for pidfile in {ebpf_result_path}/ebpf_monitoring/resource_monitor_pid_*.txt; do
                         if [ -f "$pidfile" ]; then
                             kill_by_pidfile "$pidfile" "Resource Monitor (fallback)"
@@ -203,6 +204,10 @@ class PostHooks:
 
                 echo "Case monitoring stopped at: $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
                 echo "DEBUG: Monitoring stop commands completed" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
+
+                # Clean up monitoring script files
+                rm -f {ebpf_result_path}/ebpf_monitoring/resource_monitor_{timestamp}.sh
+                echo "DEBUG: Cleaned up monitoring script files" >> {ebpf_result_path}/ebpf_monitoring/monitor_stop_{timestamp}.log
             """
             logger.info(f"DEBUG: monitoring_cmd = {monitoring_cmd}")
             self.ssh_manager.execute_command(ebpf_host_ref, monitoring_cmd)

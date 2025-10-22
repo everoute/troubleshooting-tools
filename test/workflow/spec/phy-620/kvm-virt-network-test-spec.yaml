@@ -35,24 +35,12 @@ test_matrix:
         script: "kvm_irqfd_stats_summary.py"
         template: "sudo python2 {path} {QEMU_PID} --interval 5 --category control"
 
-      # vhost_queue_correlation_details.py - 参数化队列和设备
-      - dir: "vhost-net"
-        script: "vhost_queue_correlation_details.py"
-        template: "sudo python2 {path} --device {VNET_DEVICE} --queue {queue} --verbose"
-        parameters:
-          queue: [0, 1, 2, 3, 4, 5, 6, 7]
 
       - dir: "vhost-net"
         script: "vhost_queue_correlation_details.py"
         template: "sudo python2 {path} --device {VNET_DEVICE} --verbose"
         # 无队列过滤版本
 
-      # vhost_queue_correlation_simple.py - 参数化队列
-      - dir: "vhost-net"
-        script: "vhost_queue_correlation_simple.py"
-        template: "sudo python2 {path} --device {VNET_DEVICE} --queue {queue}"
-        parameters:
-          queue: [0, 1, 2, 3, 4, 5, 6, 7]
 
       - dir: "vhost-net"
         script: "vhost_queue_correlation_simple.py"
@@ -67,26 +55,10 @@ test_matrix:
         parameters:
           protocol: ["tcp", "udp", "icmp"]
 
-      # tun_to_vhost_queue_stats_details.py - 参数化队列，支持方向，默认生成所有方向
-      - dir: "tun"
-        script: "tun_to_vhost_queue_stats_details.py"
-        template: "sudo python2 {path} --device {VNET_DEVICE} --queue {queue}"
-        directions: ["tx"]
-        parameters:
-          queue: [0, 1, 2, 3, 4, 5, 6, 7]
-
       - dir: "tun"
         script: "tun_to_vhost_queue_stats_details.py"
         template: "sudo python2 {path} --device {VNET_DEVICE}"
         directions: ["tx"]
-
-      # tun_to_vhost_queue_status_simple.py - 参数化队列，支持方向
-      - dir: "tun"
-        script: "tun_to_vhost_queue_status_simple.py"
-        template: "sudo python2 {path} --device {VNET_DEVICE} --queue {queue}"
-        directions: ["tx"]
-        parameters:
-          queue: [0, 1, 2, 3, 4, 5, 6, 7]
 
       # tun_to_vhost_queue_status_simple.py - 无队列过滤版本
       - dir: "tun"

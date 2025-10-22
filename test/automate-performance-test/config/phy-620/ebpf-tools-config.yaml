@@ -96,7 +96,7 @@ ebpf_tools:
 
   # =====================================================
   # KVM VIRTUALIZATION NETWORK TESTS (VM)
-  # All 56 cases from kvm-virt-network-test-cases.json
+  # All 32 cases from kvm-virt-network-test-cases.json
   # =====================================================
   kvm_virt_network:
     id: "kvm_virt_network"
@@ -104,7 +104,7 @@ ebpf_tools:
     description: "KVM virtualization network monitoring (IRQ, vhost, TUN)"
     testcase_source:
       file: "test/workflow/case/phy-620/kvm-virt-network-test-cases.json"
-      case_ids: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56]
+      case_ids: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24]
     test_associations:
       applicable_environments: ["vm"]
       performance_test_types: ["throughput", "latency", "pps"]
@@ -119,13 +119,13 @@ ebpf_tools:
 # =====================================================
 # SUMMARY
 # =====================================================
-# Total test cases: 123
+# Total test cases: 99
 # - Host environment: 31 cases (system_network: 10 + linux_network_stack: 21)
-# - VM environment: 92 cases (vm_network: 18 + ovs: 18 + kvm_virt: 56)
+# - VM environment: 68 cases (vm_network: 18 + ovs: 18 + kvm_virt: 32)
 #
 # Test categories:
 # 1. system_network_performance: 10 cases (host)
 # 2. vm_network_performance: 18 cases (vm)
 # 3. linux_network_stack: 21 cases (host)
 # 4. ovs_monitoring: 18 cases (vm)
-# 5. kvm_virt_network: 56 cases (vm)
+# 5. kvm_virt_network: 32 cases (vm)

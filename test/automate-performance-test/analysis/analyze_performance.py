@@ -15,7 +15,6 @@ from src.data_locator import DataLocator
 from src.parsers import PerformanceParser, ResourceParser, LogSizeParser
 from src.comparator import BaselineComparator
 from src.report_generator import ReportGenerator
-from src.report_generator_v2 import ReportGeneratorV2
 from src.utils import parse_tool_case_name
 
 logger = logging.getLogger(__name__)
@@ -254,14 +253,6 @@ def main():
         help="Enable verbose logging"
     )
 
-    parser.add_argument(
-        "--report-style",
-        type=str,
-        choices=["combined", "separated", "both"],
-        default="both",
-        help="Report generation style (default: both)"
-    )
-
     args = parser.parse_args()
 
     # Load configuration
@@ -305,7 +296,6 @@ def main():
     locator = DataLocator(iteration_path)
     output_dir = os.path.join(script_dir, config["output_dir"])
     report_gen = ReportGenerator(output_dir)
-    report_gen_v2 = ReportGeneratorV2(output_dir)
 
     # Determine topics to analyze
     if args.topic:
@@ -362,21 +352,8 @@ def main():
         # Generate reports
         if results:
             try:
-                # Generate combined report (original style)
-                if args.report_style in ["combined", "both"]:
-                    report_gen.generate(
-                        topic,
-                        results,
-                        iteration,
-                        formats=config["output_formats"]
-                    )
-                    logger.info(f"Generated combined reports for topic: {topic}")
-
-                # Generate separated reports (new style)
-                if args.report_style in ["separated", "both"]:
-                    report_gen_v2.generate_all(topic, results, iteration)
-                    logger.info(f"Generated separated reports for topic: {topic}")
-
+                report_gen.generate_all(topic, results, iteration)
+                logger.info(f"Generated reports for topic: {topic}")
             except Exception as e:
                 logger.error(f"Failed to generate reports for {topic}: {e}", exc_info=True)
         else:

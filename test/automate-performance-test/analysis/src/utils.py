@@ -5,7 +5,7 @@ import re
 import glob
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, List
 
 logger = logging.getLogger(__name__)
@@ -59,14 +59,23 @@ def parse_datetime(datetime_str: str) -> datetime:
 def datetime_to_epoch(datetime_str: str) -> int:
     """Convert datetime string to Unix timestamp
 
+    IMPORTANT: Assumes the input datetime string is in UTC timezone.
+    The timing files from performance tests are recorded in UTC.
+
     Args:
-        datetime_str: Datetime string
+        datetime_str: Datetime string in UTC timezone
 
     Returns:
         Unix timestamp (seconds since epoch)
     """
+    # Parse the datetime string (returns naive datetime object)
     dt = parse_datetime(datetime_str)
-    return int(dt.timestamp())
+
+    # The timing files are recorded in UTC
+    # We need to treat the naive datetime as if it's in UTC
+    dt_with_tz = dt.replace(tzinfo=timezone.utc)
+
+    return int(dt_with_tz.timestamp())
 
 
 def epoch_to_datetime(epoch: int) -> str:

@@ -1,5 +1,6 @@
 """Resource Monitor Parser - Parse eBPF resource monitoring logs (pidstat output)"""
 
+import re
 import logging
 from typing import Dict, List, Optional, Tuple
 
@@ -30,6 +31,10 @@ class ResourceParser:
         Returns:
             Dictionary with full cycle stats and time range stats
         """
+        # Parse monitor metadata (interval, etc.)
+        metadata = ResourceParser._parse_monitor_metadata(log_path)
+        interval = metadata.get("interval", 2)
+
         # Parse all records
         records = ResourceParser._parse_records(log_path)
         if not records:
@@ -43,17 +48,58 @@ class ResourceParser:
         time_range_stats = {}
         if time_ranges:
             for name, (start_epoch, end_epoch) in time_ranges.items():
+                # Adjust filtering to account for pidstat sampling semantics
+                # A record at timestamp T contains stats for [T-interval, T]
+                # We want records that fully cover the test period [start, end]
+                # So we filter: start + interval <= T <= end + interval
                 filtered = [r for r in records
-                           if start_epoch <= r["timestamp"] <= end_epoch]
+                           if start_epoch + interval <= r["timestamp"] <= end_epoch + interval]
                 if filtered:
                     time_range_stats[name] = ResourceParser._calculate_stats(filtered)
                 else:
-                    logger.warning(f"No records in time range {name}: {start_epoch}-{end_epoch}")
+                    logger.warning(f"No records in time range {name}: {start_epoch+interval}-{end_epoch+interval} (adjusted for interval={interval}s)")
 
         return {
             "full_cycle": full_cycle,
             "time_range_stats": time_range_stats
         }
+
+    @staticmethod
+    def _parse_monitor_metadata(log_path: str) -> Dict:
+        """Parse monitor metadata from log header
+
+        Extracts information from header lines like:
+            # START_DATETIME: 2025-10-22 18:25:53.333063770  START_EPOCH: 1761128753  INTERVAL: 2s  PID: 57202
+
+        Args:
+            log_path: Path to resource monitor log file
+
+        Returns:
+            Dictionary with metadata (interval, start_epoch, etc.)
+        """
+        metadata = {"interval": 2}  # Default interval
+
+        try:
+            with open(log_path, 'r') as f:
+                for line in f:
+                    if line.startswith('#'):
+                        # Parse INTERVAL from header line
+                        if "INTERVAL:" in line:
+                            match = re.search(r'INTERVAL:\s*(\d+)s', line)
+                            if match:
+                                metadata["interval"] = int(match.group(1))
+                        # Could also parse START_EPOCH, PID if needed in future
+                        if "START_EPOCH:" in line:
+                            match = re.search(r'START_EPOCH:\s*(\d+)', line)
+                            if match:
+                                metadata["start_epoch"] = int(match.group(1))
+                    elif line.strip() and not line.startswith('Linux'):
+                        # Stop at first data line (after headers)
+                        break
+        except Exception as e:
+            logger.warning(f"Failed to parse monitor metadata from {log_path}: {e}")
+
+        return metadata
 
     @staticmethod
     def _parse_records(log_path: str) -> List[Dict]:

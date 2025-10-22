@@ -1,4 +1,4 @@
-"""Report Generator - Generate analysis reports in various formats"""
+"""Report Generator - Generate separated analysis reports"""
 
 import os
 import csv
@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 class ReportGenerator:
-    """Generator for analysis reports"""
+    """Report generator with separated report types and hierarchical headers"""
 
     def __init__(self, output_dir: str):
         """Initialize ReportGenerator
@@ -21,154 +21,267 @@ class ReportGenerator:
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
 
-    def generate(self, topic: str, results: List[Dict], iteration: str, formats: List[str] = None):
-        """Generate reports in specified formats
+    def generate_all(self, topic: str, results: List[Dict], iteration: str):
+        """Generate all types of reports
 
         Args:
             topic: Topic name
             results: List of analysis results for all tool cases
             iteration: Iteration name
-            formats: List of output formats (default: ["csv", "markdown"])
         """
-        if formats is None:
-            formats = ["csv", "markdown"]
+        logger.info(f"Generating separated reports for {topic}")
 
-        if "csv" in formats:
-            self.generate_csv(topic, results, iteration)
+        # Generate separated reports
+        self.generate_latency_report(topic, results, iteration)
+        self.generate_throughput_report(topic, results, iteration)
+        self.generate_pps_report(topic, results, iteration)
+        self.generate_resources_report(topic, results, iteration)
 
-        if "markdown" in formats:
-            self.generate_markdown(topic, results, iteration)
+        # Generate overview markdown
+        self.generate_overview_markdown(topic, results, iteration)
 
-        logger.info(f"Generated {len(formats)} report(s) for topic {topic}")
+        logger.info(f"Generated 5 report files for topic {topic}")
 
-    def generate_csv(self, topic: str, results: List[Dict], iteration: str):
-        """Generate CSV report
+    def generate_latency_report(self, topic: str, results: List[Dict], iteration: str):
+        """Generate latency-only report
 
         Args:
             topic: Topic name
             results: List of analysis results
             iteration: Iteration name
         """
-        output_path = os.path.join(self.output_dir, f"{topic}_summary_{iteration}.csv")
+        output_path = os.path.join(self.output_dir, f"{topic}_latency_{iteration}.csv")
 
-        # Define headers
-        headers = self._get_csv_headers()
+        headers = [
+            "Tool Case",
+            "Protocol",
+            "Direction",
+            "TCP RR Min (us)",
+            "TCP RR Mean (us)",
+            "TCP RR Max (us)",
+            "TCP RR Baseline (us)",
+            "TCP RR Diff (%)",
+            "UDP RR Min (us)",
+            "UDP RR Mean (us)",
+            "UDP RR Max (us)",
+            "UDP RR Baseline (us)",
+            "UDP RR Diff (%)"
+        ]
 
-        # Extract rows
         rows = []
         for result in results:
-            row = self._extract_row_data(result)
+            row = self._extract_latency_row(result)
             if row:
                 rows.append(row)
 
-        # Write CSV
         try:
             with open(output_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
                 writer.writerow(headers)
                 writer.writerows(rows)
-
-            logger.info(f"Generated CSV report: {output_path}")
+            logger.info(f"Generated latency report: {output_path}")
         except Exception as e:
-            logger.error(f"Failed to generate CSV report: {e}")
+            logger.error(f"Failed to generate latency report: {e}")
 
-    def generate_markdown(self, topic: str, results: List[Dict], iteration: str):
-        """Generate Markdown report
+    def generate_throughput_report(self, topic: str, results: List[Dict], iteration: str):
+        """Generate throughput report
 
         Args:
             topic: Topic name
             results: List of analysis results
             iteration: Iteration name
         """
-        output_path = os.path.join(self.output_dir, f"{topic}_summary_{iteration}.md")
+        output_path = os.path.join(self.output_dir, f"{topic}_throughput_{iteration}.csv")
+
+        headers = [
+            "Tool Case",
+            "Protocol",
+            "Direction",
+            # Client
+            "Client Single (Gbps)",
+            "Client Single Baseline (Gbps)",
+            "Client Single Diff (%)",
+            "Client Multi (Gbps)",
+            "Client Multi Baseline (Gbps)",
+            "Client Multi Diff (%)",
+            # Server
+            "Server Single (Gbps)",
+            "Server Single Baseline (Gbps)",
+            "Server Single Diff (%)",
+            "Server Multi (Gbps)",
+            "Server Multi Baseline (Gbps)",
+            "Server Multi Diff (%)"
+        ]
+
+        rows = []
+        for result in results:
+            row = self._extract_throughput_row(result)
+            if row:
+                rows.append(row)
+
+        try:
+            with open(output_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(headers)
+                writer.writerows(rows)
+            logger.info(f"Generated throughput report: {output_path}")
+        except Exception as e:
+            logger.error(f"Failed to generate throughput report: {e}")
+
+    def generate_pps_report(self, topic: str, results: List[Dict], iteration: str):
+        """Generate PPS report
+
+        Args:
+            topic: Topic name
+            results: List of analysis results
+            iteration: Iteration name
+        """
+        output_path = os.path.join(self.output_dir, f"{topic}_pps_{iteration}.csv")
+
+        headers = [
+            "Tool Case",
+            "Protocol",
+            "Direction",
+            # Client
+            "Client Single PPS",
+            "Client Single Baseline",
+            "Client Single Diff (%)",
+            "Client Multi PPS",
+            "Client Multi Baseline",
+            "Client Multi Diff (%)",
+            # Server
+            "Server Single PPS",
+            "Server Single Baseline",
+            "Server Single Diff (%)",
+            "Server Multi PPS",
+            "Server Multi Baseline",
+            "Server Multi Diff (%)"
+        ]
+
+        rows = []
+        for result in results:
+            row = self._extract_pps_row(result)
+            if row:
+                rows.append(row)
+
+        try:
+            with open(output_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(headers)
+                writer.writerows(rows)
+            logger.info(f"Generated PPS report: {output_path}")
+        except Exception as e:
+            logger.error(f"Failed to generate PPS report: {e}")
+
+    def generate_resources_report(self, topic: str, results: List[Dict], iteration: str):
+        """Generate eBPF resources report
+
+        Args:
+            topic: Topic name
+            results: List of analysis results
+            iteration: Iteration name
+        """
+        output_path = os.path.join(self.output_dir, f"{topic}_resources_{iteration}.csv")
+
+        # Create hierarchical headers
+        # Row 1: Main categories (each row will have its own time ranges)
+        header_row1 = [
+            "Tool Case",
+            "Protocol",
+            "Direction",
+            "PPS Single", "", "", "",  # Time Range, CPU Avg, CPU Max, Mem Max
+            "PPS Multi", "", "", "",
+            "TP Single", "", "", "",
+            "TP Multi", "", "", "",
+            "Full Cycle", "", "",
+            "Log Size", ""
+        ]
+
+        # Row 2: Sub-column headers
+        header_row2 = [
+            "",  # Tool Case
+            "",  # Protocol
+            "",  # Direction
+            "Time Range", "CPU Avg (%)", "CPU Max (%)", "Mem Max (KB)",  # PPS Single
+            "Time Range", "CPU Avg (%)", "CPU Max (%)", "Mem Max (KB)",  # PPS Multi
+            "Time Range", "CPU Avg (%)", "CPU Max (%)", "Mem Max (KB)",  # TP Single
+            "Time Range", "CPU Avg (%)", "CPU Max (%)", "Mem Max (KB)",  # TP Multi
+            "Max RSS (KB)", "Max VSZ (KB)", "Total Samples",  # Full Cycle
+            "Size (Bytes)", "Size (Human)"  # Log Size
+        ]
+
+        rows = []
+        for result in results:
+            row = self._extract_resources_row(result)
+            if row:
+                rows.append(row)
+
+        try:
+            with open(output_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(header_row1)
+                writer.writerow(header_row2)
+                writer.writerows(rows)
+            logger.info(f"Generated resources report: {output_path}")
+        except Exception as e:
+            logger.error(f"Failed to generate resources report: {e}")
+
+    def generate_overview_markdown(self, topic: str, results: List[Dict], iteration: str):
+        """Generate overview markdown report
+
+        Args:
+            topic: Topic name
+            results: List of analysis results
+            iteration: Iteration name
+        """
+        output_path = os.path.join(self.output_dir, f"{topic}_overview_{iteration}.md")
 
         try:
             with open(output_path, 'w', encoding='utf-8') as f:
                 # Write header
-                f.write(f"# {topic.replace('_', ' ').title()} - Summary Report\n\n")
+                f.write(f"# {topic.replace('_', ' ').title()} - Analysis Overview\n\n")
                 f.write(f"**Iteration:** {iteration}\n")
                 f.write(f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"**Total Cases:** {len(results)}\n\n")
 
-                # Write table
-                f.write(self._generate_markdown_table(results))
+                # Write summary statistics
+                f.write("## Summary Statistics\n\n")
+                stats = self._calculate_summary_stats(results)
+                f.write(f"- Total test cases: {stats['total_cases']}\n")
+                f.write(f"- Cases with latency data: {stats['latency_count']}\n")
+                f.write(f"- Cases with throughput data: {stats['throughput_count']}\n")
+                f.write(f"- Cases with PPS data: {stats['pps_count']}\n")
+                f.write(f"- Cases with resource data: {stats['resource_count']}\n\n")
+
+                # Write performance summary table
+                f.write("## Performance Summary\n\n")
+                f.write("| Tool Case | Protocol | Dir | Latency Diff (%) | Throughput Diff (%) | PPS Diff (%) |\n")
+                f.write("|-----------|----------|-----|------------------|---------------------|---------------|\n")
+
+                for result in results:
+                    row = self._extract_summary_row(result)
+                    f.write("| " + " | ".join(str(v) for v in row) + " |\n")
 
                 # Write notes
-                f.write("\n\n## Notes\n\n")
+                f.write("\n## Notes\n\n")
                 f.write("- Positive diff% for latency indicates performance degradation (higher latency)\n")
-                f.write("- Negative diff% for throughput/PPS indicates performance degradation (lower throughput/PPS)\n")
-                f.write("- N/A indicates missing data\n")
+                f.write("- Negative diff% for throughput/PPS indicates performance degradation\n")
+                f.write("- N/A indicates missing data\n\n")
 
-            logger.info(f"Generated Markdown report: {output_path}")
+                # Write report file list
+                f.write("## Detailed Reports\n\n")
+                f.write(f"1. **Latency Report**: `{topic}_latency_{iteration}.csv`\n")
+                f.write(f"2. **Throughput Report**: `{topic}_throughput_{iteration}.csv`\n")
+                f.write(f"3. **PPS Report**: `{topic}_pps_{iteration}.csv`\n")
+                f.write(f"4. **Resources Report**: `{topic}_resources_{iteration}.csv`\n")
+
+            logger.info(f"Generated overview markdown: {output_path}")
         except Exception as e:
-            logger.error(f"Failed to generate Markdown report: {e}")
+            logger.error(f"Failed to generate overview markdown: {e}")
 
-    def _get_csv_headers(self) -> List[str]:
-        """Get CSV column headers
-
-        Returns:
-            List of header strings
-        """
-        return [
-            "Tool Case",
-            "Protocol",
-            "Direction",
-            # Latency
-            "Latency TCP Mean (us)",
-            "Latency TCP Diff (%)",
-            "Latency UDP Mean (us)",
-            "Latency UDP Diff (%)",
-            # Throughput - Client
-            "Throughput Single Client (Gbps)",
-            "Throughput Single Client Diff (%)",
-            "Throughput Multi Client (Gbps)",
-            "Throughput Multi Client Diff (%)",
-            # Throughput - Server
-            "Throughput Single Server (Gbps)",
-            "Throughput Single Server Diff (%)",
-            "Throughput Multi Server (Gbps)",
-            "Throughput Multi Server Diff (%)",
-            # PPS - Client
-            "PPS Single Client",
-            "PPS Single Client Diff (%)",
-            "PPS Multi Client",
-            "PPS Multi Client Diff (%)",
-            # PPS - Server
-            "PPS Single Server",
-            "PPS Single Server Diff (%)",
-            "PPS Multi Server",
-            "PPS Multi Server Diff (%)",
-            # eBPF Resources - PPS workload
-            "CPU Avg (%) - PPS Single",
-            "CPU Max (%) - PPS Single",
-            "Memory Max (KB) - PPS Single",
-            "CPU Avg (%) - PPS Multi",
-            "CPU Max (%) - PPS Multi",
-            "Memory Max (KB) - PPS Multi",
-            # eBPF Resources - Throughput workload
-            "CPU Avg (%) - TP Single",
-            "CPU Max (%) - TP Single",
-            "Memory Max (KB) - TP Single",
-            "CPU Avg (%) - TP Multi",
-            "CPU Max (%) - TP Multi",
-            "Memory Max (KB) - TP Multi",
-            # Full cycle
-            "Max RSS (KB)",
-            "Max VSZ (KB)",
-            "Log Size (Bytes)"
-        ]
-
-    def _extract_row_data(self, result: Dict) -> List:
-        """Extract row data from analysis result
-
-        Args:
-            result: Analysis result dictionary
-
-        Returns:
-            List of values for CSV row
-        """
+    def _extract_latency_row(self, result: Dict) -> List:
+        """Extract latency data row"""
         def safe_get(d, *keys, default="N/A"):
-            """Safely get nested dictionary value"""
             for key in keys:
                 if isinstance(d, dict) and key in d:
                     d = d[key]
@@ -179,128 +292,35 @@ class ReportGenerator:
         metadata = result.get("metadata", {})
         perf = result.get("performance", {})
         comparison = result.get("comparison", {})
-        resources = result.get("resources", {})
-        logs = result.get("logs", {})
 
-        row = [
+        # Get client latency data
+        client_latency = safe_get(perf, "client", "latency", default={})
+        tcp_rr = safe_get(client_latency, "tcp_rr", default={})
+        udp_rr = safe_get(client_latency, "udp_rr", default={})
+
+        # Get comparison data
+        tcp_comp = safe_get(comparison, "latency", "tcp_rr_mean_us", default={})
+        udp_comp = safe_get(comparison, "latency", "udp_rr_mean_us", default={})
+
+        return [
             result.get("tool_case", "N/A"),
             metadata.get("protocol", "N/A"),
             metadata.get("direction", "N/A"),
+            safe_get(tcp_rr, "min_us"),
+            safe_get(tcp_rr, "mean_us"),
+            safe_get(tcp_rr, "max_us"),
+            safe_get(tcp_comp, "baseline"),
+            safe_get(tcp_comp, "diff_percent"),
+            safe_get(udp_rr, "min_us"),
+            safe_get(udp_rr, "mean_us"),
+            safe_get(udp_rr, "max_us"),
+            safe_get(udp_comp, "baseline"),
+            safe_get(udp_comp, "diff_percent")
         ]
 
-        # Latency
-        row.extend([
-            safe_get(comparison, "latency", "tcp_rr_mean_us", "ebpf"),
-            safe_get(comparison, "latency", "tcp_rr_mean_us", "diff_percent"),
-            safe_get(comparison, "latency", "udp_rr_mean_us", "ebpf"),
-            safe_get(comparison, "latency", "udp_rr_mean_us", "diff_percent"),
-        ])
-
-        # Throughput - Client
-        row.extend([
-            safe_get(comparison, "throughput_client", "single_gbps", "ebpf"),
-            safe_get(comparison, "throughput_client", "single_gbps", "diff_percent"),
-            safe_get(comparison, "throughput_client", "multi_gbps", "ebpf"),
-            safe_get(comparison, "throughput_client", "multi_gbps", "diff_percent"),
-        ])
-
-        # Throughput - Server
-        row.extend([
-            safe_get(comparison, "throughput_server", "single_gbps", "ebpf"),
-            safe_get(comparison, "throughput_server", "single_gbps", "diff_percent"),
-            safe_get(comparison, "throughput_server", "multi_gbps", "ebpf"),
-            safe_get(comparison, "throughput_server", "multi_gbps", "diff_percent"),
-        ])
-
-        # PPS - Client
-        row.extend([
-            safe_get(comparison, "pps_client", "single_pps", "ebpf"),
-            safe_get(comparison, "pps_client", "single_pps", "diff_percent"),
-            safe_get(comparison, "pps_client", "multi_pps", "ebpf"),
-            safe_get(comparison, "pps_client", "multi_pps", "diff_percent"),
-        ])
-
-        # PPS - Server
-        row.extend([
-            safe_get(comparison, "pps_server", "single_pps", "ebpf"),
-            safe_get(comparison, "pps_server", "single_pps", "diff_percent"),
-            safe_get(comparison, "pps_server", "multi_pps", "ebpf"),
-            safe_get(comparison, "pps_server", "multi_pps", "diff_percent"),
-        ])
-
-        # eBPF Resources - PPS workload
-        row.extend([
-            safe_get(resources, "time_range_stats", "pps_single", "cpu", "avg_percent"),
-            safe_get(resources, "time_range_stats", "pps_single", "cpu", "max_percent"),
-            safe_get(resources, "time_range_stats", "pps_single", "memory", "max_rss_kb"),
-            safe_get(resources, "time_range_stats", "pps_multi", "cpu", "avg_percent"),
-            safe_get(resources, "time_range_stats", "pps_multi", "cpu", "max_percent"),
-            safe_get(resources, "time_range_stats", "pps_multi", "memory", "max_rss_kb"),
-        ])
-
-        # eBPF Resources - Throughput workload
-        row.extend([
-            safe_get(resources, "time_range_stats", "throughput_single", "cpu", "avg_percent"),
-            safe_get(resources, "time_range_stats", "throughput_single", "cpu", "max_percent"),
-            safe_get(resources, "time_range_stats", "throughput_single", "memory", "max_rss_kb"),
-            safe_get(resources, "time_range_stats", "throughput_multi", "cpu", "avg_percent"),
-            safe_get(resources, "time_range_stats", "throughput_multi", "cpu", "max_percent"),
-            safe_get(resources, "time_range_stats", "throughput_multi", "memory", "max_rss_kb"),
-        ])
-
-        # Full cycle
-        row.extend([
-            safe_get(resources, "full_cycle", "max_rss_kb"),
-            safe_get(resources, "full_cycle", "max_vsz_kb"),
-            safe_get(logs, "log_size", "final_size_bytes"),
-        ])
-
-        return row
-
-    def _generate_markdown_table(self, results: List[Dict]) -> str:
-        """Generate Markdown table
-
-        Args:
-            results: List of analysis results
-
-        Returns:
-            Markdown table string
-        """
-        if not results:
-            return "No results to display.\n"
-
-        # Simplified table for readability
-        headers = [
-            "Tool Case", "Protocol", "Dir",
-            "Latency Mean (us)", "Lat Diff (%)",
-            "TP Single (Gbps)", "TP Diff (%)",
-            "PPS Single", "PPS Diff (%)",
-            "CPU Avg (%)", "Mem Max (KB)",
-            "Max RSS (KB)", "Log Size (B)"
-        ]
-
-        # Create header row
-        table = "| " + " | ".join(headers) + " |\n"
-        table += "|" + "|".join(["---" for _ in headers]) + "|\n"
-
-        # Add data rows
-        for result in results:
-            row_data = self._extract_simplified_row(result)
-            table += "| " + " | ".join(str(v) for v in row_data) + " |\n"
-
-        return table
-
-    def _extract_simplified_row(self, result: Dict) -> List:
-        """Extract simplified row for Markdown table
-
-        Args:
-            result: Analysis result dictionary
-
-        Returns:
-            List of values for table row
-        """
+    def _extract_throughput_row(self, result: Dict) -> List:
+        """Extract throughput data row"""
         def safe_get(d, *keys, default="N/A"):
-            """Safely get nested dictionary value"""
             for key in keys:
                 if isinstance(d, dict) and key in d:
                     d = d[key]
@@ -310,26 +330,209 @@ class ReportGenerator:
 
         metadata = result.get("metadata", {})
         comparison = result.get("comparison", {})
+
+        # Client data
+        client_single = safe_get(comparison, "throughput_client", "single_gbps", default={})
+        client_multi = safe_get(comparison, "throughput_client", "multi_gbps", default={})
+
+        # Server data
+        server_single = safe_get(comparison, "throughput_server", "single_gbps", default={})
+        server_multi = safe_get(comparison, "throughput_server", "multi_gbps", default={})
+
+        return [
+            result.get("tool_case", "N/A"),
+            metadata.get("protocol", "N/A"),
+            metadata.get("direction", "N/A"),
+            safe_get(client_single, "ebpf"),
+            safe_get(client_single, "baseline"),
+            safe_get(client_single, "diff_percent"),
+            safe_get(client_multi, "ebpf"),
+            safe_get(client_multi, "baseline"),
+            safe_get(client_multi, "diff_percent"),
+            safe_get(server_single, "ebpf"),
+            safe_get(server_single, "baseline"),
+            safe_get(server_single, "diff_percent"),
+            safe_get(server_multi, "ebpf"),
+            safe_get(server_multi, "baseline"),
+            safe_get(server_multi, "diff_percent")
+        ]
+
+    def _extract_pps_row(self, result: Dict) -> List:
+        """Extract PPS data row"""
+        def safe_get(d, *keys, default="N/A"):
+            for key in keys:
+                if isinstance(d, dict) and key in d:
+                    d = d[key]
+                else:
+                    return default
+            return d if d is not None else default
+
+        metadata = result.get("metadata", {})
+        comparison = result.get("comparison", {})
+
+        # Client data
+        client_single = safe_get(comparison, "pps_client", "single_pps", default={})
+        client_multi = safe_get(comparison, "pps_client", "multi_pps", default={})
+
+        # Server data
+        server_single = safe_get(comparison, "pps_server", "single_pps", default={})
+        server_multi = safe_get(comparison, "pps_server", "multi_pps", default={})
+
+        return [
+            result.get("tool_case", "N/A"),
+            metadata.get("protocol", "N/A"),
+            metadata.get("direction", "N/A"),
+            safe_get(client_single, "ebpf"),
+            safe_get(client_single, "baseline"),
+            safe_get(client_single, "diff_percent"),
+            safe_get(client_multi, "ebpf"),
+            safe_get(client_multi, "baseline"),
+            safe_get(client_multi, "diff_percent"),
+            safe_get(server_single, "ebpf"),
+            safe_get(server_single, "baseline"),
+            safe_get(server_single, "diff_percent"),
+            safe_get(server_multi, "ebpf"),
+            safe_get(server_multi, "baseline"),
+            safe_get(server_multi, "diff_percent")
+        ]
+
+    def _extract_resources_row(self, result: Dict) -> List:
+        """Extract resources data row with time ranges for each test type"""
+        def safe_get(d, *keys, default="N/A"):
+            for key in keys:
+                if isinstance(d, dict) and key in d:
+                    d = d[key]
+                else:
+                    return default
+            return d if d is not None else default
+
+        def format_time_range(start_time, end_time):
+            """Format time range in human-readable format"""
+            if start_time and start_time != "N/A" and end_time and end_time != "N/A":
+                return f"{start_time} ~ {end_time}"
+            return "N/A"
+
+        metadata = result.get("metadata", {})
         resources = result.get("resources", {})
         logs = result.get("logs", {})
+        perf = result.get("performance", {})
 
-        # Extract tool case name (shorten if too long)
+        time_range_stats = safe_get(resources, "time_range_stats", default={})
+        full_cycle = safe_get(resources, "full_cycle", default={})
+        log_size = safe_get(logs, "log_size", default={})
+
+        # Extract time ranges from client performance data
+        client = perf.get("client", {})
+
+        # PPS Single time range
+        pps_single_start = safe_get(client, "pps", "single", "start_time")
+        pps_single_end = safe_get(client, "pps", "single", "end_time")
+        pps_single_time = format_time_range(pps_single_start, pps_single_end)
+
+        # PPS Multi time range
+        pps_multi_start = safe_get(client, "pps", "multi", "start_time")
+        pps_multi_end = safe_get(client, "pps", "multi", "end_time")
+        pps_multi_time = format_time_range(pps_multi_start, pps_multi_end)
+
+        # TP Single time range
+        tp_single_start = safe_get(client, "throughput", "single", "start_time")
+        tp_single_end = safe_get(client, "throughput", "single", "end_time")
+        tp_single_time = format_time_range(tp_single_start, tp_single_end)
+
+        # TP Multi time range
+        tp_multi_start = safe_get(client, "throughput", "multi", "start_time")
+        tp_multi_end = safe_get(client, "throughput", "multi", "end_time")
+        tp_multi_time = format_time_range(tp_multi_start, tp_multi_end)
+
+        return [
+            result.get("tool_case", "N/A"),
+            metadata.get("protocol", "N/A"),
+            metadata.get("direction", "N/A"),
+            # PPS Single: Time Range + metrics
+            pps_single_time,
+            safe_get(time_range_stats, "pps_single", "cpu", "avg_percent"),
+            safe_get(time_range_stats, "pps_single", "cpu", "max_percent"),
+            safe_get(time_range_stats, "pps_single", "memory", "max_rss_kb"),
+            # PPS Multi: Time Range + metrics
+            pps_multi_time,
+            safe_get(time_range_stats, "pps_multi", "cpu", "avg_percent"),
+            safe_get(time_range_stats, "pps_multi", "cpu", "max_percent"),
+            safe_get(time_range_stats, "pps_multi", "memory", "max_rss_kb"),
+            # TP Single: Time Range + metrics
+            tp_single_time,
+            safe_get(time_range_stats, "throughput_single", "cpu", "avg_percent"),
+            safe_get(time_range_stats, "throughput_single", "cpu", "max_percent"),
+            safe_get(time_range_stats, "throughput_single", "memory", "max_rss_kb"),
+            # TP Multi: Time Range + metrics
+            tp_multi_time,
+            safe_get(time_range_stats, "throughput_multi", "cpu", "avg_percent"),
+            safe_get(time_range_stats, "throughput_multi", "cpu", "max_percent"),
+            safe_get(time_range_stats, "throughput_multi", "memory", "max_rss_kb"),
+            # Full cycle
+            safe_get(full_cycle, "max_rss_kb"),
+            safe_get(full_cycle, "max_vsz_kb"),
+            safe_get(full_cycle, "total_samples"),
+            # Log size
+            safe_get(log_size, "final_size_bytes"),
+            safe_get(log_size, "final_size_human")
+        ]
+
+
+    def _extract_summary_row(self, result: Dict) -> List:
+        """Extract summary row for markdown overview"""
+        def safe_get(d, *keys, default="N/A"):
+            for key in keys:
+                if isinstance(d, dict) and key in d:
+                    d = d[key]
+                else:
+                    return default
+            return d if d is not None else default
+
+        metadata = result.get("metadata", {})
+        comparison = result.get("comparison", {})
+
         tool_case = result.get("tool_case", "N/A")
         if len(tool_case) > 30:
             tool_case = tool_case[:27] + "..."
+
+        # Get representative diff values
+        latency_diff = safe_get(comparison, "latency", "tcp_rr_mean_us", "diff_percent")
+        tp_diff = safe_get(comparison, "throughput_client", "single_gbps", "diff_percent")
+        pps_diff = safe_get(comparison, "pps_client", "single_pps", "diff_percent")
 
         return [
             tool_case,
             metadata.get("protocol", "N/A"),
             metadata.get("direction", "N/A"),
-            safe_get(comparison, "latency", "tcp_rr_mean_us", "ebpf"),
-            safe_get(comparison, "latency", "tcp_rr_mean_us", "diff_percent"),
-            safe_get(comparison, "throughput_client", "single_gbps", "ebpf"),
-            safe_get(comparison, "throughput_client", "single_gbps", "diff_percent"),
-            safe_get(comparison, "pps_client", "single_pps", "ebpf"),
-            safe_get(comparison, "pps_client", "single_pps", "diff_percent"),
-            safe_get(resources, "time_range_stats", "pps_single", "cpu", "avg_percent"),
-            safe_get(resources, "time_range_stats", "pps_single", "memory", "max_rss_kb"),
-            safe_get(resources, "full_cycle", "max_rss_kb"),
-            safe_get(logs, "log_size", "final_size_bytes"),
+            latency_diff,
+            tp_diff,
+            pps_diff
         ]
+
+    def _calculate_summary_stats(self, results: List[Dict]) -> Dict:
+        """Calculate summary statistics"""
+        stats = {
+            "total_cases": len(results),
+            "latency_count": 0,
+            "throughput_count": 0,
+            "pps_count": 0,
+            "resource_count": 0
+        }
+
+        for result in results:
+            perf = result.get("performance", {})
+            resources = result.get("resources")
+
+            if perf.get("client", {}).get("latency"):
+                stats["latency_count"] += 1
+
+            if perf.get("client", {}).get("throughput"):
+                stats["throughput_count"] += 1
+
+            if perf.get("client", {}).get("pps"):
+                stats["pps_count"] += 1
+
+            if resources:
+                stats["resource_count"] += 1
+
+        return stats

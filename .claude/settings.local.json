@@ -8,7 +8,8 @@
       "mcp__ssh__scp_to_remote",
       "Bash(ssh:*)",
       "Bash(scp:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(tree:*)"
     ],
     "deny": []
   }

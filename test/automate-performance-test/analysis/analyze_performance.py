@@ -15,6 +15,7 @@ from src.data_locator import DataLocator
 from src.parsers import PerformanceParser, ResourceParser, LogSizeParser
 from src.comparator import BaselineComparator
 from src.report_generator import ReportGenerator
+from src.iteration_aggregator import IterationAggregator
 from src.utils import parse_tool_case_name, load_test_case_metadata
 
 logger = logging.getLogger(__name__)
@@ -494,6 +495,16 @@ def main():
     logger.info(f"Reports saved to: {base_output}/{output_subdir}/")
     for iteration in iterations_to_process:
         logger.info(f"  - {iteration}/")
+
+    # Aggregate results from multiple iterations if configured
+    if len(iterations_to_process) >= 2:
+        try:
+            aggregator = IterationAggregator(base_output, output_subdir)
+            aggregator.aggregate_all(iterations_to_process, topics)
+            logger.info(f"  - summary/ (aggregated from {len(iterations_to_process)} iterations)")
+        except Exception as e:
+            logger.error(f"Failed to aggregate iterations: {e}", exc_info=True)
+
     logger.info("=" * 60)
 
 

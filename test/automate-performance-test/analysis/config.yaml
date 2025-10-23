@@ -1,7 +1,7 @@
 # Performance Test Analysis Configuration
 
 # Data root directory (relative to this config file)
-data_root: "../results/1021"
+data_root: "../results/1022"
 
 # Available iterations
 iterations:
@@ -9,8 +9,12 @@ iterations:
   - iteration_002
   - iteration_003
 
-# Selected iteration for analysis
-selected_iteration: iteration_001
+# Selected iterations for analysis
+# Supports:
+#   - Single iteration: "iteration_001"
+#   - Multiple iterations: ["iteration_001", "iteration_002", "iteration_003"]
+#   - All iterations: "all" (will use all iterations from the 'iterations' list above)
+selected_iterations: all
 
 # Topics configuration
 topics:
@@ -23,7 +27,13 @@ topics:
     - vm_network_performance
 
 # Output configuration
+# output_dir: Base output directory (default: ./output)
+# output_subdir: Subdirectory name under output_dir
+#   - If not specified, will auto-generate from data_root (e.g., "1022" from "../results/1022")
+#   - Can be customized to any unique name (e.g., "test_20251023", "baseline_comparison")
+# Final structure: {output_dir}/{output_subdir}/iteration_XXX/
 output_dir: "./output"
+output_subdir: ""  # Empty means auto-generate from data_root
 output_formats:
   - csv
   - markdown

@@ -12,13 +12,15 @@ logger = logging.getLogger(__name__)
 class ReportGenerator:
     """Report generator with separated report types and hierarchical headers"""
 
-    def __init__(self, output_dir: str):
+    def __init__(self, output_dir: str, test_cases_metadata: Dict = None):
         """Initialize ReportGenerator
 
         Args:
             output_dir: Output directory for reports
+            test_cases_metadata: Optional test cases metadata for program names
         """
         self.output_dir = output_dir
+        self.test_cases_metadata = test_cases_metadata or {}
         os.makedirs(output_dir, exist_ok=True)
 
     def generate_all(self, topic: str, results: List[Dict], iteration: str):
@@ -37,10 +39,24 @@ class ReportGenerator:
         self.generate_pps_report(topic, results, iteration)
         self.generate_resources_report(topic, results, iteration)
 
+        # Generate summary report (all metrics combined)
+        self.generate_summary_report(topic, results, iteration)
+
         # Generate overview markdown
         self.generate_overview_markdown(topic, results, iteration)
 
-        logger.info(f"Generated 5 report files for topic {topic}")
+        logger.info(f"Generated 6 report files for topic {topic}")
+
+    def _get_command(self, result: Dict) -> str:
+        """Get full command for a tool case
+
+        Args:
+            result: Analysis result dictionary
+
+        Returns:
+            Full command or "N/A"
+        """
+        return result.get("command", "N/A")
 
     def generate_latency_report(self, topic: str, results: List[Dict], iteration: str):
         """Generate latency-only report
@@ -54,8 +70,7 @@ class ReportGenerator:
 
         headers = [
             "Tool Case",
-            "Protocol",
-            "Direction",
+            "Command",
             "TCP RR Min (us)",
             "TCP RR Mean (us)",
             "TCP RR Max (us)",
@@ -95,8 +110,7 @@ class ReportGenerator:
 
         headers = [
             "Tool Case",
-            "Protocol",
-            "Direction",
+            "Command",
             # Client
             "Client Single (Gbps)",
             "Client Single Baseline (Gbps)",
@@ -140,8 +154,7 @@ class ReportGenerator:
 
         headers = [
             "Tool Case",
-            "Protocol",
-            "Direction",
+            "Command",
             # Client
             "Client Single PPS",
             "Client Single Baseline",
@@ -187,8 +200,7 @@ class ReportGenerator:
         # Row 1: Main categories (each row will have its own time ranges)
         header_row1 = [
             "Tool Case",
-            "Protocol",
-            "Direction",
+            "Command",
             "PPS Single", "", "", "",  # Time Range, CPU Avg, CPU Max, Mem Max
             "PPS Multi", "", "", "",
             "TP Single", "", "", "",
@@ -200,8 +212,7 @@ class ReportGenerator:
         # Row 2: Sub-column headers
         header_row2 = [
             "",  # Tool Case
-            "",  # Protocol
-            "",  # Direction
+            "",  # Command
             "Time Range", "CPU Avg (%)", "CPU Max (%)", "Mem Max (KB)",  # PPS Single
             "Time Range", "CPU Avg (%)", "CPU Max (%)", "Mem Max (KB)",  # PPS Multi
             "Time Range", "CPU Avg (%)", "CPU Max (%)", "Mem Max (KB)",  # TP Single
@@ -225,6 +236,63 @@ class ReportGenerator:
             logger.info(f"Generated resources report: {output_path}")
         except Exception as e:
             logger.error(f"Failed to generate resources report: {e}")
+
+    def generate_summary_report(self, topic: str, results: List[Dict], iteration: str):
+        """Generate comprehensive summary report with all metrics
+
+        Args:
+            topic: Topic name
+            results: List of analysis results
+            iteration: Iteration name
+        """
+        output_path = os.path.join(self.output_dir, f"{topic}_summary_{iteration}.csv")
+
+        # Define comprehensive headers
+        headers = [
+            "Tool Case",
+            "Command",
+            # Latency metrics
+            "TCP RR Mean (us)",
+            "TCP RR Baseline (us)",
+            "TCP RR Diff (%)",
+            "UDP RR Mean (us)",
+            "UDP RR Baseline (us)",
+            "UDP RR Diff (%)",
+            # Throughput metrics
+            "Client TP Single (Gbps)",
+            "Client TP Single Baseline (Gbps)",
+            "Client TP Single Diff (%)",
+            "Client TP Multi (Gbps)",
+            "Client TP Multi Baseline (Gbps)",
+            "Client TP Multi Diff (%)",
+            # PPS metrics
+            "Client PPS Single",
+            "Client PPS Single Baseline",
+            "Client PPS Single Diff (%)",
+            "Client PPS Multi",
+            "Client PPS Multi Baseline",
+            "Client PPS Multi Diff (%)",
+            # Resource metrics (key metrics only)
+            "CPU Avg (%)",
+            "CPU Max (%)",
+            "Mem Max (KB)",
+            "Log Size (MB)"
+        ]
+
+        rows = []
+        for result in results:
+            row = self._extract_summary_all_row(result)
+            if row:
+                rows.append(row)
+
+        try:
+            with open(output_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(headers)
+                writer.writerows(rows)
+            logger.info(f"Generated summary report: {output_path}")
+        except Exception as e:
+            logger.error(f"Failed to generate summary report: {e}")
 
     def generate_overview_markdown(self, topic: str, results: List[Dict], iteration: str):
         """Generate overview markdown report
@@ -255,8 +323,8 @@ class ReportGenerator:
 
                 # Write performance summary table
                 f.write("## Performance Summary\n\n")
-                f.write("| Tool Case | Protocol | Dir | Latency Diff (%) | Throughput Diff (%) | PPS Diff (%) |\n")
-                f.write("|-----------|----------|-----|------------------|---------------------|---------------|\n")
+                f.write("| Tool Case | Command | Latency Diff (%) | Throughput Diff (%) | PPS Diff (%) |\n")
+                f.write("|-----------|---------|------------------|---------------------|---------------|\n")
 
                 for result in results:
                     row = self._extract_summary_row(result)
@@ -304,8 +372,7 @@ class ReportGenerator:
 
         return [
             result.get("tool_case", "N/A"),
-            metadata.get("protocol", "N/A"),
-            metadata.get("direction", "N/A"),
+            self._get_command(result),
             safe_get(tcp_rr, "min_us"),
             safe_get(tcp_rr, "mean_us"),
             safe_get(tcp_rr, "max_us"),
@@ -341,8 +408,7 @@ class ReportGenerator:
 
         return [
             result.get("tool_case", "N/A"),
-            metadata.get("protocol", "N/A"),
-            metadata.get("direction", "N/A"),
+            self._get_command(result),
             safe_get(client_single, "ebpf"),
             safe_get(client_single, "baseline"),
             safe_get(client_single, "diff_percent"),
@@ -380,8 +446,7 @@ class ReportGenerator:
 
         return [
             result.get("tool_case", "N/A"),
-            metadata.get("protocol", "N/A"),
-            metadata.get("direction", "N/A"),
+            self._get_command(result),
             safe_get(client_single, "ebpf"),
             safe_get(client_single, "baseline"),
             safe_get(client_single, "diff_percent"),
@@ -446,8 +511,7 @@ class ReportGenerator:
 
         return [
             result.get("tool_case", "N/A"),
-            metadata.get("protocol", "N/A"),
-            metadata.get("direction", "N/A"),
+            self._get_command(result),
             # PPS Single: Time Range + metrics
             pps_single_time,
             safe_get(time_range_stats, "pps_single", "cpu", "avg_percent"),
@@ -495,6 +559,8 @@ class ReportGenerator:
         if len(tool_case) > 30:
             tool_case = tool_case[:27] + "..."
 
+        command = self._get_command(result)
+
         # Get representative diff values
         latency_diff = safe_get(comparison, "latency", "tcp_rr_mean_us", "diff_percent")
         tp_diff = safe_get(comparison, "throughput_client", "single_gbps", "diff_percent")
@@ -502,8 +568,7 @@ class ReportGenerator:
 
         return [
             tool_case,
-            metadata.get("protocol", "N/A"),
-            metadata.get("direction", "N/A"),
+            command,
             latency_diff,
             tp_diff,
             pps_diff
@@ -536,3 +601,99 @@ class ReportGenerator:
                 stats["resource_count"] += 1
 
         return stats
+
+    def _extract_summary_all_row(self, result: Dict) -> List:
+        """Extract comprehensive summary row with all metrics
+
+        Args:
+            result: Analysis result dictionary
+
+        Returns:
+            List of all metric values
+        """
+        def safe_get(d, *keys, default="N/A"):
+            for key in keys:
+                if isinstance(d, dict) and key in d:
+                    d = d[key]
+                else:
+                    return default
+            return d if d is not None else default
+
+        perf = result.get("performance", {})
+        comparison = result.get("comparison", {})
+        resources = result.get("resources", {})
+        logs = result.get("logs", {})
+
+        # Latency data
+        client_latency = safe_get(perf, "client", "latency", default={})
+        tcp_rr = safe_get(client_latency, "tcp_rr", default={})
+        udp_rr = safe_get(client_latency, "udp_rr", default={})
+        tcp_comp = safe_get(comparison, "latency", "tcp_rr_mean_us", default={})
+        udp_comp = safe_get(comparison, "latency", "udp_rr_mean_us", default={})
+
+        # Throughput data
+        client_tp_single = safe_get(comparison, "throughput_client", "single_gbps", default={})
+        client_tp_multi = safe_get(comparison, "throughput_client", "multi_gbps", default={})
+
+        # PPS data
+        client_pps_single = safe_get(comparison, "pps_client", "single_pps", default={})
+        client_pps_multi = safe_get(comparison, "pps_client", "multi_pps", default={})
+
+        # Resource data - aggregate across all time ranges
+        time_range_stats = safe_get(resources, "time_range_stats", default={})
+        full_cycle = safe_get(resources, "full_cycle", default={})
+        log_size = safe_get(logs, "log_size", default={})
+
+        # Calculate average CPU across all time ranges
+        cpu_avgs = []
+        cpu_maxs = []
+        mem_maxs = []
+        for range_name in ["pps_single", "pps_multi", "throughput_single", "throughput_multi"]:
+            cpu_avg = safe_get(time_range_stats, range_name, "cpu", "avg_percent")
+            cpu_max = safe_get(time_range_stats, range_name, "cpu", "max_percent")
+            mem_max = safe_get(time_range_stats, range_name, "memory", "max_rss_kb")
+            if cpu_avg != "N/A":
+                cpu_avgs.append(float(cpu_avg))
+            if cpu_max != "N/A":
+                cpu_maxs.append(float(cpu_max))
+            if mem_max != "N/A":
+                mem_maxs.append(float(mem_max))
+
+        avg_cpu = round(sum(cpu_avgs) / len(cpu_avgs), 2) if cpu_avgs else "N/A"
+        max_cpu = round(max(cpu_maxs), 2) if cpu_maxs else "N/A"
+        max_mem = round(max(mem_maxs), 2) if mem_maxs else "N/A"
+
+        # Log size in MB
+        log_size_bytes = safe_get(log_size, "final_size_bytes")
+        log_size_mb = round(int(log_size_bytes) / (1024 * 1024), 2) if log_size_bytes != "N/A" else "N/A"
+
+        return [
+            result.get("tool_case", "N/A"),
+            self._get_command(result),
+            # Latency
+            safe_get(tcp_rr, "mean_us"),
+            safe_get(tcp_comp, "baseline"),
+            safe_get(tcp_comp, "diff_percent"),
+            safe_get(udp_rr, "mean_us"),
+            safe_get(udp_comp, "baseline"),
+            safe_get(udp_comp, "diff_percent"),
+            # Throughput
+            safe_get(client_tp_single, "ebpf"),
+            safe_get(client_tp_single, "baseline"),
+            safe_get(client_tp_single, "diff_percent"),
+            safe_get(client_tp_multi, "ebpf"),
+            safe_get(client_tp_multi, "baseline"),
+            safe_get(client_tp_multi, "diff_percent"),
+            # PPS
+            safe_get(client_pps_single, "ebpf"),
+            safe_get(client_pps_single, "baseline"),
+            safe_get(client_pps_single, "diff_percent"),
+            safe_get(client_pps_multi, "ebpf"),
+            safe_get(client_pps_multi, "baseline"),
+            safe_get(client_pps_multi, "diff_percent"),
+            # Resources
+            avg_cpu,
+            max_cpu,
+            max_mem,
+            log_size_mb
+        ]

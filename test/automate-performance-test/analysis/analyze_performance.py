@@ -6,7 +6,7 @@ import sys
 import yaml
 import logging
 import argparse
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
@@ -15,7 +15,7 @@ from src.data_locator import DataLocator
 from src.parsers import PerformanceParser, ResourceParser, LogSizeParser
 from src.comparator import BaselineComparator
 from src.report_generator import ReportGenerator
-from src.utils import parse_tool_case_name
+from src.utils import parse_tool_case_name, load_test_case_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -155,10 +155,14 @@ def process_tool_case(locator: DataLocator, tool_case_name: str,
     # 6. Parse metadata
     metadata = parse_tool_case_name(tool_case_name)
 
-    # 7. Return complete result
+    # 7. Get command from paths
+    command = paths.get("command", "N/A")
+
+    # 8. Return complete result
     return {
         "tool_case": tool_case_name,
         "metadata": metadata,
+        "command": command,
         "performance": perf_data,
         "resources": resource_data,
         "logs": {"log_size": log_data} if log_data else {},
@@ -205,6 +209,48 @@ def detect_test_type_for_topic(topic: str) -> str:
         return "host"
 
 
+def find_test_case_json(script_dir: str, topic: str) -> Optional[str]:
+    """Find test case JSON file for a topic
+
+    Args:
+        script_dir: Script directory
+        topic: Topic name
+
+    Returns:
+        Path to test case JSON file or None
+    """
+    # Map topic to JSON file name
+    topic_json_map = {
+        "system_network_performance": "performance-test-cases.json",
+        "vm_network_performance": "performance-test-cases.json",
+        "linux_network_stack": "linux-network-stack-test-cases.json",
+        "kvm_virt_network": "kvm-virt-network-test-cases.json",
+        "ovs_monitoring": "ovs-test-cases.json",
+    }
+
+    json_filename = topic_json_map.get(topic)
+    if not json_filename:
+        logger.warning(f"Unknown topic: {topic}")
+        return None
+
+    # Try different possible locations
+    possible_base_paths = [
+        os.path.join(script_dir, "..", "..", "workflow", "case", "nested-5.4"),
+        os.path.join(script_dir, "..", "..", "workflow", "case", "phy-620"),
+        os.path.join(script_dir, "..", "..", "workflow", "case"),
+    ]
+
+    for base_path in possible_base_paths:
+        json_path = os.path.join(base_path, json_filename)
+        abs_path = os.path.abspath(json_path)
+        if os.path.exists(abs_path):
+            logger.info(f"Found test case JSON for {topic}: {abs_path}")
+            return abs_path
+
+    logger.warning(f"Could not find test case JSON for topic: {topic}")
+    return None
+
+
 def main():
     """Main entry point"""
     # Parse command line arguments
@@ -216,7 +262,14 @@ def main():
         "--iteration",
         type=str,
         default=None,
-        help="Iteration to analyze (default: from config)"
+        help="Single iteration to analyze (overrides config, backward compatible)"
+    )
+
+    parser.add_argument(
+        "--iterations",
+        type=str,
+        default=None,
+        help="Iterations to analyze: 'all', 'iteration_001', or 'iteration_001,iteration_002'"
     )
 
     parser.add_argument(
@@ -237,7 +290,14 @@ def main():
         "--output-dir",
         type=str,
         default=None,
-        help="Output directory (default: from config)"
+        help="Base output directory (default: from config)"
+    )
+
+    parser.add_argument(
+        "--output-subdir",
+        type=str,
+        default=None,
+        help="Subdirectory name under output-dir (default: auto-generate from data_root)"
     )
 
     parser.add_argument(
@@ -260,11 +320,19 @@ def main():
     config = load_config(config_path)
 
     # Override config with command line arguments
+    # Handle --iteration (backward compatible, single iteration)
     if args.iteration:
-        config["selected_iteration"] = args.iteration
+        config["selected_iterations"] = args.iteration
+
+    # Handle --iterations (new, supports multiple)
+    if args.iterations:
+        config["selected_iterations"] = args.iterations
 
     if args.output_dir:
         config["output_dir"] = args.output_dir
+
+    if args.output_subdir:
+        config["output_subdir"] = args.output_subdir
 
     if args.format:
         config["output_formats"] = args.format.split(",")
@@ -279,90 +347,153 @@ def main():
     logger.info("Performance Test Analysis Tool")
     logger.info("=" * 60)
 
-    # Get iteration path
+    # Parse selected iterations
     script_dir = os.path.dirname(os.path.abspath(__file__))
     data_root = os.path.join(script_dir, config["data_root"])
-    iteration = config["selected_iteration"]
-    iteration_path = os.path.join(data_root, iteration)
 
-    if not os.path.exists(iteration_path):
-        logger.error(f"Iteration path not found: {iteration_path}")
+    # Handle selected_iterations configuration
+    selected_iterations_config = config.get("selected_iterations", config.get("selected_iteration"))
+
+    if selected_iterations_config == "all":
+        # Use all iterations from config
+        iterations_to_process = config["iterations"]
+        logger.info("Processing all iterations")
+    elif isinstance(selected_iterations_config, list):
+        # Already a list
+        iterations_to_process = selected_iterations_config
+    elif isinstance(selected_iterations_config, str):
+        # Single iteration or comma-separated list
+        if "," in selected_iterations_config:
+            iterations_to_process = [it.strip() for it in selected_iterations_config.split(",")]
+        else:
+            iterations_to_process = [selected_iterations_config]
+    else:
+        logger.error(f"Invalid selected_iterations configuration: {selected_iterations_config}")
         sys.exit(1)
 
-    logger.info(f"Analyzing iteration: {iteration}")
-    logger.info(f"Iteration path: {iteration_path}")
+    logger.info(f"Iterations to process: {', '.join(iterations_to_process)}")
 
-    # Initialize components
-    locator = DataLocator(iteration_path)
-    output_dir = os.path.join(script_dir, config["output_dir"])
-    report_gen = ReportGenerator(output_dir)
+    # Validate all iterations exist
+    for iteration in iterations_to_process:
+        iteration_path = os.path.join(data_root, iteration)
+        if not os.path.exists(iteration_path):
+            logger.error(f"Iteration path not found: {iteration_path}")
+            sys.exit(1)
 
-    # Determine topics to analyze
+    # Determine output subdirectory name
+    output_subdir = config.get("output_subdir", "")
+    if not output_subdir:
+        # Auto-generate from data_root: extract last component
+        # e.g., "../results/1022" -> "1022"
+        data_root_normalized = os.path.normpath(data_root)
+        output_subdir = os.path.basename(data_root_normalized)
+        logger.info(f"Auto-generated output_subdir from data_root: {output_subdir}")
+
+    # Determine topics to analyze (same for all iterations)
     if args.topic:
         topics = [args.topic]
     else:
-        topics = get_all_topics(iteration_path, config)
+        # Get topics from first iteration
+        first_iteration_path = os.path.join(data_root, iterations_to_process[0])
+        topics = get_all_topics(first_iteration_path, config)
 
     logger.info(f"Topics to analyze: {', '.join(topics)}")
 
-    # Process each topic
-    for topic in topics:
+    # Process each iteration
+    for iteration_idx, iteration in enumerate(iterations_to_process, 1):
         logger.info("")
-        logger.info(f"{'=' * 60}")
-        logger.info(f"Processing topic: {topic}")
-        logger.info(f"{'=' * 60}")
+        logger.info("=" * 60)
+        logger.info(f"Processing Iteration [{iteration_idx}/{len(iterations_to_process)}]: {iteration}")
+        logger.info("=" * 60)
 
-        # Get all tool cases for this topic
-        tool_cases = locator.get_all_tool_cases(topic)
-        if not tool_cases:
-            logger.warning(f"No tool cases found for topic: {topic}")
-            continue
+        iteration_path = os.path.join(data_root, iteration)
+        logger.info(f"Iteration path: {iteration_path}")
 
-        logger.info(f"Found {len(tool_cases)} tool cases")
+        # Initialize components for this iteration
+        locator = DataLocator(iteration_path)
 
-        # Parse baseline
-        test_type = detect_test_type_for_topic(topic)
-        logger.info(f"Test type: {test_type}")
+        # Set up output directory structure: {output_dir}/{output_subdir}/iteration_XXX/
+        base_output = os.path.join(script_dir, config["output_dir"])
+        output_dir = os.path.join(base_output, output_subdir, iteration)
 
-        baseline_paths = locator.locate_baseline(test_type)
-        if not baseline_paths:
-            logger.warning(f"Baseline not found for {test_type}, skipping comparison")
-            baseline_data = {}
-        else:
-            baseline_data = PerformanceParser.parse_all(baseline_paths)
-            logger.info("Parsed baseline data")
+        logger.info(f"Output directory: {output_dir}")
 
-        # Process each tool case
-        results = []
-        for i, tool_case in enumerate(tool_cases, 1):
-            logger.info(f"[{i}/{len(tool_cases)}] Processing: {tool_case}")
+        # Process each topic
+        for topic in topics:
+            logger.info("")
+            logger.info(f"{'=' * 60}")
+            logger.info(f"Processing topic: {topic}")
+            logger.info(f"{'=' * 60}")
 
-            try:
-                result = process_tool_case(locator, tool_case, baseline_data, config)
-                if result:
-                    results.append(result)
-                else:
-                    logger.warning(f"No result for {tool_case}")
-            except Exception as e:
-                logger.error(f"Failed to process {tool_case}: {e}", exc_info=True)
+            # Load test case metadata for this specific topic
+            test_case_json_path = find_test_case_json(script_dir, topic)
+            test_cases_metadata = {}
+            if test_case_json_path:
+                test_cases_metadata = load_test_case_metadata(test_case_json_path)
+            else:
+                logger.warning(f"No test case JSON found for topic: {topic}")
+
+            # Get all tool cases for this topic
+            tool_cases = locator.get_all_tool_cases(topic)
+            if not tool_cases:
+                logger.warning(f"No tool cases found for topic: {topic}")
                 continue
 
-        logger.info(f"Successfully processed {len(results)}/{len(tool_cases)} tool cases")
+            logger.info(f"Found {len(tool_cases)} tool cases")
 
-        # Generate reports
-        if results:
-            try:
-                report_gen.generate_all(topic, results, iteration)
-                logger.info(f"Generated reports for topic: {topic}")
-            except Exception as e:
-                logger.error(f"Failed to generate reports for {topic}: {e}", exc_info=True)
-        else:
-            logger.warning(f"No results to generate report for topic: {topic}")
+            # Parse baseline
+            test_type = detect_test_type_for_topic(topic)
+            logger.info(f"Test type: {test_type}")
+
+            baseline_paths = locator.locate_baseline(test_type)
+            if not baseline_paths:
+                logger.warning(f"Baseline not found for {test_type}, skipping comparison")
+                baseline_data = {}
+            else:
+                baseline_data = PerformanceParser.parse_all(baseline_paths)
+                logger.info("Parsed baseline data")
+
+            # Process each tool case
+            results = []
+            for i, tool_case in enumerate(tool_cases, 1):
+                logger.info(f"[{i}/{len(tool_cases)}] Processing: {tool_case}")
+
+                try:
+                    result = process_tool_case(locator, tool_case, baseline_data, config)
+                    if result:
+                        results.append(result)
+                    else:
+                        logger.warning(f"No result for {tool_case}")
+                except Exception as e:
+                    logger.error(f"Failed to process {tool_case}: {e}", exc_info=True)
+                    continue
+
+            logger.info(f"Successfully processed {len(results)}/{len(tool_cases)} tool cases")
+
+            # Generate reports
+            if results:
+                try:
+                    # Create report generator with metadata for this topic
+                    report_gen = ReportGenerator(output_dir, test_cases_metadata)
+                    report_gen.generate_all(topic, results, iteration)
+                    logger.info(f"Generated reports for topic: {topic}")
+                except Exception as e:
+                    logger.error(f"Failed to generate reports for {topic}: {e}", exc_info=True)
+            else:
+                logger.warning(f"No results to generate report for topic: {topic}")
 
     logger.info("")
     logger.info("=" * 60)
     logger.info("Analysis completed!")
-    logger.info(f"Reports saved to: {output_dir}")
+    logger.info("=" * 60)
+    logger.info(f"Processed {len(iterations_to_process)} iteration(s): {', '.join(iterations_to_process)}")
+    logger.info(f"Processed {len(topics)} topic(s): {', '.join(topics)}")
+
+    # Show output directory structure
+    base_output = os.path.join(script_dir, config["output_dir"])
+    logger.info(f"Reports saved to: {base_output}/{output_subdir}/")
+    for iteration in iterations_to_process:
+        logger.info(f"  - {iteration}/")
     logger.info("=" * 60)
 
 

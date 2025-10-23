@@ -115,9 +115,13 @@ class DataLocator:
             self.host_client_path, "ebpf", tool_case_name, "host"
         )
 
+        # Extract command from ebpf_start file
+        command = self._extract_command_from_ebpf_start(server_base)
+
         return {
             "test_type": "host",
             "tool_case_name": tool_case_name,
+            "command": command,
             "client": self._locate_performance_data(client_base, "client_results"),
             "server": {
                 "performance": self._locate_performance_data(server_base, "server_results"),
@@ -146,9 +150,13 @@ class DataLocator:
             self.host_server_path, "ebpf", tool_case_name, "vm"
         )
 
+        # Extract command from ebpf_start file (in host-server)
+        command = self._extract_command_from_ebpf_start(host_ebpf_base)
+
         return {
             "test_type": "vm",
             "tool_case_name": tool_case_name,
+            "command": command,
             "client": self._locate_performance_data(vm_client_base, "client_results"),
             "server": {
                 "performance": self._locate_performance_data(vm_server_base, "server_results"),
@@ -316,6 +324,33 @@ class DataLocator:
             data["logsize_monitor"] = logsize_file
 
         return data
+
+    def _extract_command_from_ebpf_start(self, base_path: str) -> Optional[str]:
+        """Extract full command from ebpf_start file
+
+        Args:
+            base_path: Base path containing ebpf_start file
+
+        Returns:
+            Full command string or None
+        """
+        ebpf_start_pattern = os.path.join(base_path, "ebpf_start_*.log")
+        ebpf_start_file = find_latest_file(ebpf_start_pattern)
+
+        if not ebpf_start_file:
+            return None
+
+        try:
+            with open(ebpf_start_file, 'r') as f:
+                for line in f:
+                    # Look for the "Command: " line
+                    if line.startswith("Command: "):
+                        command = line.replace("Command: ", "").strip()
+                        return command
+        except Exception as e:
+            logger.warning(f"Failed to read ebpf_start file {ebpf_start_file}: {e}")
+
+        return None
 
     def get_all_tool_cases(self, topic: str) -> List[str]:
         """Get all tool case names for a specific topic

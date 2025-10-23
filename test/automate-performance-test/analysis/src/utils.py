@@ -267,3 +267,88 @@ def get_file_size(file_path: str) -> int:
         return os.path.getsize(file_path)
     except OSError:
         return 0
+
+
+def load_test_case_metadata(test_case_json_path: str) -> Dict[int, Dict]:
+    """Load test case metadata from JSON file
+
+    Args:
+        test_case_json_path: Path to test case JSON file
+
+    Returns:
+        Dictionary mapping case ID to test case metadata
+
+    Examples:
+        >>> metadata = load_test_case_metadata("test-cases.json")
+        >>> metadata[6]
+        {
+            'id': 6,
+            'name': 'system_network_latency_details_tx_protocol_tcp',
+            'command': 'sudo python3 ebpf-tools/performance/system-network/...',
+            'program': 'system_network_latency_details.py'
+        }
+    """
+    test_cases_map = {}
+
+    try:
+        data = safe_read_json(test_case_json_path)
+        if not data or "test_cases" not in data:
+            logger.warning(f"Invalid test case JSON structure: {test_case_json_path}")
+            return {}
+
+        for test_case in data["test_cases"]:
+            case_id = test_case.get("id")
+            command = test_case.get("command", "")
+
+            # Extract program name from command
+            # Pattern: ... path/to/program.py ...
+            program_name = "N/A"
+            if command:
+                # Find .py file in the command
+                match = re.search(r'([^/\s]+\.py)', command)
+                if match:
+                    program_name = match.group(1)
+
+            test_cases_map[case_id] = {
+                "id": case_id,
+                "name": test_case.get("name", ""),
+                "command": command,
+                "program": program_name
+            }
+
+        logger.info(f"Loaded {len(test_cases_map)} test cases from {test_case_json_path}")
+        return test_cases_map
+
+    except Exception as e:
+        logger.error(f"Failed to load test case metadata: {e}")
+        return {}
+
+
+def get_program_name_for_case(tool_case_name: str, test_cases_metadata: Dict[int, Dict]) -> str:
+    """Get program name for a tool case
+
+    Args:
+        tool_case_name: Tool case name (e.g., "system_network_performance_case_6_tcp_tx_0388a9")
+        test_cases_metadata: Test cases metadata dictionary from load_test_case_metadata
+
+    Returns:
+        Program name or "N/A" if not found
+
+    Examples:
+        >>> get_program_name_for_case("system_network_performance_case_6_tcp_tx_0388a9", metadata)
+        'system_network_latency_details.py'
+    """
+    # Parse case number from tool case name
+    parsed = parse_tool_case_name(tool_case_name)
+    if not parsed:
+        return "N/A"
+
+    case_number = parsed.get("case_number")
+    if case_number is None:
+        return "N/A"
+
+    # Look up in metadata
+    if case_number in test_cases_metadata:
+        return test_cases_metadata[case_number].get("program", "N/A")
+
+    return "N/A"

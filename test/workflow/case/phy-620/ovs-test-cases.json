@@ -3,7 +3,7 @@
     "description": "Open vSwitch eBPF testing parameter specification",
     "source": "Generated from spec config: OVS Test Specification",
     "total_cases": 18,
-    "generated_at": "2025-10-20 11:09:48"
+    "generated_at": "2025-10-17 18:20:27"
   },
   "test_cases": [
     {

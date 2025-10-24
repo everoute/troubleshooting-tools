@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html { background: #ffffff; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #FFFFFF; font-family: Arial, sans-serif;
+  display: flex;
+}
+.header {
+  position: absolute; top: 0; left: 0; width: 100%;
+  height: 60pt; background: #277884;
+  display: flex; align-items: center; padding: 0 40pt;
+}
+.header-title {
+  color: #FFFFFF; font-size: 26pt; font-weight: bold; margin: 0;
+}
+.content {
+  margin: 90pt 40pt 55pt 40pt; width: 100%;
+}
+h2 {
+  color: #277884; font-size: 18pt; font-weight: bold;
+  margin: 0 0 10pt 0;
+}
+.chain {
+  background: #F5F5F5; padding: 15pt;
+  border-left: 6pt solid #FE4447;
+}
+.chain-step {
+  color: #2C2C2C; font-size: 13pt;
+  margin: 0 0 7pt 0; line-height: 1.3;
+}
+.solution {
+  background: #277884; padding: 12pt; margin: 12pt 0 0 0;
+}
+.solution-text {
+  color: #FFFFFF; font-size: 14pt; font-weight: bold;
+  margin: 0; text-align: center;
+}
+.result {
+  color: #5EA8A7; font-size: 13pt;
+  margin: 6pt 0 0 0; text-align: center;
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1 class="header-title">案例 2：完整因果链</h1>
+</div>
+<div class="content">
+  <h2>8 层递进式分析</h2>
+  <div class="chain">
+    <p class="chain-step">→ SO_BUSY_POLL 启用 (net.core.busy_poll=50)</p>
+    <p class="chain-step">→ 用户态频繁调用 napi_busy_loop (84%)</p>
+    <p class="chain-step">→ busy_loop 抢先处理 vring 数据</p>
+    <p class="chain-step">→ 中断到达时数据已处理 → IRQ_NONE</p>
+    <p class="chain-step">→ IRQ_NONE 累积达阈值，内核禁用 IRQ 69</p>
+    <p class="chain-step">→ Queue 2 失效，VM 网络不通</p>
+  </div>
+
+  <div class="solution">
+    <p class="solution-text">修复：sysctl -w net.core.busy_poll=0</p>
+    <p class="result">IRQ_NONE 下降 95% (10.2% → 0.49%)</p>
+  </div>
+</div>
+</body>
+</html>

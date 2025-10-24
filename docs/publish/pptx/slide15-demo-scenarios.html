@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html { background: #ffffff; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #FFFFFF; font-family: Arial, sans-serif;
+  display: flex;
+}
+.header {
+  position: absolute; top: 0; left: 0; width: 100%;
+  height: 60pt; background: #277884;
+  display: flex; align-items: center; padding: 0 40pt;
+}
+.header-title {
+  color: #FFFFFF; font-size: 28pt; font-weight: bold; margin: 0;
+}
+.content {
+  margin: 90pt 40pt 40pt 40pt; width: 100%;
+  display: flex; gap: 15pt;
+}
+.demo-card {
+  flex: 1; background: #F5F5F5; padding: 15pt;
+  border-top: 5pt solid #FE4447;
+}
+.demo-num {
+  color: #277884; font-size: 32pt; font-weight: bold;
+  margin: 0 0 10pt 0;
+}
+.demo-tool {
+  color: #277884; font-size: 13pt; font-weight: bold;
+  margin: 0 0 10pt 0; line-height: 1.2;
+}
+.demo-purpose {
+  color: #2C2C2C; font-size: 14pt;
+  margin: 0 0 10pt 0; font-weight: bold;
+}
+.demo-desc {
+  color: #666666; font-size: 13pt;
+  margin: 0; line-height: 1.3;
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1 class="header-title">Demo 演示场景</h1>
+</div>
+<div class="content">
+  <div class="demo-card">
+    <p class="demo-num">1</p>
+    <p class="demo-tool">drop_stack_stats_summary</p>
+    <p class="demo-purpose">丢包定位</p>
+    <p class="demo-desc">自动聚合栈，精确到内核函数</p>
+  </div>
+
+  <div class="demo-card">
+    <p class="demo-num">2</p>
+    <p class="demo-tool">network_latency_summary</p>
+    <p class="demo-purpose">延迟分析</p>
+    <p class="demo-desc">Histogram 可视化，识别长尾延迟</p>
+  </div>
+
+  <div class="demo-card">
+    <p class="demo-num">3</p>
+    <p class="demo-tool">ovs_userspace_megaflow</p>
+    <p class="demo-purpose">OVS 追踪</p>
+    <p class="demo-desc">追踪 Megaflow 生命周期</p>
+  </div>
+</div>
+</body>
+</html>

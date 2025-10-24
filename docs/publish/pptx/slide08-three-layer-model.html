@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html { background: #ffffff; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #FFFFFF; font-family: Arial, sans-serif;
+  display: flex;
+}
+.header {
+  position: absolute; top: 0; left: 0; width: 100%;
+  height: 60pt; background: #277884;
+  display: flex; align-items: center; padding: 0 40pt;
+}
+.header-title {
+  color: #FFFFFF; font-size: 28pt; font-weight: bold; margin: 0;
+}
+.content {
+  margin: 90pt 40pt 40pt 40pt; width: 100%;
+  display: flex; gap: 15pt;
+}
+.layer {
+  flex: 1; background: #F5F5F5; padding: 20pt;
+  border-top: 6pt solid #5EA8A7;
+}
+.layer-num {
+  color: #FE4447; font-size: 36pt; font-weight: bold;
+  margin: 0 0 8pt 0;
+}
+.layer-title {
+  color: #277884; font-size: 18pt; font-weight: bold;
+  margin: 0 0 10pt 0;
+}
+.layer-tool {
+  color: #5EA8A7; font-size: 14pt; font-weight: bold;
+  margin: 0 0 8pt 0;
+}
+ul {
+  margin: 0; padding-left: 20pt;
+}
+.layer-desc {
+  color: #2C2C2C; font-size: 13pt;
+  margin: 0; line-height: 1.3;
+}
+.layer-time {
+  color: #666666; font-size: 12pt; font-style: italic;
+  margin: 8pt 0 0 0;
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1 class="header-title">三层诊断模型</h1>
+</div>
+<div class="content">
+  <div class="layer">
+    <p class="layer-num">1</p>
+    <p class="layer-title">问题定位</p>
+    <p class="layer-tool">Summary 工具</p>
+    <ul>
+      <li class="layer-desc">Histogram 统计</li>
+      <li class="layer-desc">延迟分布 P50/P95/P99</li>
+      <li class="layer-desc">极低开销</li>
+    </ul>
+    <p class="layer-time">运行时长：小时-天</p>
+  </div>
+
+  <div class="layer">
+    <p class="layer-num">2</p>
+    <p class="layer-title">精确追踪</p>
+    <p class="layer-tool">Details 工具</p>
+    <ul>
+      <li class="layer-desc">Per-packet 跟踪</li>
+      <li class="layer-desc">过滤器控制</li>
+      <li class="layer-desc">捕获完整路径</li>
+    </ul>
+    <p class="layer-time">运行时长：分钟级</p>
+  </div>
+
+  <div class="layer">
+    <p class="layer-num">3</p>
+    <p class="layer-title">根因分析</p>
+    <p class="layer-tool">专项工具</p>
+    <ul>
+      <li class="layer-desc">Off-CPU 分析</li>
+      <li class="layer-desc">锁监控</li>
+      <li class="layer-desc">调度跟踪</li>
+    </ul>
+    <p class="layer-time">运行时长：秒-分钟</p>
+  </div>
+</div>
+</body>
+</html>

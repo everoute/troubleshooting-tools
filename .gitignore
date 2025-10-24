@@ -10,3 +10,4 @@ __pycache__/
 bcc-program/*
 test/workflow/result/*
 *.log
+docs/publish/pptx/node_modules/

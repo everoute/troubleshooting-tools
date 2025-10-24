@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+html { background: #ffffff; }
+body {
+  width: 720pt; height: 405pt; margin: 0; padding: 0;
+  background: #FFFFFF; font-family: Arial, sans-serif;
+  display: flex;
+}
+.header {
+  position: absolute; top: 0; left: 0; width: 100%;
+  height: 60pt; background: #277884;
+  display: flex; align-items: center; padding: 0 40pt;
+}
+.header-title {
+  color: #FFFFFF; font-size: 26pt; font-weight: bold; margin: 0;
+}
+.content {
+  margin: 90pt 60pt 60pt 60pt; width: 100%;
+}
+.case-title {
+  color: #277884; font-size: 22pt; font-weight: bold;
+  margin: 0 0 15pt 0;
+}
+.section {
+  margin: 0 0 12pt 0;
+}
+.section-label {
+  color: #FE4447; font-size: 14pt; font-weight: bold;
+  margin: 0 0 6pt 0;
+}
+.section-text {
+  color: #2C2C2C; font-size: 14pt;
+  margin: 0; line-height: 1.3;
+}
+.highlight {
+  background: #FFF3CD; padding: 2pt 6pt;
+  color: #856404; font-weight: bold;
+}
+</style>
+</head>
+<body>
+<div class="header">
+  <h1 class="header-title">案例 2：VM 网络间歇性不通</h1>
+</div>
+<div class="content">
+  <p class="case-title">virtio-net 中断风暴根因分析</p>
+
+  <div class="section">
+    <p class="section-label">症状</p>
+    <p class="section-text">VM 内部网络间歇性不通，SSH 连接断连，持续数分钟后自动恢复</p>
+  </div>
+
+  <div class="section">
+    <p class="section-label">环境</p>
+    <p class="section-text">OpenStack + KVM/QEMU (ARM64)，OVS → vhost-net → virtio-net</p>
+  </div>
+
+  <div class="section">
+    <p class="section-label">关键发现</p>
+    <p class="section-text">Queue 2 的 <span class="highlight">IRQ 69 被内核禁用</span>："irq 69: nobody cared"</p>
+  </div>
+
+  <div class="section">
+    <p class="section-label">根因</p>
+    <p class="section-text"><span class="highlight">SO_BUSY_POLL</span> 主动轮询与中断竞争 → IRQ_NONE 比例 10-20% → 触发内核保护机制</p>
+  </div>
+</div>
+</body>
+</html>

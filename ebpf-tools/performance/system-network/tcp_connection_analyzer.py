@@ -110,6 +110,33 @@ class TCPConnectionAnalyzer:
         self.system_config = {}
         self._load_system_config()
 
+    def _find_ss_command(self):
+        """Find ss command path"""
+        # Try common paths
+        possible_paths = [
+            '/usr/sbin/ss',
+            '/sbin/ss',
+            '/usr/bin/ss',
+            '/bin/ss',
+            'ss'  # Try PATH
+        ]
+
+        for path in possible_paths:
+            try:
+                result = subprocess.run(
+                    [path, '-V'],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    universal_newlines=True,
+                    timeout=2
+                )
+                if result.returncode == 0:
+                    return path
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                continue
+
+        return None
+
     def _load_system_config(self):
         """Load system TCP configuration"""
         configs = [
@@ -127,8 +154,9 @@ class TCPConnectionAnalyzer:
             try:
                 result = subprocess.run(
                     ['sysctl', '-n', config],
-                    capture_output=True,
-                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    universal_newlines=True,
                     timeout=5
                 )
                 if result.returncode == 0:
@@ -140,34 +168,41 @@ class TCPConnectionAnalyzer:
         """Collect TCP connection information using ss"""
         connections = []
 
-        # Build ss filter
+        # Determine ss command path
+        ss_cmd = self._find_ss_command()
+        if not ss_cmd:
+            print("Error: ss command not found. Please install iproute/iproute2 package.")
+            return connections
+
+        # Build ss filter expression (in parentheses for older ss versions)
         if self.args.role == 'client':
             if self.args.remote_ip and self.args.remote_port:
-                ss_filter = f"dst {self.args.remote_ip} and dport = :{self.args.remote_port}"
+                filter_expr = f"( dst {self.args.remote_ip} and dport = :{self.args.remote_port} )"
             elif self.args.remote_port:
-                ss_filter = f"dport = :{self.args.remote_port}"
+                filter_expr = f"( dport = :{self.args.remote_port} )"
             else:
                 print("Error: client role requires --remote-port")
                 return connections
         else:  # server
             if self.args.local_port:
-                ss_filter = f"sport = :{self.args.local_port}"
+                filter_expr = f"( sport = :{self.args.local_port} )"
             else:
                 print("Error: server role requires --local-port")
                 return connections
 
-        # Add state filter
-        if not self.args.all:
-            ss_filter += " state established"
-
-        # Execute ss command
-        cmd = ['ss', '-tinopm', ss_filter]
+        # Build complete ss command
+        # Format: ss -tinopm [state STATE] 'filter_expression'
+        if self.args.all:
+            cmd = [ss_cmd, '-tinopm', filter_expr]
+        else:
+            cmd = [ss_cmd, '-tinopm', 'state', 'established', filter_expr]
 
         try:
             result = subprocess.run(
                 cmd,
-                capture_output=True,
-                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
                 timeout=10
             )
 
@@ -195,31 +230,61 @@ class TCPConnectionAnalyzer:
             line = lines[i].strip()
 
             # Skip header and empty lines
-            if not line or line.startswith('State') or line.startswith('Netid'):
+            if not line or line.startswith('State') or line.startswith('Netid') or line.startswith('Recv-Q'):
                 i += 1
                 continue
 
             # Parse connection line
             conn = TCPConnectionInfo()
 
-            # First line: State Recv-Q Send-Q Local Remote
+            # First line: Recv-Q Send-Q Local Remote (or State Recv-Q Send-Q Local Remote)
             parts = line.split()
-            if len(parts) >= 5:
-                conn.state = parts[0]
-                conn.recv_q = int(parts[1])
-                conn.send_q = int(parts[2])
+            if len(parts) < 4:
+                i += 1
+                continue
 
+            # Try to parse based on whether first column is numeric (Recv-Q) or text (State)
+            try:
+                # Old format: Recv-Q Send-Q Local Remote
+                conn.recv_q = int(parts[0])
+                conn.send_q = int(parts[1])
+                conn.state = "ESTAB"  # Default state
+                local_idx = 2
+                remote_idx = 3
+            except ValueError:
+                # Newer format: State Recv-Q Send-Q Local Remote
+                if len(parts) < 5:
+                    i += 1
+                    continue
+                conn.state = parts[0]
+                try:
+                    conn.recv_q = int(parts[1])
+                    conn.send_q = int(parts[2])
+                except ValueError:
+                    # Skip malformed lines
+                    i += 1
+                    continue
+                local_idx = 3
+                remote_idx = 4
+
+            if len(parts) > remote_idx:
                 # Parse local address
-                local_parts = parts[3].rsplit(':', 1)
+                local_parts = parts[local_idx].rsplit(':', 1)
                 if len(local_parts) == 2:
                     conn.local_addr = local_parts[0].strip('[]')
-                    conn.local_port = int(local_parts[1])
+                    try:
+                        conn.local_port = int(local_parts[1])
+                    except ValueError:
+                        pass
 
                 # Parse remote address
-                remote_parts = parts[4].rsplit(':', 1)
+                remote_parts = parts[remote_idx].rsplit(':', 1)
                 if len(remote_parts) == 2:
                     conn.remote_addr = remote_parts[0].strip('[]')
-                    conn.remote_port = int(remote_parts[1])
+                    try:
+                        conn.remote_port = int(remote_parts[1])
+                    except ValueError:
+                        pass
 
             # Parse subsequent lines with metrics
             i += 1

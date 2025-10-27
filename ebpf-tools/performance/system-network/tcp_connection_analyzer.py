@@ -15,17 +15,20 @@ Features:
 - Support both single connection and continuous monitoring
 
 Usage:
-    # Analyze specific connection (client side)
+    # Analyze client-side connection to iperf3 server
     sudo python3 tcp_connection_analyzer.py --remote-ip 1.1.1.5 --remote-port 5201 --role client
 
-    # Analyze specific connection (server side)
+    # Analyze server-side connections on port 5201
     sudo python3 tcp_connection_analyzer.py --local-port 5201 --role server
+
+    # Filter by specific local IP (multi-homed hosts)
+    sudo python3 tcp_connection_analyzer.py --local-ip 70.0.0.31 --local-port 2181 --role server
+
+    # Filter both local and remote endpoints
+    sudo python3 tcp_connection_analyzer.py --local-ip 70.0.0.31 --remote-ip 70.0.0.32 --local-port 2181 --role server
 
     # Continuous monitoring
     sudo python3 tcp_connection_analyzer.py --remote-ip 1.1.1.5 --remote-port 5201 --role client --interval 2
-
-    # Monitor all connections to a port
-    sudo python3 tcp_connection_analyzer.py --remote-port 5201 --role client --all
 """
 
 import subprocess
@@ -175,20 +178,36 @@ class TCPConnectionAnalyzer:
             return connections
 
         # Build ss filter expression (in parentheses for older ss versions)
+        # Build filter conditions list
+        conditions = []
+
+        if self.args.local_ip:
+            conditions.append(f"src {self.args.local_ip}")
+        if self.args.local_port:
+            conditions.append(f"sport = :{self.args.local_port}")
+        if self.args.remote_ip:
+            conditions.append(f"dst {self.args.remote_ip}")
+        if self.args.remote_port:
+            conditions.append(f"dport = :{self.args.remote_port}")
+
+        # Role-based validation and defaults
         if self.args.role == 'client':
-            if self.args.remote_ip and self.args.remote_port:
-                filter_expr = f"( dst {self.args.remote_ip} and dport = :{self.args.remote_port} )"
-            elif self.args.remote_port:
-                filter_expr = f"( dport = :{self.args.remote_port} )"
-            else:
-                print("Error: client role requires --remote-port")
+            # Client role: typically filter by destination
+            if not self.args.remote_port and not self.args.remote_ip:
+                print("Error: client role requires at least --remote-port or --remote-ip")
                 return connections
         else:  # server
-            if self.args.local_port:
-                filter_expr = f"( sport = :{self.args.local_port} )"
-            else:
-                print("Error: server role requires --local-port")
+            # Server role: typically filter by source port (local listening port)
+            if not self.args.local_port and not self.args.local_ip:
+                print("Error: server role requires at least --local-port or --local-ip")
                 return connections
+
+        # Combine conditions
+        if not conditions:
+            print("Error: no filter conditions specified")
+            return connections
+
+        filter_expr = "( " + " and ".join(conditions) + " )"
 
         # Build complete ss command
         # Format: ss -tinopm [state STATE] 'filter_expression'
@@ -723,29 +742,37 @@ Examples:
   # Analyze client-side connection to iperf3 server
   %(prog)s --remote-ip 1.1.1.5 --remote-port 5201 --role client
 
-  # Analyze server-side connections
+  # Analyze server-side connections on port 5201
   %(prog)s --local-port 5201 --role server
+
+  # Filter by specific local IP (useful for multi-homed hosts)
+  %(prog)s --local-ip 70.0.0.31 --local-port 2181 --role server
+
+  # Filter both local and remote
+  %(prog)s --local-ip 70.0.0.31 --remote-ip 70.0.0.32 --local-port 2181 --role server
 
   # Continuous monitoring every 2 seconds
   %(prog)s --remote-ip 1.1.1.5 --remote-port 5201 --role client --interval 2
 
-  # Monitor all connections to a port
-  %(prog)s --remote-port 5201 --role client --all
+  # Monitor all connections to a remote IP (any port)
+  %(prog)s --remote-ip 1.1.1.5 --role client --all
 
   # Show system TCP configuration
-  %(prog)s --show-config
+  %(prog)s --show-config --role server --local-port 5201
         """
     )
 
     parser.add_argument('--role', type=str, choices=['client', 'server'],
                         required=True,
                         help='Role: client (initiator) or server (listener)')
-    parser.add_argument('--remote-ip', type=str,
-                        help='Remote IP address (for client role)')
-    parser.add_argument('--remote-port', type=int,
-                        help='Remote port number')
+    parser.add_argument('--local-ip', type=str,
+                        help='Local IP address filter')
     parser.add_argument('--local-port', type=int,
-                        help='Local port number (for server role)')
+                        help='Local port number (for server role, or additional filter)')
+    parser.add_argument('--remote-ip', type=str,
+                        help='Remote IP address (for client role, or additional filter)')
+    parser.add_argument('--remote-port', type=int,
+                        help='Remote port number (for client role, or additional filter)')
     parser.add_argument('--interval', type=int, default=0,
                         help='Monitoring interval in seconds (0 = single shot)')
     parser.add_argument('--all', action='store_true',

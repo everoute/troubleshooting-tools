@@ -1,75 +1,136 @@
 # TCP Connection Analyzer
 
-## 概述
+## Overview
 
-TCP Connection Analyzer 是一个用于收集和分析 TCP 连接性能的工具。它可以帮助诊断网络吞吐量问题，识别性能瓶颈，并提供可操作的优化建议。
+TCP Connection Analyzer is a comprehensive tool for collecting and analyzing TCP connection performance metrics. It helps diagnose network throughput issues, identify performance bottlenecks, and provide actionable optimization recommendations.
 
-## 功能特性
+The tool combines per-connection analysis with system-wide TCP statistics to provide deep insights into retransmission sources and protocol stack packet drops.
 
-1. **连接信息收集**
-   - 使用 `ss` 命令收集详细的 TCP 连接指标
-   - 支持 client 和 server 两种角色
-   - 可以监控单个连接或所有连接
+## Key Features
 
-2. **性能指标分析**
-   - RTT (往返时延) 和 RTT 方差
-   - 拥塞窗口 (cwnd) 和慢启动阈值 (ssthresh)
-   - 接收窗口 (rcv_space) 和发送窗口
-   - 发送速率、限速速率、实际交付速率
-   - 重传统计和丢包统计
-   - 队列状态 (Recv-Q, Send-Q)
+### 1. Connection Information Collection
+- Uses `ss` command to collect detailed TCP connection metrics
+- Supports both client and server roles
+- Flexible filtering by IP address and port
+- Can monitor single connection or multiple connections
 
-3. **瓶颈检测**
-   - **rwnd_limited**: 接收窗口限制
-   - **cwnd_limited**: 拥塞窗口限制
-   - **sndbuf_limited**: 发送缓冲区限制
-   - 高重传率检测
-   - 队列积压检测
-   - 速率限制检测
+### 2. Performance Metrics Analysis
 
-4. **智能建议**
-   - 计算带宽延迟积 (BDP)
-   - 推荐接收/发送缓冲区大小
-   - 提供具体的 sysctl 调整命令
-   - 给出进一步排查方向
+**Per-Connection Metrics:**
+- RTT (Round-Trip Time) and RTT variance
+- Congestion window (cwnd) and slow start threshold (ssthresh)
+- Receive window (rcv_space) and send window
+- Send rate, pacing rate, and delivery rate
+- Retransmission and packet loss statistics
+- Queue status (Recv-Q, Send-Q)
 
-5. **灵活的监控模式**
-   - 单次采样
-   - 持续监控（指定间隔）
-   - 系统配置查看
+**System-Wide Statistics (from netstat -s):**
+- Retransmission type breakdown (TLP, fast retransmit, timeout, etc.)
+- Protocol stack packet drops (socket buffer overflow, backlog drops, listen queue drops)
+- SACK recovery and packet reordering detection
+- Congestion window recovery statistics
+- Timeout event classification
 
-## 使用方法
+### 3. Bottleneck Detection
 
-### 基本用法
+**Connection-Level Bottlenecks:**
+- **rwnd_limited**: Receive window limitation
+- **cwnd_limited**: Congestion window limitation
+- **sndbuf_limited**: Send buffer limitation
+- High retransmission rate detection
+- Queue backlog detection
+- Pacing rate limitation
 
-#### 1. Client 端分析（分析到服务器的连接）
+**System-Level Issues:**
+- Socket buffer overflow (receive queue pruned)
+- Backlog queue drops (processing overload)
+- Listen queue overflow (SYN drops)
+- High TLP ratio (small receive window)
+- Retransmitted packets lost again (severe congestion)
+
+### 4. Intelligent Analysis & Recommendations
+
+**BDP Calculation:**
+- Calculates Bandwidth-Delay Product
+- Recommends optimal receive/send buffer sizes
+- Provides specific sysctl tuning commands
+
+**Retransmission Source Analysis:**
+- Identifies retransmission types and their percentages
+- Pinpoints root causes (small window, network loss, congestion)
+- Provides targeted remediation steps
+
+**Critical Warnings:**
+- High TLP ratio (>30%) - indicates small rwnd
+- Many retrans packets lost (>1000) - indicates path quality issues
+- Socket buffer overflow - requires tcp_rmem increase
+- Listen queue overflow - requires somaxconn increase
+
+### 5. Flexible Monitoring Modes
+- Single snapshot analysis
+- Continuous monitoring with specified interval
+- System configuration display
+- System statistics display
+
+## Installation Requirements
+
+- **OS**: Linux with kernel 4.9+ (for full metrics support)
+- **Tools**: `ss` command (from iproute2 package), `netstat` command
+- **Permissions**: sudo/root required
+- **Python**: Python 3.6+
+
+## Usage
+
+### Basic Usage
+
+#### 1. Client-Side Analysis (Analyzing connection to server)
 
 ```bash
-# 分析到 iperf3 服务器的连接
+# Analyze connection to iperf3 server
 sudo python3 tcp_connection_analyzer.py \
     --remote-ip 1.1.1.5 \
     --remote-port 5201 \
     --role client
 
-# 分析所有到端口 5201 的连接
+# Analyze all connections to specific remote IP
 sudo python3 tcp_connection_analyzer.py \
+    --remote-ip 1.1.1.5 \
+    --role client
+
+# Filter by both local and remote endpoints
+sudo python3 tcp_connection_analyzer.py \
+    --local-ip 10.0.0.31 \
+    --remote-ip 10.0.0.32 \
     --remote-port 5201 \
     --role client
 ```
 
-#### 2. Server 端分析（分析从客户端来的连接）
+#### 2. Server-Side Analysis (Analyzing connections from clients)
 
 ```bash
-# 分析 iperf3 服务端的连接
+# Analyze iperf3 server connections
 sudo python3 tcp_connection_analyzer.py \
     --local-port 5201 \
     --role server
+
+# Filter by specific local IP (for multi-homed hosts)
+sudo python3 tcp_connection_analyzer.py \
+    --local-ip 70.0.0.31 \
+    --local-port 2181 \
+    --role server
+
+# Filter by both local and remote endpoints
+sudo python3 tcp_connection_analyzer.py \
+    --local-ip 70.0.0.31 \
+    --remote-ip 70.0.0.32 \
+    --local-port 2181 \
+    --role server
 ```
 
-#### 3. 持续监控
+#### 3. Continuous Monitoring
 
 ```bash
-# 每 2 秒采样一次
+# Sample every 2 seconds
 sudo python3 tcp_connection_analyzer.py \
     --remote-ip 1.1.1.5 \
     --remote-port 5201 \
@@ -77,36 +138,110 @@ sudo python3 tcp_connection_analyzer.py \
     --interval 2
 ```
 
-#### 4. 查看系统 TCP 配置
+#### 4. View System TCP Configuration & Statistics
 
 ```bash
-# 显示当前系统 TCP 配置
-sudo python3 tcp_connection_analyzer.py --show-config --role client
+# Show system TCP configuration and statistics
+sudo python3 tcp_connection_analyzer.py \
+    --local-port 5201 \
+    --role server \
+    --show-config
+
+# Show only system TCP statistics (netstat -s analysis)
+sudo python3 tcp_connection_analyzer.py \
+    --local-port 5201 \
+    --role server \
+    --show-stats
 ```
 
-### 高级选项
+### Advanced Options
 
 ```bash
-# 指定目标带宽（用于 BDP 计算，默认 25 Gbps）
+# Specify target bandwidth (for BDP calculation, default 25 Gbps)
 --target-bandwidth 25
 
-# 监控所有状态的连接（不只是 ESTABLISHED）
+# Monitor all connection states (not just ESTABLISHED)
 --all
 
-# JSON 格式输出（便于脚本处理）
+# JSON format output (for script processing)
 --json
 ```
 
-## 输出说明
+## Output Explanation
 
-### 1. 连接基本信息
+### 1. System TCP Statistics (--show-stats or --show-config)
+
+```
+================================================================================
+System TCP Statistics (netstat -s)
+================================================================================
+
+=== Retransmission Type Breakdown ===:
+--------------------------------------------------------------------------------
+  segments_retransmitted             :     59,545,149  # Total retransmitted segments (all causes)
+  fast_retransmits                   :     33,063,030  # Fast retransmits (packet loss/reordering, 3 DupACKs)
+  retrans_in_slowstart               :      5,247,139  # Retrans during slow start (initial cwnd small)
+  tcp_loss_probes                    :     24,564,762  # TLP probe retrans (window too small for fast retransmit)
+  tcp_loss_probe_recovery            :       224,453  # TLP probe successful recovery
+  tcp_lost_retransmit                :      3,518,314  # Retransmitted packet lost again (severe congestion or path issue)
+  tcp_spurious_rtos                  :         7,839  # Spurious RTO (false positive, high RTT variance)
+
+=== Stack Packet Drops ===:
+--------------------------------------------------------------------------------
+  rcv_pruned                         :        29,892  # Rcv queue pruned (socket buffer overflow)
+  rcv_collapsed                      :         1,772  # Rcv queue collapsed (memory pressure)
+  tcp_backlog_drop                   :         3,641  # Backlog queue drop (processing overload)
+  listen_overflows                   :     28,747,070  # Listen queue overflow count
+  listen_drops                       :     28,747,070  # SYN dropped (listen queue full)
+
+================================================================================
+=== Intelligent Analysis ===
+================================================================================
+
+Retransmission Ratio: 0.0267% (59,545,149 / 223,417,376,312)
+
+Retransmission Type Breakdown:
+  TLP probe retrans   :   24,564,762  ( 41.3%)  - Window too small
+  Fast retransmit     :   33,063,030  ( 55.5%)  - Packet loss/reordering
+  Slow start retrans  :    5,247,139  (  8.8%)  - Small cwnd
+  Retrans pkt lost    :    3,518,314  (  5.9%)  - Severe congestion WARNING
+
+WARNING: Stack packet drops detected:
+  Rcv queue pruned      :       29,892  - Socket buffer overflow, increase tcp_rmem
+  Backlog drop          :        3,641  - App processing slow, increase tcp_max_syn_backlog
+  SYN dropped           :   28,747,070  - Listen queue full, increase somaxconn
+
+Critical Warnings:
+  CRITICAL: TLP ratio too high: 41.3% - Check receive window (rwnd)
+  CRITICAL: Many retrans packets lost: 3,518,314 - Poor path quality
+  WARNING: Socket buffer overflow: 29,892 - Increase tcp_rmem
+  WARNING: Listen queue overflow: 28,747,070 - Increase net.core.somaxconn
+```
+
+**Key Statistics Explained:**
+
+**Retransmission Types:**
+- **TLP probe retrans**: Tail Loss Probe used when window too small to trigger fast retransmit (needs 3 DupACKs)
+- **Fast retransmit**: Triggered by 3 duplicate ACKs, indicates network packet loss or reordering
+- **Slow start retrans**: During initial connection phase, expected behavior
+- **Retrans pkt lost**: Retransmitted packets lost again, indicates severe congestion or poor path quality
+- **Spurious RTO**: False timeout detection, often due to high RTT variance
+
+**Stack Packet Drops:**
+- **Rcv queue pruned**: Socket buffer overflow, packets discarded by kernel
+- **Rcv queue collapsed**: Memory pressure, kernel compressing receive queue
+- **Backlog drop**: Application processing too slow, backlog queue full
+- **Listen overflow**: Too many SYN requests, listen queue full
+- **SYN dropped**: SYN packets dropped due to full listen queue
+
+### 2. Connection Basic Information
 
 ```
 Connection: 1.1.1.2:53858 -> 1.1.1.5:5201
 State: ESTAB
 ```
 
-### 2. 性能指标
+### 3. Performance Metrics
 
 ```
 Metrics:
@@ -126,17 +261,17 @@ Metrics:
   recommended_window       : 975000 bytes (952.1 KB)
 ```
 
-**关键指标解读：**
+**Key Metrics Explained:**
 
-- **rtt**: 往返时延，越小越好（局域网通常 < 1ms）
-- **cwnd**: 拥塞窗口，太小（<100）说明有问题
-- **rcv_space**: 接收窗口，应该远大于 BDP
-- **pacing_rate**: 发送速率限制，应该接近目标带宽
-- **retrans**: 重传次数，格式为 "未确认/总重传"
-- **bdp**: 带宽延迟积，理论最小窗口大小
-- **recommended_window**: 推荐窗口大小（BDP × 4）
+- **rtt**: Round-trip time, lower is better (LAN typically < 1ms)
+- **cwnd**: Congestion window, too small (<100) indicates issues
+- **rcv_space**: Receive window, should be much larger than BDP
+- **pacing_rate**: Send rate limit, should be close to target bandwidth
+- **retrans**: Retransmission count, format "unacked/total"
+- **bdp**: Bandwidth-Delay Product, theoretical minimum window size
+- **recommended_window**: Recommended window size (BDP × 4)
 
-### 3. 瓶颈检测
+### 4. Bottleneck Detection
 
 ```
 Bottlenecks Detected:
@@ -151,19 +286,24 @@ Bottlenecks Detected:
   ⚠️ [WARNING] high_retransmissions
      Value: 1195
      High retransmission count (1195)
+
+Likely Causes:
+  - TLP probe retrans: 24,562,987 (41.3%) - Window too small (rwnd/cwnd), cannot trigger fast retransmit
+  - Fast retransmit: 33,062,483 (55.5%) - Packet loss or reordering
+  - Retrans pkt lost: 3,518,221 - Severe congestion or path quality issue
 ```
 
-**瓶颈类型：**
+**Bottleneck Types:**
 
-- **rwnd_limited**: 接收窗口限制（最常见的吞吐量瓶颈）
-- **cwnd_limited**: 拥塞窗口限制（网络丢包导致）
-- **sndbuf_limited**: 发送缓冲区限制
-- **small_cwnd**: 拥塞窗口过小
-- **high_retransmissions**: 高重传率
-- **recv_queue_backlog**: 接收队列积压（应用层慢）
-- **low_pacing_rate**: 发送速率远低于目标
+- **rwnd_limited**: Receive window limitation (most common throughput bottleneck)
+- **cwnd_limited**: Congestion window limitation (caused by packet loss)
+- **sndbuf_limited**: Send buffer limitation
+- **small_cwnd**: Congestion window too small (only for client role)
+- **high_retransmissions**: High retransmission rate
+- **recv_queue_backlog**: Receive queue backlog (slow application)
+- **low_pacing_rate**: Send rate far below target
 
-### 4. 优化建议
+### 5. Optimization Recommendations
 
 ```
 Recommendations:
@@ -176,274 +316,384 @@ Recommendations:
        sudo sysctl -w net.ipv4.tcp_rmem="4096 131072 1950000"
 
   2. Issue: High retransmissions detected
-     Action: Investigate packet loss
+     Likely Causes:
+       - TLP probe retrans: 24,562,987 (41.3%) - Window too small (rwnd/cwnd), cannot trigger fast retransmit
+       - Fast retransmit: 33,062,483 (55.5%) - Packet loss or reordering
+     Action: Investigate retransmission causes
      Commands:
-       ethtool -S <interface> | grep drop
-       Use eBPF tools to trace packet drops
+       # Check system-wide retrans breakdown:
+       netstat -s | grep -iE 'retrans|loss probe|spurious'
+
+       # Check NIC drops:
+       ethtool -S <interface> | grep -E 'drop|error|miss'
+
+       # Use eBPF tools for detailed tracing:
+       # sudo python3 ebpf-tools/linux-network-stack/packet-drop/*.py
 ```
 
-## 典型使用场景
+## Typical Use Cases
 
-### 场景 1：iperf3 测试吞吐量上不去
+### Case 1: iperf3 Throughput Lower Than Expected
 
-**问题：** 25G 网卡，iperf3 只能跑到 6-7 Gbps
+**Problem:** 25G NIC, but iperf3 only achieves 6-7 Gbps
 
-**诊断步骤：**
+**Diagnostic Steps:**
 
-1. **在 iperf3 客户端执行：**
+1. **On iperf3 client:**
    ```bash
-   # 开始 iperf3 测试
+   # Start iperf3 test
    iperf3 -c 1.1.1.5 -t 60 -P 2 &
 
-   # 在另一个终端分析连接
+   # Analyze connection in another terminal
    sudo python3 tcp_connection_analyzer.py \
        --remote-ip 1.1.1.5 \
        --remote-port 5201 \
-       --role client
+       --role client \
+       --show-config
    ```
 
-2. **在 iperf3 服务端执行：**
+2. **On iperf3 server:**
    ```bash
    sudo python3 tcp_connection_analyzer.py \
        --local-port 5201 \
-       --role server
+       --role server \
+       --show-config
    ```
 
-3. **查看输出，重点关注：**
-   - `rwnd_limited` 占比 > 50% → 接收窗口瓶颈
-   - `cwnd` < 100 → 拥塞问题
-   - `retrans` 很高 → 网络丢包
-   - `rcv_space` << BDP × 4 → 窗口太小
+3. **Check output, focus on:**
+   - `rwnd_limited` > 50% → Receive window bottleneck
+   - `cwnd` < 100 → Congestion issue
+   - `retrans` very high → Network packet loss
+   - `rcv_space` << BDP × 4 → Window too small
+   - `TLP ratio` > 30% → Receive window (rwnd) too small
 
-4. **根据建议调整系统参数**
+4. **Tune system parameters based on recommendations**
 
-5. **重新测试验证**
+5. **Re-test to verify improvement**
 
-### 场景 2：持续监控连接状态变化
+### Case 2: Continuous Monitoring for State Changes
 
 ```bash
-# 启动持续监控
+# Start continuous monitoring
 sudo python3 tcp_connection_analyzer.py \
     --remote-ip 1.1.1.5 \
     --remote-port 5201 \
     --role client \
     --interval 1 > tcp_analysis.log
 
-# 观察关键指标的变化趋势：
-# - rcv_space 是否逐步增长
-# - cwnd 是否稳定
-# - rwnd_limited 是否下降
-# - retrans 是否增加
+# Monitor key metric trends:
+# - Is rcv_space gradually increasing?
+# - Is cwnd stable?
+# - Is rwnd_limited decreasing?
+# - Are retrans increasing?
 ```
 
-### 场景 3：对比调优前后
+### Case 3: Before/After Tuning Comparison
 
 ```bash
-# 调优前
+# Before tuning
 echo "=== Before Tuning ===" > comparison.txt
 sudo python3 tcp_connection_analyzer.py \
     --remote-ip 1.1.1.5 \
     --remote-port 5201 \
-    --role client >> comparison.txt
+    --role client \
+    --show-config >> comparison.txt
 
-# 调整系统参数
+# Tune system parameters
 sudo sysctl -w net.core.rmem_max=268435456
 sudo sysctl -w net.ipv4.tcp_rmem="4096 131072 268435456"
 
-# 重启 iperf3 测试
+# Restart iperf3 test
 
-# 调优后
+# After tuning
 echo "=== After Tuning ===" >> comparison.txt
 sudo python3 tcp_connection_analyzer.py \
     --remote-ip 1.1.1.5 \
     --remote-port 5201 \
-    --role client >> comparison.txt
+    --role client \
+    --show-config >> comparison.txt
 
-# 对比结果
+# Compare results
 less comparison.txt
 ```
 
-## 工作原理
+### Case 4: Diagnosing High Retransmissions
 
-### 数据收集
+```bash
+# Check system-wide retransmission breakdown
+sudo python3 tcp_connection_analyzer.py \
+    --local-port 2181 \
+    --role server \
+    --show-stats
 
-工具使用 `ss` 命令的以下选项收集信息：
+# Look for:
+# - High TLP ratio (>30%) → Small rwnd issue
+# - Many retrans packets lost → Path quality issue
+# - High fast retransmit → Network packet loss
+# - Stack packet drops → Socket buffer overflow
+```
+
+## How It Works
+
+### Data Collection
+
+The tool uses the `ss` command with the following options:
 
 ```bash
 ss -tinopm <filter>
 ```
 
-- `-t`: 只显示 TCP
-- `-i`: 显示内部 TCP 信息（cwnd, rtt, retrans 等）
-- `-n`: 不解析服务名
-- `-o`: 显示定时器信息
-- `-p`: 显示进程信息
-- `-m`: 显示 socket 内存使用
+- `-t`: TCP only
+- `-i`: Internal TCP information (cwnd, rtt, retrans, etc.)
+- `-n`: Don't resolve service names
+- `-o`: Timer information
+- `-p`: Process information
+- `-m`: Socket memory usage
 
-### 瓶颈检测逻辑
+### System Statistics Collection
 
-#### 1. rwnd_limited 检测
+Parses `netstat -s` output to extract TCP and TcpExt statistics:
+
+- **Tcp section**: Basic counters (segments sent/received, retransmitted, etc.)
+- **TcpExt section**: Advanced counters (TLP probes, fast retransmits, SACK recovery, etc.)
+
+### Bottleneck Detection Logic
+
+#### 1. rwnd_limited Detection
 
 ```python
 if rwnd_limited_ratio > 50%:
-    # 接收窗口是主要瓶颈
-    # 计算所需窗口大小 = BDP × 4
-    # 提供调整 tcp_rmem 的建议
+    # Receive window is main bottleneck
+    # Calculate required window = BDP × 4
+    # Provide tcp_rmem tuning recommendations
 ```
 
-#### 2. cwnd_limited 检测
+#### 2. cwnd_limited Detection
 
 ```python
 if cwnd_limited_ratio > 50%:
-    # 拥塞窗口限制
-    # 建议检查网络丢包
-    # 检查 ethtool 统计
+    # Congestion window limitation
+    # Recommend checking for packet loss
+    # Check ethtool statistics
 ```
 
-#### 3. 小 cwnd 检测
+#### 3. Small cwnd Detection (Client Role Only)
 
 ```python
-if cwnd < 100:
-    # 拥塞窗口过小
-    # 可能在慢启动或拥塞恢复阶段
-    # 通常是丢包的结果
+if role == 'client' and cwnd < 100:
+    # Congestion window too small
+    # Possibly in slow start or recovery phase
+    # Usually result of packet loss
 ```
 
-#### 4. 高重传检测
+#### 4. High Retransmission Detection
 
 ```python
 if retrans_total > 100:
-    # 高重传率
-    # 建议排查丢包原因
+    # High retransmission rate
+    # Analyze retransmission types from system stats
+    # Provide targeted recommendations
 ```
 
-### BDP 计算
+### BDP Calculation
 
 ```python
-BDP (bytes) = 带宽 (bps) × RTT (秒) / 8
+BDP (bytes) = Bandwidth (bps) × RTT (seconds) / 8
 
-推荐窗口 = BDP × 4
+Recommended Window = BDP × 4
 ```
 
-**示例：**
+**Example:**
 ```
-带宽 = 25 Gbps = 25,000,000,000 bps
-RTT = 0.1 ms = 0.0001 秒
+Bandwidth = 25 Gbps = 25,000,000,000 bps
+RTT = 0.1 ms = 0.0001 seconds
 
 BDP = 25,000,000,000 × 0.0001 / 8
     = 312,500 bytes
     ≈ 305 KB
 
-推荐窗口 = 305 KB × 4 = 1.2 MB
+Recommended Window = 305 KB × 4 = 1.2 MB
 ```
 
-## 常见问题
+## Common Questions
 
-### Q1: 为什么需要 sudo？
+### Q1: Why is sudo required?
 
-A: `ss` 命令的某些选项（如 `-p` 显示进程信息）需要 root 权限。
+A: Some `ss` options (like `-p` for process information) require root permissions.
 
-### Q2: 如何确定是 client 还是 server 角色？
+### Q2: How to determine client vs server role?
 
 A:
-- **Client**: 发起连接的一方，使用高端口连接到服务器的固定端口
-- **Server**: 监听固定端口的一方
+- **Client**: Initiates connection, uses high port to connect to server's fixed port
+- **Server**: Listens on fixed port
 
-例如 iperf3：
-- Server: `iperf3 -s` (监听 5201)
-- Client: `iperf3 -c <server>` (使用随机高端口)
+Example with iperf3:
+- Server: `iperf3 -s` (listens on 5201)
+- Client: `iperf3 -c <server>` (uses random high port)
 
-### Q3: rwnd_limited 95% 一定是接收窗口问题吗？
+### Q3: Is 95% rwnd_limited definitely a receive window issue?
 
-A: 是的，这个指标直接反映了发送端被接收端窗口限制的时间占比。如果超过 50%，接收窗口肯定是主要瓶颈。
+A: Yes, this metric directly reflects the percentage of time the sender was limited by the receiver's window. If over 50%, receive window is definitely the main bottleneck.
 
-### Q4: 调整了 tcp_rmem 为什么 rcv_space 还是很小？
+### Q4: Why is rcv_space still small after adjusting tcp_rmem?
 
-A: 可能原因：
-1. 连接是在调整前建立的 → 需要重新建立连接
-2. 窗口自动调整算法需要时间 → 等待几个 RTT 周期
-3. 陷入恶性循环 → 需要同时调大 default 值
+A: Possible reasons:
+1. Connection established before adjustment → Need to re-establish connection
+2. Window auto-tuning needs time → Wait a few RTT cycles
+3. Caught in vicious cycle → Need to increase default value as well
 
-### Q5: 如何解读 retrans 字段的 "0/1195"？
+### Q5: How to interpret retrans field "0/1195"?
 
-A: 格式为 "未确认重传/总重传次数"
-- 第一个数字：当前未被确认的重传数量
-- 第二个数字：连接建立以来的累积重传次数
+A: Format is "unacked retrans / total retrans"
+- First number: Currently unacknowledged retransmissions
+- Second number: Cumulative retransmissions since connection establishment
 
-### Q6: 工具能检测哪些瓶颈？
+### Q6: What bottlenecks can the tool detect?
 
-A: 主要检测：
-1. TCP 层瓶颈（rwnd_limited, cwnd_limited, sndbuf_limited）
-2. 拥塞问题（小 cwnd, 高重传）
-3. 应用层问题（Recv-Q > 0）
-4. 速率限制（pacing_rate 远低于目标）
+A: Main detections:
+1. TCP layer bottlenecks (rwnd_limited, cwnd_limited, sndbuf_limited)
+2. Congestion issues (small cwnd, high retrans with type analysis)
+3. Application layer issues (Recv-Q > 0)
+4. Rate limiting (pacing_rate far below target)
+5. Protocol stack drops (socket buffer overflow, backlog drops, listen queue overflow)
 
-不能直接检测：
-- 网卡硬件问题（需要用 ethtool）
-- CPU 瓶颈（需要用 mpstat）
-- 内存压力（需要查看系统日志）
+Cannot directly detect:
+- NIC hardware issues (use ethtool)
+- CPU bottlenecks (use mpstat)
+- Memory pressure (check system logs)
 
-## 与其他工具的配合
+### Q7: What does high TLP ratio mean?
 
-### 1. 配合 ethtool 检查网卡
+A: TLP (Tail Loss Probe) ratio over 30% indicates:
+- Receive window (rwnd) is too small
+- Cannot trigger fast retransmit (needs 3 DupACKs)
+- Need to increase `tcp_rmem` on receiver side
+
+### Q8: What causes "retrans packets lost"?
+
+A: When retransmitted packets are lost again, it indicates:
+- Severe network congestion
+- Poor path quality
+- Need to investigate network infrastructure
+
+## Integration with Other Tools
+
+### 1. With ethtool for NIC Checks
 
 ```bash
-# 运行分析工具
+# Run analyzer
 sudo python3 tcp_connection_analyzer.py --remote-ip 1.1.1.5 --remote-port 5201 --role client
 
-# 如果提示检查丢包，使用 ethtool
-sudo ethtool -S <网卡名> | grep -E "drop|error|miss"
+# If drops detected, check with ethtool
+sudo ethtool -S <interface> | grep -E "drop|error|miss"
 ```
 
-### 2. 配合 eBPF 工具深入分析
+### 2. With eBPF Tools for Deep Analysis
 
 ```bash
-# 如果检测到高延迟，使用延迟分析工具
+# If high latency detected, use latency analysis tool
 sudo python3 system_network_latency_details.py \
     --src-ip 1.1.1.2 --dst-ip 1.1.1.5 \
     --protocol tcp --direction tx \
-    --phy-interface <网卡> \
+    --phy-interface <interface> \
     --latency-us 100
 ```
 
-### 3. 配合 netstat 查看系统统计
+### 3. With netstat for System Statistics
 
 ```bash
-# 查看系统级别的重传统计
+# View system-level retransmission statistics (now integrated in tool)
 netstat -s | grep -i retrans
 
-# 查看 TCP 内存使用
+# Check TCP memory usage
 cat /proc/net/sockstat
 ```
 
-## 输出示例
+## Output Examples
 
-完整的输出示例参见工具执行结果，主要包含：
+Complete output example includes:
 
-1. **系统配置部分** (--show-config)
-2. **连接信息和指标**
-3. **瓶颈检测结果**
-4. **优化建议和命令**
+1. **System Configuration** (--show-config)
+2. **System Statistics with Intelligent Analysis** (--show-config or --show-stats)
+3. **Connection Information and Metrics**
+4. **Bottleneck Detection Results**
+5. **Optimization Recommendations and Commands**
 
-## 限制和注意事项
+## Limitations and Notes
 
-1. **需要 ss 工具**：系统必须安装 iproute2 包
-2. **内核版本**：某些指标（如 rwnd_limited）需要较新的内核（4.9+）
-3. **连接状态**：只能分析已建立的连接
-4. **采样时间点**：单次采样是瞬时值，建议持续监控
-5. **不能替代 eBPF**：无法追踪内核内部的详细路径
+1. **Requires ss tool**: System must have iproute2 package installed
+2. **Kernel version**: Some metrics (like rwnd_limited) require newer kernel (4.9+)
+3. **Connection state**: Can only analyze established connections
+4. **Sampling moment**: Single snapshot is instantaneous value, continuous monitoring recommended
+5. **Cannot replace eBPF**: Cannot trace detailed kernel internal paths
+6. **netstat -s statistics**: System-wide counters, not per-connection
+7. **Server role cwnd**: Server-side small cwnd is normal (only sends ACKs)
 
-## 后续计划
+## Implementation Details
 
-- [ ] 添加历史数据记录和趋势分析
-- [ ] 支持多连接对比
-- [ ] 添加图形化输出
-- [ ] 集成 eBPF 工具进行深度分析
-- [ ] 添加自动化测试脚本
+### New Features in Latest Version
 
-## 参考资料
+**Comprehensive netstat -s Statistics Parsing:**
+- Parses 40+ TCP statistics from Tcp and TcpExt sections
+- Categorizes retransmissions by type (TLP, fast retransmit, slow start, lost retrans)
+- Detects protocol stack packet drops (socket buffer overflow, backlog drops, listen queue overflow)
+- Analyzes timeout events (after SACK recovery, in loss state, other)
+- Tracks SACK recovery and packet reordering
+- Monitors congestion window recovery statistics
+
+**Intelligent Analysis:**
+- Calculates retransmission ratio and type breakdown
+- Identifies root causes with percentage analysis
+- Generates critical warnings with severity levels
+- Provides targeted remediation recommendations
+
+**Enhanced Per-Connection Analysis:**
+- Cross-references connection metrics with system-wide patterns
+- Shows likely causes from system stats when high retrans detected
+- Distinguishes client vs server role behavior
+
+### Code Statistics
+
+- **Total lines**: ~1100 lines
+- **New code (latest version)**: ~430 lines
+- **Regex patterns**: 40+ patterns for netstat -s parsing
+- **Statistics categories**: 7 categories (Retrans, Timeout, Stack Drops, SACK, Recovery, Connection, Basic)
+
+## Future Plans
+
+- [ ] Add historical data recording and trend analysis
+- [ ] Support multi-connection comparison
+- [ ] Add graphical output
+- [ ] Integrate eBPF tools for deeper analysis
+- [ ] Add automated testing scripts
+- [ ] Support nstat command (delta statistics)
+- [ ] JSON output implementation (flag exists but not implemented)
+
+## References
 
 - ss(8) man page
-- TCP RFC 793, 1323, 5681
+- netstat(8) man page
+- TCP RFC 793, 1323, 5681, 6937 (TLP)
 - Linux kernel TCP implementation
 - BCC/eBPF performance tools
+- [TCP Performance Analysis Guide](https://www.kernel.org/doc/Documentation/networking/tcp.txt)
+- [Linux TCP Statistics Documentation](https://www.kernel.org/doc/Documentation/networking/proc_net_tcp.txt)
+
+## Test Results Summary
+
+**Test Environment:**
+- Host: smartx@192.168.70.31
+- Service: ZooKeeper (port 2181)
+- Kernel: openEuler 4.19.90
+
+**Key Findings:**
+- Total retrans: 59.5M (0.027% ratio) - Acceptable
+- **TLP ratio: 41.3% - TOO HIGH** (indicates small rwnd)
+- Fast retransmit: 55.5% - Normal network loss
+- Lost retrans: 3.5M - Path quality issue
+- Listen queue overflow: 28.7M - CRITICAL issue
+
+**Actions Taken:**
+- Detected receive window bottleneck via TLP ratio
+- Identified listen queue overflow issue
+- Provided specific tuning recommendations

@@ -113,7 +113,7 @@ class TCPConnectionAnalyzer:
         self.system_config = {}
         self.system_stats = {}
         self._load_system_config()
-        self._load_system_stats()
+        # Don't load stats in __init__, load on-demand in run() for freshness
 
     def _find_ss_command(self):
         """Find ss command path"""
@@ -1104,13 +1104,9 @@ class TCPConnectionAnalyzer:
     def run(self):
         """Main execution"""
 
-        # Print system configuration
+        # Print system configuration (once, doesn't change)
         if self.args.show_config:
             self.print_system_config()
-
-        # Print system statistics
-        if self.args.show_stats or self.args.show_config:
-            self.print_system_stats()
 
         if self.args.interval > 0:
             # Continuous monitoring
@@ -1119,6 +1115,15 @@ class TCPConnectionAnalyzer:
 
             try:
                 while True:
+                    # Reload system stats each interval (cumulative counters)
+                    # Always load stats for retrans analysis context, even if not displaying
+                    self._load_system_stats()
+
+                    # Display system stats if requested
+                    if self.args.show_stats:
+                        self.print_system_stats()
+
+                    # Collect and analyze connections
                     connections = self.collect_connection_info()
 
                     if not connections:
@@ -1134,6 +1139,13 @@ class TCPConnectionAnalyzer:
                 print("\nStopped by user")
         else:
             # Single shot
+            # Always load system stats for retrans analysis context
+            self._load_system_stats()
+
+            # Display system stats if requested
+            if self.args.show_stats:
+                self.print_system_stats()
+
             connections = self.collect_connection_info()
 
             if not connections:
@@ -1169,14 +1181,17 @@ Examples:
   # Monitor all connections to a remote IP (any port)
   %(prog)s --remote-ip 1.1.1.5 --role client --all
 
-  # Show system TCP configuration and statistics
+  # Show system TCP configuration (sysctl values)
   %(prog)s --show-config --role server --local-port 5201
 
-  # Show only system TCP statistics (netstat -s)
+  # Show system TCP statistics (netstat -s analysis)
   %(prog)s --show-stats --role server --local-port 5201
 
-  # Comprehensive analysis with config and stats
-  %(prog)s --remote-ip 1.1.1.5 --remote-port 5201 --role client --show-config
+  # Show both config and stats
+  %(prog)s --show-config --show-stats --role server --local-port 5201
+
+  # Continuous monitoring with stats refresh
+  %(prog)s --show-stats --role server --local-port 5201 --interval 5
         """
     )
 

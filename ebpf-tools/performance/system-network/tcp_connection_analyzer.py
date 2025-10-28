@@ -111,7 +111,9 @@ class TCPConnectionAnalyzer:
     def __init__(self, args):
         self.args = args
         self.system_config = {}
+        self.system_stats = {}
         self._load_system_config()
+        self._load_system_stats()
 
     def _find_ss_command(self):
         """Find ss command path"""
@@ -166,6 +168,98 @@ class TCPConnectionAnalyzer:
                     self.system_config[config] = result.stdout.strip()
             except Exception:
                 pass
+
+    def _load_system_stats(self):
+        """Load system-wide TCP statistics from netstat -s"""
+        try:
+            result = subprocess.run(
+                ['netstat', '-s'],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                universal_newlines=True,
+                timeout=10
+            )
+            if result.returncode == 0:
+                self._parse_netstat_stats(result.stdout)
+        except Exception as e:
+            # netstat not available, skip
+            pass
+
+    def _parse_netstat_stats(self, output):
+        """Parse netstat -s output for TCP statistics"""
+        lines = output.split('\n')
+        in_tcp_section = False
+
+        # Key statistics to extract
+        stats_patterns = {
+            # === Retransmission Type Breakdown ===
+            'segments_retransmitted': r'(\d+) segments retransmit',
+            'fast_retransmits': r'(\d+) fast retransmits',
+            'retrans_in_slowstart': r'(\d+) retransmits in slow start',
+            'tcp_loss_probes': r'TCPLossProbes:\s*(\d+)',
+            'tcp_loss_probe_recovery': r'TCPLossProbeRecovery:\s*(\d+)',
+            'tcp_lost_retransmit': r'TCPLostRetransmit:\s*(\d+)',
+            'tcp_spurious_rtos': r'TCPSpuriousRTOs:\s*(\d+)',
+            'tcp_syn_retrans': r'TCPSynRetrans:\s*(\d+)',
+
+            # === Timeout Types ===
+            'timeout_after_sack': r'(\d+) timeouts after SACK recovery',
+            'timeout_in_loss': r'(\d+) timeouts in loss state',
+            'other_tcp_timeouts': r'(\d+) other TCP timeouts',
+
+            # === Stack Packet Drops ===
+            'rcv_pruned': r'(\d+) packets pruned from receive queue because of socket buffer overrun',
+            'rcv_collapsed': r'(\d+) packets collapsed in receive queue due to low socket buffer',
+            'tcp_backlog_drop': r'TCPBacklogDrop:\s*(\d+)',
+            'listen_overflows': r'(\d+) times the listen queue of a socket overflowed',
+            'listen_drops': r'(\d+) SYNs to LISTEN sockets dropped',
+            'sack_retrans_fail': r'(\d+) SACK retransmits failed',
+
+            # === SACK & Reordering ===
+            'sack_recovery': r'(\d+) times recovered from packet loss by selective acknowledgements',
+            'sack_reordering': r'Detected reordering (\d+) times using SACK',
+            'reordering_ts': r'Detected reordering (\d+) times using time stamp',
+
+            # === Congestion Window Recovery ===
+            'tcp_full_undo': r'(\d+) congestion windows fully recovered without slow start',
+            'tcp_partial_undo': r'(\d+) congestion windows partially recovered using Hoe heuristic',
+            'tcp_dsack_undo': r'(\d+) congestion windows recovered without slow start by DSACK',
+
+            # === Connection Issues ===
+            'failed_connection_attempts': r'(\d+) failed connection attempts',
+            'connection_resets_received': r'(\d+) connection resets received',
+            'connection_resets_sent': r'(\d+) resets sent',
+            'reset_due_to_unexpected_data': r'(\d+) connections reset due to unexpected data',
+            'reset_due_to_early_close': r'(\d+) connections reset due to early user close',
+            'abort_on_timeout': r'(\d+) connections aborted due to timeout',
+
+            # === Basic Counters ===
+            'segments_sent': r'(\d+) segments s[e]?nd out',
+            'segments_received': r'(\d+) segments received',
+            'bad_segments': r'(\d+) bad segments received',
+            'delayed_acks_sent': r'(\d+) delayed acks sent',
+        }
+
+        for line in lines:
+            line_stripped = line.strip()
+
+            # Detect TCP or TcpExt section
+            if 'Tcp:' in line_stripped or 'TCP:' in line_stripped or 'TcpExt:' in line_stripped:
+                in_tcp_section = True
+                continue
+            elif line_stripped and len(line_stripped) > 0 and line_stripped[0].isupper() and ':' in line_stripped and 'TCP' not in line_stripped:
+                # New section started (e.g., "Udp:", "Ip:")
+                # But don't exit if it's a TCP* counter like "TCPLossProbes:"
+                in_tcp_section = False
+                continue
+
+            if in_tcp_section:
+                # Try to match patterns
+                for key, pattern in stats_patterns.items():
+                    match = re.search(pattern, line_stripped, re.IGNORECASE)
+                    if match:
+                        self.system_stats[key] = int(match.group(1))
+                        break
 
     def collect_connection_info(self):
         """Collect TCP connection information using ss"""
@@ -564,8 +658,9 @@ class TCPConnectionAnalyzer:
                 ]
             })
 
-        # Check small cwnd
-        if conn.cwnd < 100 and conn.cwnd > 0:
+        # Check small cwnd (only for client/sender role)
+        # Server-side only sends ACKs, small cwnd is normal
+        if self.args.role == 'client' and conn.cwnd < 100 and conn.cwnd > 0:
             analysis['bottlenecks'].append({
                 'type': 'small_cwnd',
                 'severity': 'WARNING',
@@ -582,14 +677,73 @@ class TCPConnectionAnalyzer:
                 'description': f"High retransmission count ({conn.retrans_total})"
             })
 
-            analysis['recommendations'].append({
+            # Analyze retransmission causes from system stats
+            retrans_analysis = []
+            if self.system_stats:
+                total_retrans = self.system_stats.get('segments_retransmitted', 0)
+
+                # Retransmission type analysis
+                if 'tcp_loss_probes' in self.system_stats and self.system_stats['tcp_loss_probes'] > 0:
+                    tlp_count = self.system_stats['tcp_loss_probes']
+                    tlp_pct = (tlp_count / total_retrans * 100) if total_retrans > 0 else 0
+                    retrans_analysis.append(
+                        f"TLP probe retrans: {tlp_count:,} ({tlp_pct:.1f}%) - Window too small (rwnd/cwnd), cannot trigger fast retransmit"
+                    )
+
+                if 'fast_retransmits' in self.system_stats and self.system_stats['fast_retransmits'] > 0:
+                    fast_count = self.system_stats['fast_retransmits']
+                    fast_pct = (fast_count / total_retrans * 100) if total_retrans > 0 else 0
+                    retrans_analysis.append(
+                        f"Fast retransmits: {fast_count:,} ({fast_pct:.1f}%) - Network packet loss or reordering"
+                    )
+
+                if 'retrans_in_slowstart' in self.system_stats and self.system_stats['retrans_in_slowstart'] > 0:
+                    slow_count = self.system_stats['retrans_in_slowstart']
+                    slow_pct = (slow_count / total_retrans * 100) if total_retrans > 0 else 0
+                    retrans_analysis.append(
+                        f"Retrans in slow start: {slow_count:,} ({slow_pct:.1f}%) - Initial congestion window is small"
+                    )
+
+                if 'tcp_lost_retransmit' in self.system_stats and self.system_stats['tcp_lost_retransmit'] > 0:
+                    lost_retrans = self.system_stats['tcp_lost_retransmit']
+                    retrans_analysis.append(
+                        f"WARNING: Retransmitted packets lost again: {lost_retrans:,} - Severe congestion or poor path quality"
+                    )
+
+                if 'tcp_spurious_rtos' in self.system_stats and self.system_stats['tcp_spurious_rtos'] > 0:
+                    spurious = self.system_stats['tcp_spurious_rtos']
+                    retrans_analysis.append(
+                        f"Spurious RTOs: {spurious:,} - False positives, likely due to high RTT variance"
+                    )
+
+                # Timeout related
+                timeout_total = (self.system_stats.get('timeout_after_sack', 0) +
+                               self.system_stats.get('timeout_in_loss', 0) +
+                               self.system_stats.get('other_tcp_timeouts', 0))
+                if timeout_total > 0:
+                    retrans_analysis.append(
+                        f"Timeout retrans: {timeout_total:,} - After SACK recovery/loss state/other timeouts"
+                    )
+
+            recommendation = {
                 'issue': 'High retransmissions detected',
-                'action': 'Investigate packet loss',
+                'action': 'Investigate retransmission causes',
                 'commands': [
-                    "ethtool -S <interface> | grep drop",
-                    "Use eBPF tools to trace packet drops"
+                    "# Check system-wide retrans breakdown:",
+                    "netstat -s | grep -iE 'retrans|loss probe|spurious'",
+                    "",
+                    "# Check NIC drops:",
+                    "ethtool -S <interface> | grep -E 'drop|error|miss'",
+                    "",
+                    "# Use eBPF tools for detailed tracing:",
+                    "# sudo python3 ebpf-tools/linux-network-stack/packet-drop/*.py"
                 ]
-            })
+            }
+
+            if retrans_analysis:
+                recommendation['likely_causes'] = retrans_analysis
+
+            analysis['recommendations'].append(recommendation)
 
         # Check Recv-Q
         if conn.recv_q > 0:
@@ -660,6 +814,10 @@ class TCPConnectionAnalyzer:
                     print(f"     Current: {rec['current']}")
                 if 'recommended' in rec:
                     print(f"     Recommended: {rec['recommended']}")
+                if 'likely_causes' in rec:
+                    print(f"     Likely Causes:")
+                    for cause in rec['likely_causes']:
+                        print(f"       - {cause}")
                 print(f"     Action: {rec['action']}")
                 if 'commands' in rec:
                     print(f"     Commands:")
@@ -693,12 +851,266 @@ class TCPConnectionAnalyzer:
 
         print(f"{'='*80}\n")
 
+    def print_system_stats(self):
+        """Print system-wide TCP statistics from netstat -s"""
+        if not self.system_stats:
+            return
+
+        print(f"\n{'='*80}")
+        print("System TCP Statistics (netstat -s)")
+        print(f"{'='*80}")
+
+        # Group statistics by category
+        categories = {
+            '=== Retransmission Type Breakdown ===': [
+                'segments_retransmitted',
+                'fast_retransmits',
+                'retrans_in_slowstart',
+                'tcp_loss_probes',
+                'tcp_loss_probe_recovery',
+                'tcp_lost_retransmit',
+                'tcp_spurious_rtos',
+                'tcp_syn_retrans'
+            ],
+            '=== Timeout Types ===': [
+                'timeout_after_sack',
+                'timeout_in_loss',
+                'other_tcp_timeouts'
+            ],
+            '=== Stack Packet Drops ===': [
+                'rcv_pruned',
+                'rcv_collapsed',
+                'tcp_backlog_drop',
+                'listen_overflows',
+                'listen_drops',
+                'sack_retrans_fail'
+            ],
+            '=== SACK & Reordering ===': [
+                'sack_recovery',
+                'sack_reordering',
+                'reordering_ts'
+            ],
+            '=== Congestion Window Recovery ===': [
+                'tcp_full_undo',
+                'tcp_partial_undo',
+                'tcp_dsack_undo'
+            ],
+            '=== Connection Issues ===': [
+                'failed_connection_attempts',
+                'connection_resets_received',
+                'connection_resets_sent',
+                'reset_due_to_unexpected_data',
+                'reset_due_to_early_close',
+                'abort_on_timeout'
+            ],
+            '=== Basic Counters ===': [
+                'segments_sent',
+                'segments_received',
+                'bad_segments',
+                'delayed_acks_sent'
+            ]
+        }
+
+        # Descriptions for statistics
+        descriptions = {
+            # Retransmission types
+            'segments_retransmitted': 'Total retransmitted segments (all causes)',
+            'fast_retransmits': 'Fast retransmits (packet loss/reordering, 3 DupACKs)',
+            'retrans_in_slowstart': 'Retrans during slow start (initial cwnd small)',
+            'tcp_loss_probes': 'TLP probe retrans (window too small for fast retransmit)',
+            'tcp_loss_probe_recovery': 'TLP probe successful recovery',
+            'tcp_lost_retransmit': 'Retransmitted packet lost again (severe congestion or path issue)',
+            'tcp_spurious_rtos': 'Spurious RTO (false positive, high RTT variance)',
+            'tcp_syn_retrans': 'SYN retransmits (during connection establishment)',
+
+            # Timeout types
+            'timeout_after_sack': 'Timeout after SACK recovery (packets still lost)',
+            'timeout_in_loss': 'Timeout in loss state (persistent congestion)',
+            'other_tcp_timeouts': 'Other TCP timeouts',
+
+            # Stack packet drops
+            'rcv_pruned': 'Rcv queue pruned (socket buffer overflow)',
+            'rcv_collapsed': 'Rcv queue collapsed (memory pressure)',
+            'tcp_backlog_drop': 'Backlog queue drop (processing overload)',
+            'listen_overflows': 'Listen queue overflow count',
+            'listen_drops': 'SYN dropped (listen queue full)',
+            'sack_retrans_fail': 'SACK retransmit failed',
+
+            # SACK and reordering
+            'sack_recovery': 'SACK recovery count (recovered from loss)',
+            'sack_reordering': 'SACK detected reordering',
+            'reordering_ts': 'Timestamp detected reordering',
+
+            # Congestion window recovery
+            'tcp_full_undo': 'Cwnd fully recovered (undo slow start)',
+            'tcp_partial_undo': 'Cwnd partially recovered (Hoe heuristic)',
+            'tcp_dsack_undo': 'DSACK undo cwnd reduction',
+
+            # Connection issues
+            'failed_connection_attempts': 'Failed connection attempts',
+            'connection_resets_received': 'RST received',
+            'connection_resets_sent': 'RST sent',
+            'reset_due_to_unexpected_data': 'RST (unexpected data received)',
+            'reset_due_to_early_close': 'RST (early close)',
+            'abort_on_timeout': 'Connection aborted on timeout',
+
+            # Basic counters
+            'segments_sent': 'Total segments sent',
+            'segments_received': 'Total segments received',
+            'bad_segments': 'Bad segments (checksum error, etc.)',
+            'delayed_acks_sent': 'Delayed ACKs sent'
+        }
+
+        for category, stats in categories.items():
+            # Check if any stat in this category exists
+            has_data = any(stat in self.system_stats for stat in stats)
+            if not has_data:
+                continue
+
+            print(f"\n{category}:")
+            print("-" * 80)
+
+            for stat in stats:
+                if stat in self.system_stats:
+                    value = self.system_stats[stat]
+                    desc = descriptions.get(stat, '')
+                    print(f"  {stat:35s}: {value:12d}  # {desc}")
+
+        # ========== Intelligent Analysis Section ==========
+        print(f"\n{'='*80}")
+        print("=== Intelligent Analysis ===")
+        print(f"{'='*80}")
+
+        # 1. Retransmission ratio and breakdown
+        if 'segments_retransmitted' in self.system_stats and 'segments_sent' in self.system_stats:
+            total_retrans = self.system_stats['segments_retransmitted']
+            total_sent = self.system_stats['segments_sent']
+            if total_sent > 0:
+                retrans_ratio = (total_retrans / total_sent) * 100
+                print(f"\nRetransmission Ratio: {retrans_ratio:.4f}% ({total_retrans:,} / {total_sent:,})")
+
+                # Retransmission type breakdown analysis
+                print(f"\nRetransmission Type Breakdown:")
+                retrans_breakdown = []
+
+                tlp = self.system_stats.get('tcp_loss_probes', 0)
+                if tlp > 0:
+                    tlp_pct = (tlp / total_retrans * 100)
+                    retrans_breakdown.append(('TLP probe retrans', tlp, tlp_pct, 'Window too small'))
+
+                fast = self.system_stats.get('fast_retransmits', 0)
+                if fast > 0:
+                    fast_pct = (fast / total_retrans * 100)
+                    retrans_breakdown.append(('Fast retransmit', fast, fast_pct, 'Packet loss/reordering'))
+
+                slow = self.system_stats.get('retrans_in_slowstart', 0)
+                if slow > 0:
+                    slow_pct = (slow / total_retrans * 100)
+                    retrans_breakdown.append(('Slow start retrans', slow, slow_pct, 'Small cwnd'))
+
+                lost = self.system_stats.get('tcp_lost_retransmit', 0)
+                if lost > 0:
+                    lost_pct = (lost / total_retrans * 100)
+                    retrans_breakdown.append(('Retrans pkt lost', lost, lost_pct, 'Severe congestion WARNING'))
+
+                for name, count, pct, reason in retrans_breakdown:
+                    print(f"  {name:20s}: {count:12,}  ({pct:5.1f}%)  - {reason}")
+
+        # 2. Stack packet drop analysis
+        stack_drops = []
+        pruned = self.system_stats.get('rcv_pruned', 0)
+        if pruned > 0:
+            stack_drops.append(('Rcv queue pruned', pruned, 'Socket buffer overflow, increase tcp_rmem'))
+
+        collapsed = self.system_stats.get('rcv_collapsed', 0)
+        if collapsed > 0:
+            stack_drops.append(('Rcv queue collapsed', collapsed, 'Memory pressure'))
+
+        backlog = self.system_stats.get('tcp_backlog_drop', 0)
+        if backlog > 0:
+            stack_drops.append(('Backlog drop', backlog, 'App processing slow, increase tcp_max_syn_backlog'))
+
+        listen_drop = self.system_stats.get('listen_drops', 0)
+        if listen_drop > 0:
+            stack_drops.append(('SYN dropped', listen_drop, 'Listen queue full, increase somaxconn'))
+
+        if stack_drops:
+            print(f"\nWARNING: Stack packet drops detected:")
+            for name, count, suggestion in stack_drops:
+                print(f"  {name:22s}: {count:12,}  - {suggestion}")
+
+        # 3. Timeout analysis
+        timeout_after_sack = self.system_stats.get('timeout_after_sack', 0)
+        timeout_in_loss = self.system_stats.get('timeout_in_loss', 0)
+        other_timeouts = self.system_stats.get('other_tcp_timeouts', 0)
+        timeout_total = timeout_after_sack + timeout_in_loss + other_timeouts
+
+        if timeout_total > 0:
+            print(f"\nTimeout Events:")
+            if timeout_after_sack > 0:
+                print(f"  After SACK recovery     : {timeout_after_sack:12,}  - Packets still lost")
+            if timeout_in_loss > 0:
+                print(f"  In loss state           : {timeout_in_loss:12,}  - Persistent congestion")
+            if other_timeouts > 0:
+                print(f"  Other timeouts          : {other_timeouts:12,}")
+
+        # 4. Reordering detection
+        sack_reorder = self.system_stats.get('sack_reordering', 0)
+        ts_reorder = self.system_stats.get('reordering_ts', 0)
+        if sack_reorder > 0 or ts_reorder > 0:
+            print(f"\nPacket Reordering:")
+            if sack_reorder > 0:
+                print(f"  SACK detected reordering    : {sack_reorder:12,}")
+            if ts_reorder > 0:
+                print(f"  Timestamp detected reordering: {ts_reorder:12,}")
+
+        # 5. Critical warnings
+        print(f"\n{'='*80}")
+        warnings = []
+
+        # High retransmission ratio
+        if 'segments_retransmitted' in self.system_stats and 'segments_sent' in self.system_stats:
+            retrans_ratio = (self.system_stats['segments_retransmitted'] / self.system_stats['segments_sent']) * 100
+            if retrans_ratio > 1.0:
+                warnings.append(f"CRITICAL: High retransmission ratio: {retrans_ratio:.2f}% (normal <1%)")
+
+        # TLP ratio too high
+        if total_retrans > 0:
+            tlp = self.system_stats.get('tcp_loss_probes', 0)
+            if tlp > 0 and (tlp / total_retrans) > 0.3:
+                warnings.append(f"CRITICAL: TLP ratio too high: {(tlp/total_retrans)*100:.1f}% - Check receive window (rwnd)")
+
+        # Retransmitted packets lost
+        if self.system_stats.get('tcp_lost_retransmit', 0) > 1000:
+            warnings.append(f"CRITICAL: Many retrans packets lost: {self.system_stats['tcp_lost_retransmit']:,} - Poor path quality")
+
+        # Socket buffer overflow
+        if pruned > 1000:
+            warnings.append(f"WARNING: Socket buffer overflow: {pruned:,} - Increase tcp_rmem")
+
+        # Listen queue overflow
+        if listen_drop > 1000:
+            warnings.append(f"WARNING: Listen queue overflow: {listen_drop:,} - Increase net.core.somaxconn")
+
+        if warnings:
+            print("Critical Warnings:")
+            for warning in warnings:
+                print(f"  {warning}")
+        else:
+            print("OK: No serious issues found")
+
+        print(f"{'='*80}\n")
+
     def run(self):
         """Main execution"""
 
         # Print system configuration
         if self.args.show_config:
             self.print_system_config()
+
+        # Print system statistics
+        if self.args.show_stats or self.args.show_config:
+            self.print_system_stats()
 
         if self.args.interval > 0:
             # Continuous monitoring
@@ -757,8 +1169,14 @@ Examples:
   # Monitor all connections to a remote IP (any port)
   %(prog)s --remote-ip 1.1.1.5 --role client --all
 
-  # Show system TCP configuration
+  # Show system TCP configuration and statistics
   %(prog)s --show-config --role server --local-port 5201
+
+  # Show only system TCP statistics (netstat -s)
+  %(prog)s --show-stats --role server --local-port 5201
+
+  # Comprehensive analysis with config and stats
+  %(prog)s --remote-ip 1.1.1.5 --remote-port 5201 --role client --show-config
         """
     )
 
@@ -781,6 +1199,8 @@ Examples:
                         help='Target bandwidth in Gbps (default: 25)')
     parser.add_argument('--show-config', action='store_true',
                         help='Show system TCP configuration')
+    parser.add_argument('--show-stats', action='store_true',
+                        help='Show system TCP statistics (netstat -s)')
     parser.add_argument('--json', action='store_true',
                         help='Output in JSON format')
 

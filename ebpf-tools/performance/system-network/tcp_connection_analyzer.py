@@ -112,6 +112,7 @@ class TCPConnectionAnalyzer:
         self.args = args
         self.system_config = {}
         self.system_stats = {}
+        self.prev_system_stats = {}  # Store previous stats for delta calculation
         self._load_system_config()
         # Don't load stats in __init__, load on-demand in run() for freshness
 
@@ -184,6 +185,25 @@ class TCPConnectionAnalyzer:
         except Exception as e:
             # netstat not available, skip
             pass
+
+    def _calculate_stats_delta(self):
+        """Calculate delta between current and previous stats"""
+        delta_stats = {}
+
+        if not self.prev_system_stats:
+            # First run, no previous data, return current as delta
+            return dict(self.system_stats)
+
+        # Calculate delta for each metric
+        for key, current_value in self.system_stats.items():
+            prev_value = self.prev_system_stats.get(key, 0)
+            delta_stats[key] = current_value - prev_value
+
+        return delta_stats
+
+    def _save_current_stats_as_previous(self):
+        """Save current stats as previous for next delta calculation"""
+        self.prev_system_stats = dict(self.system_stats)
 
     def _parse_netstat_stats(self, output):
         """Parse netstat -s output for TCP statistics"""
@@ -851,13 +871,29 @@ class TCPConnectionAnalyzer:
 
         print(f"{'='*80}\n")
 
-    def print_system_stats(self):
-        """Print system-wide TCP statistics from netstat -s"""
+    def print_system_stats(self, show_delta=False, interval_seconds=0):
+        """Print system-wide TCP statistics from netstat -s
+
+        Args:
+            show_delta: If True, show delta (changes) instead of cumulative values
+            interval_seconds: Monitoring interval for rate calculation
+        """
         if not self.system_stats:
             return
 
+        # Determine which stats to display
+        if show_delta:
+            display_stats = self._calculate_stats_delta()
+            stats_type = "Delta (changes in this interval)"
+        else:
+            display_stats = self.system_stats
+            stats_type = "Cumulative (since system boot)"
+
         print(f"\n{'='*80}")
-        print("System TCP Statistics (netstat -s)")
+        if show_delta and interval_seconds > 0:
+            print(f"System TCP Statistics - {stats_type} [{interval_seconds}s interval]")
+        else:
+            print(f"System TCP Statistics - {stats_type}")
         print(f"{'='*80}")
 
         # Group statistics by category
@@ -963,7 +999,7 @@ class TCPConnectionAnalyzer:
 
         for category, stats in categories.items():
             # Check if any stat in this category exists
-            has_data = any(stat in self.system_stats for stat in stats)
+            has_data = any(stat in display_stats for stat in stats)
             if not has_data:
                 continue
 
@@ -971,8 +1007,8 @@ class TCPConnectionAnalyzer:
             print("-" * 80)
 
             for stat in stats:
-                if stat in self.system_stats:
-                    value = self.system_stats[stat]
+                if stat in display_stats:
+                    value = display_stats[stat]
                     desc = descriptions.get(stat, '')
                     print(f"  {stat:35s}: {value:12d}  # {desc}")
 
@@ -982,9 +1018,9 @@ class TCPConnectionAnalyzer:
         print(f"{'='*80}")
 
         # 1. Retransmission ratio and breakdown
-        if 'segments_retransmitted' in self.system_stats and 'segments_sent' in self.system_stats:
-            total_retrans = self.system_stats['segments_retransmitted']
-            total_sent = self.system_stats['segments_sent']
+        if 'segments_retransmitted' in display_stats and 'segments_sent' in display_stats:
+            total_retrans = display_stats['segments_retransmitted']
+            total_sent = display_stats['segments_sent']
             if total_sent > 0:
                 retrans_ratio = (total_retrans / total_sent) * 100
                 print(f"\nRetransmission Ratio: {retrans_ratio:.4f}% ({total_retrans:,} / {total_sent:,})")
@@ -993,24 +1029,24 @@ class TCPConnectionAnalyzer:
                 print(f"\nRetransmission Type Breakdown:")
                 retrans_breakdown = []
 
-                tlp = self.system_stats.get('tcp_loss_probes', 0)
+                tlp = display_stats.get('tcp_loss_probes', 0)
                 if tlp > 0:
-                    tlp_pct = (tlp / total_retrans * 100)
+                    tlp_pct = (tlp / total_retrans * 100) if total_retrans > 0 else 0
                     retrans_breakdown.append(('TLP probe retrans', tlp, tlp_pct, 'Window too small'))
 
-                fast = self.system_stats.get('fast_retransmits', 0)
+                fast = display_stats.get('fast_retransmits', 0)
                 if fast > 0:
-                    fast_pct = (fast / total_retrans * 100)
+                    fast_pct = (fast / total_retrans * 100) if total_retrans > 0 else 0
                     retrans_breakdown.append(('Fast retransmit', fast, fast_pct, 'Packet loss/reordering'))
 
-                slow = self.system_stats.get('retrans_in_slowstart', 0)
+                slow = display_stats.get('retrans_in_slowstart', 0)
                 if slow > 0:
-                    slow_pct = (slow / total_retrans * 100)
+                    slow_pct = (slow / total_retrans * 100) if total_retrans > 0 else 0
                     retrans_breakdown.append(('Slow start retrans', slow, slow_pct, 'Small cwnd'))
 
-                lost = self.system_stats.get('tcp_lost_retransmit', 0)
+                lost = display_stats.get('tcp_lost_retransmit', 0)
                 if lost > 0:
-                    lost_pct = (lost / total_retrans * 100)
+                    lost_pct = (lost / total_retrans * 100) if total_retrans > 0 else 0
                     retrans_breakdown.append(('Retrans pkt lost', lost, lost_pct, 'Severe congestion WARNING'))
 
                 for name, count, pct, reason in retrans_breakdown:
@@ -1018,19 +1054,19 @@ class TCPConnectionAnalyzer:
 
         # 2. Stack packet drop analysis
         stack_drops = []
-        pruned = self.system_stats.get('rcv_pruned', 0)
+        pruned = display_stats.get('rcv_pruned', 0)
         if pruned > 0:
             stack_drops.append(('Rcv queue pruned', pruned, 'Socket buffer overflow, increase tcp_rmem'))
 
-        collapsed = self.system_stats.get('rcv_collapsed', 0)
+        collapsed = display_stats.get('rcv_collapsed', 0)
         if collapsed > 0:
             stack_drops.append(('Rcv queue collapsed', collapsed, 'Memory pressure'))
 
-        backlog = self.system_stats.get('tcp_backlog_drop', 0)
+        backlog = display_stats.get('tcp_backlog_drop', 0)
         if backlog > 0:
             stack_drops.append(('Backlog drop', backlog, 'App processing slow, increase tcp_max_syn_backlog'))
 
-        listen_drop = self.system_stats.get('listen_drops', 0)
+        listen_drop = display_stats.get('listen_drops', 0)
         if listen_drop > 0:
             stack_drops.append(('SYN dropped', listen_drop, 'Listen queue full, increase somaxconn'))
 
@@ -1040,9 +1076,9 @@ class TCPConnectionAnalyzer:
                 print(f"  {name:22s}: {count:12,}  - {suggestion}")
 
         # 3. Timeout analysis
-        timeout_after_sack = self.system_stats.get('timeout_after_sack', 0)
-        timeout_in_loss = self.system_stats.get('timeout_in_loss', 0)
-        other_timeouts = self.system_stats.get('other_tcp_timeouts', 0)
+        timeout_after_sack = display_stats.get('timeout_after_sack', 0)
+        timeout_in_loss = display_stats.get('timeout_in_loss', 0)
+        other_timeouts = display_stats.get('other_tcp_timeouts', 0)
         timeout_total = timeout_after_sack + timeout_in_loss + other_timeouts
 
         if timeout_total > 0:
@@ -1055,8 +1091,8 @@ class TCPConnectionAnalyzer:
                 print(f"  Other timeouts          : {other_timeouts:12,}")
 
         # 4. Reordering detection
-        sack_reorder = self.system_stats.get('sack_reordering', 0)
-        ts_reorder = self.system_stats.get('reordering_ts', 0)
+        sack_reorder = display_stats.get('sack_reordering', 0)
+        ts_reorder = display_stats.get('reordering_ts', 0)
         if sack_reorder > 0 or ts_reorder > 0:
             print(f"\nPacket Reordering:")
             if sack_reorder > 0:
@@ -1069,20 +1105,20 @@ class TCPConnectionAnalyzer:
         warnings = []
 
         # High retransmission ratio
-        if 'segments_retransmitted' in self.system_stats and 'segments_sent' in self.system_stats:
-            retrans_ratio = (self.system_stats['segments_retransmitted'] / self.system_stats['segments_sent']) * 100
+        if 'segments_retransmitted' in display_stats and 'segments_sent' in display_stats:
+            retrans_ratio = (display_stats['segments_retransmitted'] / display_stats['segments_sent']) * 100 if display_stats['segments_sent'] > 0 else 0
             if retrans_ratio > 1.0:
                 warnings.append(f"CRITICAL: High retransmission ratio: {retrans_ratio:.2f}% (normal <1%)")
 
         # TLP ratio too high
         if total_retrans > 0:
-            tlp = self.system_stats.get('tcp_loss_probes', 0)
+            tlp = display_stats.get('tcp_loss_probes', 0)
             if tlp > 0 and (tlp / total_retrans) > 0.3:
                 warnings.append(f"CRITICAL: TLP ratio too high: {(tlp/total_retrans)*100:.1f}% - Check receive window (rwnd)")
 
         # Retransmitted packets lost
-        if self.system_stats.get('tcp_lost_retransmit', 0) > 1000:
-            warnings.append(f"CRITICAL: Many retrans packets lost: {self.system_stats['tcp_lost_retransmit']:,} - Poor path quality")
+        if display_stats.get('tcp_lost_retransmit', 0) > 1000:
+            warnings.append(f"CRITICAL: Many retrans packets lost: {display_stats['tcp_lost_retransmit']:,} - Poor path quality")
 
         # Socket buffer overflow
         if pruned > 1000:
@@ -1113,15 +1149,35 @@ class TCPConnectionAnalyzer:
             print(f"Starting continuous monitoring (interval: {self.args.interval}s)")
             print("Press Ctrl+C to stop...")
 
+            # Load initial stats for baseline
+            self._load_system_stats()
+
+            # Display initial cumulative stats if requested
+            if self.args.show_stats:
+                print("\n" + "="*80)
+                print("INITIAL BASELINE - Cumulative statistics since system boot")
+                print("="*80)
+                self.print_system_stats(show_delta=False, interval_seconds=0)
+
+            # Save baseline for delta calculation
+            self._save_current_stats_as_previous()
+
             try:
+                iteration = 0
                 while True:
+                    time.sleep(self.args.interval)
+                    iteration += 1
+
                     # Reload system stats each interval (cumulative counters)
                     # Always load stats for retrans analysis context, even if not displaying
                     self._load_system_stats()
 
-                    # Display system stats if requested
+                    # Display system stats delta if requested
                     if self.args.show_stats:
-                        self.print_system_stats()
+                        print(f"\n{'='*80}")
+                        print(f"Interval #{iteration} - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                        print(f"{'='*80}")
+                        self.print_system_stats(show_delta=True, interval_seconds=self.args.interval)
 
                     # Collect and analyze connections
                     connections = self.collect_connection_info()
@@ -1133,10 +1189,18 @@ class TCPConnectionAnalyzer:
                             analysis = self.analyze_connection(conn)
                             self.print_analysis(analysis)
 
-                    time.sleep(self.args.interval)
+                    # Save current stats for next delta calculation
+                    self._save_current_stats_as_previous()
 
             except KeyboardInterrupt:
                 print("\nStopped by user")
+
+                # Display final cumulative stats if requested
+                if self.args.show_stats:
+                    print("\n" + "="*80)
+                    print("FINAL SUMMARY - Cumulative statistics since system boot")
+                    print("="*80)
+                    self.print_system_stats(show_delta=False, interval_seconds=0)
         else:
             # Single shot
             # Always load system stats for retrans analysis context

@@ -65,11 +65,14 @@ class TCPConnectionInfo:
         self.cwnd = 0
         self.ssthresh = 0
         self.ca_state = ""
+        self.congestion_algorithm = ""  # cubic/reno/bbr/vegas
 
         # Window sizes
         self.rcv_space = 0
         self.rcv_ssthresh = 0
         self.snd_wnd = 0
+        self.advmss = 0
+        self.rcvmss = 0
 
         # Rate metrics
         self.send_rate = 0
@@ -80,6 +83,10 @@ class TCPConnectionInfo:
         self.retrans = 0
         self.retrans_total = 0
         self.lost = 0
+        self.unacked = 0  # Unacknowledged segments in flight
+        self.sacked = 0  # SACKed segments
+        self.dsack_dups = 0  # D-SACK duplicate reports
+        self.fackets = 0  # Forward acknowledgment
 
         # Time limited statistics
         self.busy_time = 0
@@ -100,6 +107,43 @@ class TCPConnectionInfo:
         self.pmtu = 0
         self.wscale = ""
         self.minrtt = 0.0
+        self.reordering = 0
+        self.ato = 0  # ACK timeout
+
+        # Segment counters
+        self.segs_out = 0
+        self.segs_in = 0
+        self.data_segs_out = 0
+        self.data_segs_in = 0
+
+        # Timing metrics (milliseconds since last activity)
+        self.lastsnd = 0
+        self.lastrcv = 0
+        self.lastack = 0
+
+        # Application and receiver metrics
+        self.app_limited = False
+        self.rcv_rtt = 0.0
+
+        # Socket memory (skmem)
+        self.skmem_r = 0  # RX queue
+        self.skmem_rb = 0  # RX buffer size
+        self.skmem_t = 0  # TX queue
+        self.skmem_tb = 0  # TX buffer size
+        self.skmem_f = 0  # Forward alloc
+        self.skmem_w = 0  # Write buffer
+        self.skmem_o = 0  # Option memory
+        self.skmem_bl = 0  # Backlog
+        self.skmem_d = 0  # Dropped packets (CRITICAL!)
+
+        # TCP options/features
+        self.tcp_ts = False  # TCP timestamps enabled
+        self.tcp_sack = False  # SACK enabled
+
+        # Process information
+        self.process_name = ""
+        self.process_pid = 0
+        self.process_fd = 0
 
         # Timestamp
         self.timestamp = datetime.now()
@@ -495,6 +539,26 @@ class TCPConnectionAnalyzer:
         if match:
             conn.lost = int(match.group(1))
 
+        # Unacknowledged segments: unacked:675
+        match = re.search(r'unacked:(\d+)', line)
+        if match:
+            conn.unacked = int(match.group(1))
+
+        # SACKed segments: sacked:10
+        match = re.search(r'sacked:(\d+)', line)
+        if match:
+            conn.sacked = int(match.group(1))
+
+        # D-SACK duplicates: dsack_dups:9
+        match = re.search(r'dsack_dups:(\d+)', line)
+        if match:
+            conn.dsack_dups = int(match.group(1))
+
+        # Forward ACK: fackets:5
+        match = re.search(r'fackets:(\d+)', line)
+        if match:
+            conn.fackets = int(match.group(1))
+
         # Receive space: rcv_space:14480
         match = re.search(r'rcv_space:(\d+)', line)
         if match:
@@ -548,6 +612,98 @@ class TCPConnectionAnalyzer:
         if match:
             conn.bytes_received = int(match.group(1))
 
+        # Reordering: reordering:56
+        match = re.search(r'reordering:(\d+)', line)
+        if match:
+            conn.reordering = int(match.group(1))
+
+        # ACK timeout: ato:40
+        match = re.search(r'ato:(\d+)', line)
+        if match:
+            conn.ato = int(match.group(1))
+
+        # Segment counters: segs_out:10 segs_in:9
+        match = re.search(r'segs_out:(\d+)', line)
+        if match:
+            conn.segs_out = int(match.group(1))
+
+        match = re.search(r'segs_in:(\d+)', line)
+        if match:
+            conn.segs_in = int(match.group(1))
+
+        # Data segment counters: data_segs_out:1 data_segs_in:1
+        match = re.search(r'data_segs_out:(\d+)', line)
+        if match:
+            conn.data_segs_out = int(match.group(1))
+
+        match = re.search(r'data_segs_in:(\d+)', line)
+        if match:
+            conn.data_segs_in = int(match.group(1))
+
+        # Timing metrics: lastsnd:100 lastrcv:100 lastack:100
+        match = re.search(r'lastsnd:(\d+)', line)
+        if match:
+            conn.lastsnd = int(match.group(1))
+
+        match = re.search(r'lastrcv:(\d+)', line)
+        if match:
+            conn.lastrcv = int(match.group(1))
+
+        match = re.search(r'lastack:(\d+)', line)
+        if match:
+            conn.lastack = int(match.group(1))
+
+        # Application limited flag: app_limited
+        if 'app_limited' in line:
+            conn.app_limited = True
+
+        # Receiver RTT: rcv_rtt:1000 or rcv_rtt:1000.5
+        match = re.search(r'rcv_rtt:([\d.]+)', line)
+        if match:
+            conn.rcv_rtt = float(match.group(1))
+
+        # Advertised MSS: advmss:1448
+        match = re.search(r'advmss:(\d+)', line)
+        if match:
+            conn.advmss = int(match.group(1))
+
+        # Received MSS: rcvmss:536
+        match = re.search(r'rcvmss:(\d+)', line)
+        if match:
+            conn.rcvmss = int(match.group(1))
+
+        # Congestion control algorithm: cubic, reno, bbr, vegas, etc.
+        # Appears as: "ts sack cubic wscale:9,9" or just "cubic"
+        ca_match = re.search(r'\b(cubic|reno|bbr|vegas|westwood|hybla|htcp|veno|yeah|illinois|dctcp)\b', line, re.IGNORECASE)
+        if ca_match:
+            conn.congestion_algorithm = ca_match.group(1).lower()
+
+        # TCP options/features
+        if 'ts' in line.split():  # Check if 'ts' appears as a standalone word
+            conn.tcp_ts = True
+        if 'sack' in line.split():  # Check if 'sack' appears as a standalone word
+            conn.tcp_sack = True
+
+        # Socket memory: skmem:(r0,rb87380,t0,tb87040,f0,w0,o0,bl0,d0)
+        match = re.search(r'skmem:\(r(\d+),rb(\d+),t(\d+),tb(\d+),f(\d+),w(\d+),o(\d+),bl(\d+),d(\d+)\)', line)
+        if match:
+            conn.skmem_r = int(match.group(1))
+            conn.skmem_rb = int(match.group(2))
+            conn.skmem_t = int(match.group(3))
+            conn.skmem_tb = int(match.group(4))
+            conn.skmem_f = int(match.group(5))
+            conn.skmem_w = int(match.group(6))
+            conn.skmem_o = int(match.group(7))
+            conn.skmem_bl = int(match.group(8))
+            conn.skmem_d = int(match.group(9))
+
+        # Process information: users:(("iperf3",pid=12345,fd=3))
+        match = re.search(r'users:\(\("([^"]+)",pid=(\d+),fd=(\d+)\)\)', line)
+        if match:
+            conn.process_name = match.group(1)
+            conn.process_pid = int(match.group(2))
+            conn.process_fd = int(match.group(3))
+
     def _parse_rate(self, value, unit):
         """Parse rate value with unit (K/M/G)"""
         value = float(value)
@@ -595,6 +751,102 @@ class TCPConnectionAnalyzer:
         if conn.lost > 0:
             analysis['metrics']['lost'] = conn.lost
 
+        # NEW: Unacknowledged and SACK metrics
+        if conn.unacked > 0:
+            analysis['metrics']['unacked'] = conn.unacked
+            # Calculate in-flight data
+            if conn.mss > 0:
+                inflight_bytes = conn.unacked * conn.mss
+                analysis['metrics']['inflight_data'] = f"{inflight_bytes} bytes ({inflight_bytes/1024:.1f} KB)"
+
+        if conn.sacked > 0:
+            analysis['metrics']['sacked'] = conn.sacked
+
+        if conn.dsack_dups > 0:
+            analysis['metrics']['dsack_dups'] = conn.dsack_dups
+            # Calculate spurious retransmission rate
+            if conn.retrans_total > 0:
+                spurious_rate = (conn.dsack_dups / conn.retrans_total) * 100
+                analysis['metrics']['spurious_retrans_rate'] = f"{spurious_rate:.3f}%"
+
+        if conn.fackets > 0:
+            analysis['metrics']['fackets'] = conn.fackets
+
+        # NEW: Segment counters and retransmission ratio
+        if conn.segs_out > 0:
+            analysis['metrics']['segs_out'] = conn.segs_out
+            analysis['metrics']['segs_in'] = conn.segs_in
+            if conn.retrans_total > 0:
+                retrans_ratio = (conn.retrans_total / conn.segs_out) * 100
+                analysis['metrics']['retrans_ratio'] = f"{retrans_ratio:.3f}%"
+
+        if conn.data_segs_out > 0:
+            analysis['metrics']['data_segs_out'] = conn.data_segs_out
+            analysis['metrics']['data_segs_in'] = conn.data_segs_in
+            if conn.segs_out > 0:
+                data_efficiency = (conn.data_segs_out / conn.segs_out) * 100
+                analysis['metrics']['data_efficiency'] = f"{data_efficiency:.1f}%"
+
+        # NEW: Timing metrics
+        if conn.lastsnd > 0:
+            analysis['metrics']['lastsnd'] = f"{conn.lastsnd} ms ago"
+        if conn.lastrcv > 0:
+            analysis['metrics']['lastrcv'] = f"{conn.lastrcv} ms ago"
+        if conn.lastack > 0:
+            analysis['metrics']['lastack'] = f"{conn.lastack} ms ago"
+
+        # NEW: Application and receiver metrics
+        if conn.app_limited:
+            analysis['metrics']['app_limited'] = "YES"
+        if conn.rcv_rtt > 0:
+            analysis['metrics']['rcv_rtt'] = f"{conn.rcv_rtt:.3f} ms"
+        if conn.minrtt > 0:
+            analysis['metrics']['minrtt'] = f"{conn.minrtt:.3f} ms"
+
+        # NEW: Congestion control
+        if conn.congestion_algorithm:
+            analysis['metrics']['congestion_algorithm'] = conn.congestion_algorithm
+
+        # NEW: Reordering
+        if conn.reordering > 0:
+            analysis['metrics']['reordering'] = conn.reordering
+
+        # NEW: ACK timeout
+        if conn.ato > 0:
+            analysis['metrics']['ato'] = f"{conn.ato} ms"
+
+        # NEW: MSS metrics
+        if conn.advmss > 0:
+            analysis['metrics']['advmss'] = conn.advmss
+        if conn.rcvmss > 0:
+            analysis['metrics']['rcvmss'] = conn.rcvmss
+
+        # NEW: Socket memory - display all fields (even if 0)
+        # Note: only display if at least one skmem field is parsed (skmem_rb or skmem_tb typically present)
+        if conn.skmem_rb > 0 or conn.skmem_tb > 0:
+            analysis['metrics']['socket_rx_queue'] = f"{conn.skmem_r} bytes ({conn.skmem_r/1024:.1f} KB)" if conn.skmem_r > 0 else "0 bytes"
+            analysis['metrics']['socket_rx_buffer'] = f"{conn.skmem_rb} bytes ({conn.skmem_rb/1024:.1f} KB)"
+            analysis['metrics']['socket_tx_queue'] = f"{conn.skmem_t} bytes ({conn.skmem_t/1024:.1f} KB)" if conn.skmem_t > 0 else "0 bytes"
+            analysis['metrics']['socket_tx_buffer'] = f"{conn.skmem_tb} bytes ({conn.skmem_tb/1024:.1f} KB)"
+            analysis['metrics']['socket_forward_alloc'] = f"{conn.skmem_f} bytes ({conn.skmem_f/1024:.1f} KB)" if conn.skmem_f > 0 else "0 bytes"
+            analysis['metrics']['socket_write_queue'] = f"{conn.skmem_w} bytes ({conn.skmem_w/1024:.1f} KB)" if conn.skmem_w > 0 else "0 bytes"
+            analysis['metrics']['socket_opt_mem'] = f"{conn.skmem_o} bytes ({conn.skmem_o/1024:.1f} KB)" if conn.skmem_o > 0 else "0 bytes"
+            analysis['metrics']['socket_backlog'] = f"{conn.skmem_bl} bytes ({conn.skmem_bl/1024:.1f} KB)" if conn.skmem_bl > 0 else "0 bytes"
+            analysis['metrics']['socket_dropped'] = f"{conn.skmem_d} packets"
+
+        # NEW: TCP options
+        tcp_features = []
+        if conn.tcp_ts:
+            tcp_features.append("timestamps")
+        if conn.tcp_sack:
+            tcp_features.append("SACK")
+        if tcp_features:
+            analysis['metrics']['tcp_features'] = ", ".join(tcp_features)
+
+        # NEW: Process information
+        if conn.process_name:
+            analysis['metrics']['process'] = f"{conn.process_name} (pid={conn.process_pid}, fd={conn.process_fd})"
+
         # Calculate BDP and recommended window
         if conn.rtt > 0:
             bdp_bytes = self._calculate_bdp(conn.rtt / 1000, self.args.target_bandwidth)
@@ -612,6 +864,173 @@ class TCPConnectionAnalyzer:
 
     def _detect_bottlenecks(self, conn, analysis):
         """Detect performance bottlenecks"""
+
+        # NEW: Check for high unacked segments (potential buffer bloat or cwnd issue)
+        if conn.unacked > 0 and conn.cwnd > 0:
+            unacked_ratio = (conn.unacked / conn.cwnd) * 100
+            if unacked_ratio > 90:
+                analysis['bottlenecks'].append({
+                    'type': 'cwnd_saturation',
+                    'severity': 'WARNING',
+                    'value': f"{conn.unacked}/{conn.cwnd} ({unacked_ratio:.1f}%)",
+                    'description': f"Congestion window {unacked_ratio:.1f}% utilized - sender is cwnd-limited"
+                })
+
+        # NEW: Check for high spurious retransmission rate
+        if conn.dsack_dups > 0 and conn.retrans_total > 0:
+            spurious_rate = (conn.dsack_dups / conn.retrans_total) * 100
+            if spurious_rate > 5:  # More than 5% spurious retransmissions
+                severity = 'CRITICAL' if spurious_rate > 20 else 'WARNING'
+                analysis['bottlenecks'].append({
+                    'type': 'high_spurious_retrans',
+                    'severity': severity,
+                    'value': f"{spurious_rate:.1f}%",
+                    'description': f"{spurious_rate:.1f}% of retransmissions were spurious (unnecessary)"
+                })
+
+                analysis['recommendations'].append({
+                    'issue': 'High spurious retransmission rate',
+                    'current': f"dsack_dups={conn.dsack_dups}, retrans_total={conn.retrans_total}",
+                    'evidence': f"{spurious_rate:.1f}% of retransmissions were false positives",
+                    'action': 'RTO may be too aggressive or high RTT variance',
+                    'commands': [
+                        "# Check RTT variance",
+                        "ss -tinopm | grep rtt",
+                        "# Consider tuning TCP RTO parameters (advanced)",
+                        "# sysctl net.ipv4.tcp_rto_min (default: 200ms)",
+                    ]
+                })
+
+        # NEW: Check for application-limited condition
+        if conn.app_limited:
+            analysis['bottlenecks'].append({
+                'type': 'application_limited',
+                'severity': 'WARNING',
+                'value': 'YES',
+                'description': 'Application not providing data fast enough'
+            })
+
+            recommendations = {
+                'issue': 'Application bottleneck detected',
+                'evidence': []
+            }
+
+            if conn.lastsnd > 1000:
+                recommendations['evidence'].append(f"No data sent for {conn.lastsnd}ms")
+            if conn.busy_time > 0 and conn.segs_out > 0:
+                # Estimate connection age from other metrics if available
+                recommendations['evidence'].append("Connection is app_limited during active periods")
+
+            recommendations['action'] = 'Check application performance: CPU usage, I/O wait, processing delays'
+            recommendations['commands'] = [
+                f"# Check process CPU and I/O (if process info available)",
+                "pidstat -p <pid> -u -r -d 1",
+                "strace -p <pid> -e trace=read,write -T",
+            ]
+
+            analysis['recommendations'].append(recommendations)
+
+        # NEW: Check for socket buffer drops (CRITICAL!)
+        if conn.skmem_d > 0:
+            analysis['bottlenecks'].append({
+                'type': 'socket_drops',
+                'severity': 'CRITICAL',
+                'value': f"{conn.skmem_d} packets",
+                'description': f"Socket layer dropped {conn.skmem_d} packets due to buffer overflow"
+            })
+
+            analysis['recommendations'].append({
+                'issue': 'Socket buffer overflow - packets dropped!',
+                'current': f"RX buffer: {conn.skmem_rb} bytes, TX buffer: {conn.skmem_tb} bytes",
+                'action': 'Increase socket buffers immediately',
+                'commands': [
+                    "sudo sysctl -w net.core.rmem_max=134217728",
+                    "sudo sysctl -w net.core.wmem_max=134217728",
+                    "sudo sysctl -w net.ipv4.tcp_rmem=\"4096 87380 134217728\"",
+                    "sudo sysctl -w net.ipv4.tcp_wmem=\"4096 87380 134217728\""
+                ]
+            })
+
+        # NEW: Check for connection stalls (lastsnd/lastrcv very high)
+        if conn.lastsnd > 5000 and not conn.app_limited:
+            analysis['bottlenecks'].append({
+                'type': 'send_stall',
+                'severity': 'CRITICAL',
+                'value': f"{conn.lastsnd} ms",
+                'description': f"No data sent for {conn.lastsnd}ms but not app-limited"
+            })
+
+            analysis['recommendations'].append({
+                'issue': 'Connection send stalled',
+                'evidence': f"lastsnd={conn.lastsnd}ms, but app_limited=False",
+                'action': 'Check network path and peer responsiveness',
+                'commands': [
+                    f"# Check if peer is responding",
+                    f"ping -c 5 {conn.remote_addr}",
+                    f"# Check for network issues",
+                    "ethtool -S <interface> | grep -E 'drop|error'",
+                ]
+            })
+
+        if conn.lastrcv > 5000:
+            analysis['bottlenecks'].append({
+                'type': 'receive_stall',
+                'severity': 'CRITICAL',
+                'value': f"{conn.lastrcv} ms",
+                'description': f"No packets received for {conn.lastrcv}ms"
+            })
+
+            analysis['recommendations'].append({
+                'issue': 'Not receiving packets from peer',
+                'evidence': f"lastrcv={conn.lastrcv}ms, lastack={conn.lastack}ms",
+                'action': 'Network path may be broken or peer crashed',
+                'commands': [
+                    f"ping -c 5 {conn.remote_addr}",
+                    f"traceroute -n {conn.remote_addr}",
+                    "Check peer system status"
+                ]
+            })
+
+        # NEW: Check for high reordering
+        if conn.reordering > 20:
+            severity = 'CRITICAL' if conn.reordering > 50 else 'WARNING'
+            analysis['bottlenecks'].append({
+                'type': 'high_reordering',
+                'severity': severity,
+                'value': conn.reordering,
+                'description': f"High packet reordering detected ({conn.reordering} packets)"
+            })
+
+            analysis['recommendations'].append({
+                'issue': 'Excessive packet reordering',
+                'current': f"reordering = {conn.reordering}",
+                'action': 'Check for multi-path routing or per-packet load balancing',
+                'commands': [
+                    f"# Check routing",
+                    f"traceroute -n {conn.remote_addr}",
+                    f"mtr -r -c 100 {conn.remote_addr}",
+                    "# May indicate ECMP or per-packet load balancing"
+                ]
+            })
+
+        # NEW: Check for MSS mismatch
+        if conn.rcvmss > 0 and conn.advmss > 0 and abs(conn.rcvmss - conn.advmss) > 500:
+            analysis['bottlenecks'].append({
+                'type': 'mss_mismatch',
+                'severity': 'WARNING',
+                'value': f"rcvmss={conn.rcvmss}, advmss={conn.advmss}",
+                'description': f"Large MSS mismatch: received {conn.rcvmss} vs advertised {conn.advmss}"
+            })
+
+            analysis['recommendations'].append({
+                'issue': 'MSS negotiation mismatch',
+                'current': f"rcvmss={conn.rcvmss}, advmss={conn.advmss}, mss={conn.mss}",
+                'action': 'Check MTU settings and path MTU discovery',
+                'commands': [
+                    f"ip link show | grep mtu",
+                    f"tracepath {conn.remote_addr}",
+                ]
+            })
 
         # Check rwnd_limited
         if conn.rwnd_limited_ratio > 50:
@@ -810,40 +1229,41 @@ class TCPConnectionAnalyzer:
             print(f"  {key:25s}: {value}")
         print()
 
-        # Print bottlenecks
-        if analysis['bottlenecks']:
-            print("Bottlenecks Detected:")
-            print("-" * 80)
-            for bottleneck in analysis['bottlenecks']:
-                severity_symbol = '🔴' if bottleneck['severity'] == 'CRITICAL' else '⚠️' if bottleneck['severity'] == 'WARNING' else 'ℹ️'
-                print(f"  {severity_symbol} [{bottleneck['severity']}] {bottleneck['type']}")
-                print(f"     Value: {bottleneck['value']}")
-                print(f"     {bottleneck['description']}")
+        # Print bottlenecks (only if --show-analysis is enabled)
+        if self.args.show_analysis:
+            if analysis['bottlenecks']:
+                print("Bottlenecks Detected:")
+                print("-" * 80)
+                for bottleneck in analysis['bottlenecks']:
+                    severity_symbol = '🔴' if bottleneck['severity'] == 'CRITICAL' else '⚠️' if bottleneck['severity'] == 'WARNING' else 'ℹ️'
+                    print(f"  {severity_symbol} [{bottleneck['severity']}] {bottleneck['type']}")
+                    print(f"     Value: {bottleneck['value']}")
+                    print(f"     {bottleneck['description']}")
+                    print()
+            else:
+                print("✅ No obvious bottlenecks detected")
                 print()
-        else:
-            print("✅ No obvious bottlenecks detected")
-            print()
 
-        # Print recommendations
-        if analysis['recommendations']:
-            print("Recommendations:")
-            print("-" * 80)
-            for i, rec in enumerate(analysis['recommendations'], 1):
-                print(f"  {i}. Issue: {rec['issue']}")
-                if 'current' in rec:
-                    print(f"     Current: {rec['current']}")
-                if 'recommended' in rec:
-                    print(f"     Recommended: {rec['recommended']}")
-                if 'likely_causes' in rec:
-                    print(f"     Likely Causes:")
-                    for cause in rec['likely_causes']:
-                        print(f"       - {cause}")
-                print(f"     Action: {rec['action']}")
-                if 'commands' in rec:
-                    print(f"     Commands:")
-                    for cmd in rec['commands']:
-                        print(f"       {cmd}")
-                print()
+            # Print recommendations (only if --show-analysis is enabled)
+            if analysis['recommendations']:
+                print("Recommendations:")
+                print("-" * 80)
+                for i, rec in enumerate(analysis['recommendations'], 1):
+                    print(f"  {i}. Issue: {rec['issue']}")
+                    if 'current' in rec:
+                        print(f"     Current: {rec['current']}")
+                    if 'recommended' in rec:
+                        print(f"     Recommended: {rec['recommended']}")
+                    if 'likely_causes' in rec:
+                        print(f"     Likely Causes:")
+                        for cause in rec['likely_causes']:
+                            print(f"       - {cause}")
+                    print(f"     Action: {rec['action']}")
+                    if 'commands' in rec:
+                        print(f"     Commands:")
+                        for cmd in rec['commands']:
+                            print(f"       {cmd}")
+                    print()
 
         print(f"{'='*80}\n")
 
@@ -1013,6 +1433,11 @@ class TCPConnectionAnalyzer:
                     print(f"  {stat:35s}: {value:12d}  # {desc}")
 
         # ========== Intelligent Analysis Section ==========
+        # Only show if --show-analysis is enabled
+        if not self.args.show_analysis:
+            print(f"{'='*80}\n")
+            return
+
         print(f"\n{'='*80}")
         print("=== Intelligent Analysis ===")
         print(f"{'='*80}")
@@ -1111,6 +1536,7 @@ class TCPConnectionAnalyzer:
                 warnings.append(f"CRITICAL: High retransmission ratio: {retrans_ratio:.2f}% (normal <1%)")
 
         # TLP ratio too high
+        total_retrans = display_stats.get('segments_retransmitted', 0)
         if total_retrans > 0:
             tlp = display_stats.get('tcp_loss_probes', 0)
             if tlp > 0 and (tlp / total_retrans) > 0.3:
@@ -1280,6 +1706,8 @@ Examples:
                         help='Show system TCP configuration')
     parser.add_argument('--show-stats', action='store_true',
                         help='Show system TCP statistics (netstat -s)')
+    parser.add_argument('--show-analysis', action='store_true',
+                        help='Show bottlenecks and recommendations analysis')
     parser.add_argument('--json', action='store_true',
                         help='Output in JSON format')
 

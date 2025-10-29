@@ -595,23 +595,22 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
     }
 
     // Calculate and submit latency for adjacent stages
-    if (flow_ptr->last_stage > 0 && flow_ptr->last_timestamp > 0) {
+    // Check last_timestamp > 0 to ensure there's a previous stage
+    // Note: last_stage can be 0 (TX_STAGE_0), so we check timestamp instead
+    if (flow_ptr->last_timestamp > 0 && flow_ptr->last_timestamp < current_ts) {
         u64 prev_ts = flow_ptr->last_timestamp;
+        u64 latency_ns = current_ts - prev_ts;
+        u64 latency_us = latency_ns / 1000;
 
-        if (current_ts > prev_ts) {
-            u64 latency_ns = current_ts - prev_ts;
-            u64 latency_us = latency_ns / 1000;
+        // Create stage pair key with latency bucket
+        struct stage_pair_key_t pair_key = {};
+        pair_key.prev_stage = flow_ptr->last_stage;
+        pair_key.curr_stage = stage_id;
+        pair_key.direction = direction;
+        pair_key.latency_bucket = bpf_log2l(latency_us + 1);
 
-            // Create stage pair key with latency bucket
-            struct stage_pair_key_t pair_key = {};
-            pair_key.prev_stage = flow_ptr->last_stage;
-            pair_key.curr_stage = stage_id;
-            pair_key.direction = direction;
-            pair_key.latency_bucket = bpf_log2l(latency_us + 1);
-
-            // Update histogram
-            adjacent_latency_hist.increment(pair_key, 1);
-        }
+        // Update histogram
+        adjacent_latency_hist.increment(pair_key, 1);
     }
 
     // Update tracking for next stage

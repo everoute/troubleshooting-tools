@@ -11,6 +11,9 @@
       "Bash(python3:*)",
       "Bash(tree:*)"
     ],
-    "deny": []
+    "deny": [],
+    "additionalDirectories": [
+      "/Users/admin/workspace/kernel/"
+    ]
   }
 }

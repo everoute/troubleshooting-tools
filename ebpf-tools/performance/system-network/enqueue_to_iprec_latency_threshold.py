@@ -62,6 +62,18 @@ import signal
 # BPF Program
 bpf_text = """
 #include <uapi/linux/ptrace.h>
+
+// Compatibility fixes for older BCC versions (0.15.0) with newer kernels (5.10+)
+// BCC 0.15.0 doesn't define these enums that kernel 5.10+ expects
+// Must be defined BEFORE including headers that use them
+#ifndef BPF_SK_LOOKUP
+#define BPF_SK_LOOKUP 36
+#endif
+
+#ifndef BPF_CGROUP_INET_SOCK_RELEASE
+#define BPF_CGROUP_INET_SOCK_RELEASE 34
+#endif
+
 #include <net/sock.h>
 #include <bcc/proto.h>
 #include <linux/skbuff.h>

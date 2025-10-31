@@ -9,7 +9,9 @@
       "Bash(ssh:*)",
       "Bash(scp:*)",
       "Bash(python3:*)",
-      "Bash(tree:*)"
+      "Bash(tree:*)",
+      "Bash(git checkout:*)",
+      "WebSearch"
     ],
     "deny": [],
     "additionalDirectories": [

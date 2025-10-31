@@ -1,0 +1,104 @@
+#!/usr/bin/env bpftrace
+
+/*
+ * ksoftirqd_sched_latency.bt - Measure ksoftirqd scheduling latency
+ *
+ * This script measures the scheduling latency of ksoftirqd kernel threads,
+ * which is the delay between when ksoftirqd is woken up and when it actually
+ * starts running on a CPU.
+ *
+ * High scheduling latency (>100us) indicates CPU contention and can cause
+ * network packet processing delays.
+ *
+ * Usage:
+ *   bpftrace ksoftirqd_sched_latency.bt
+ *
+ * Example output:
+ *   @sched_latency_us[105]: Distribution of scheduling latency for ksoftirqd/105
+ *   @total_wakeups[105]: Total number of times ksoftirqd/105 was woken up
+ */
+
+BEGIN
+{
+    printf("Measuring ksoftirqd scheduling latency...\n");
+    printf("Press Ctrl-C to end and display results.\n\n");
+}
+
+// Trace ksoftirqd wakeup events
+tracepoint:sched:sched_wakeup
+/strncmp(args->comm, "ksoftirqd", 9) == 0/
+{
+    // Extract CPU number from comm (e.g., "ksoftirqd/105" -> 105)
+    $comm = args->comm;
+    $pid = args->pid;
+
+    // Record wakeup timestamp
+    @wakeup[$pid] = nsecs;
+    @wakeup_count[$pid]++;
+}
+
+// Trace when ksoftirqd actually starts running
+tracepoint:sched:sched_switch
+/strncmp(args->next_comm, "ksoftirqd", 9) == 0/
+{
+    $pid = args->next_pid;
+    $comm = args->next_comm;
+
+    // Look up wakeup timestamp
+    $wakeup_ts = @wakeup[$pid];
+
+    if ($wakeup_ts > 0) {
+        // Calculate scheduling latency
+        $latency_ns = nsecs - $wakeup_ts;
+        $latency_us = $latency_ns / 1000;
+
+        // Record per-CPU histograms
+        // Extract CPU number from comm
+        @sched_latency_us[$comm] = hist($latency_us);
+
+        // Track high latency events (>100us)
+        if ($latency_us > 100) {
+            @high_latency_count[$comm]++;
+            printf("[%s] HIGH LATENCY: %d us (pid=%d, cpu=%d)\n",
+                   strftime("%H:%M:%S", nsecs), $latency_us, $pid, cpu);
+        }
+
+        // Update running count
+        @run_count[$pid]++;
+
+        // Clean up
+        delete(@wakeup[$pid]);
+    }
+}
+
+// Track context from which ksoftirqd was woken up
+tracepoint:sched:sched_wakeup
+/strncmp(args->comm, "ksoftirqd", 9) == 0/
+{
+    // Record the context that woke up ksoftirqd
+    @wakeup_from[comm] = count();
+}
+
+END
+{
+    printf("\n=== ksoftirqd Scheduling Latency Report ===\n\n");
+
+    printf("--- Per-CPU Scheduling Latency Distribution (microseconds) ---\n");
+    print(@sched_latency_us);
+
+    printf("\n--- High Latency Events (>100us) ---\n");
+    print(@high_latency_count);
+
+    printf("\n--- Wakeup Sources (which processes woke up ksoftirqd) ---\n");
+    print(@wakeup_from);
+
+    printf("\n--- Wakeup vs Run Counts ---\n");
+    print(@wakeup_count);
+    print(@run_count);
+
+    // Cleanup
+    clear(@wakeup);
+    clear(@wakeup_count);
+    clear(@run_count);
+    clear(@wakeup_from);
+}

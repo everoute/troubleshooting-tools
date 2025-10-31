@@ -4,8 +4,8 @@
 """
 Focused RX Latency Measurement: enqueue_to_backlog → ip_rcv
 
-Measures the critical async boundary latency in the Linux kernel RX path.
-This is the segment where customer environments show 8-16ms tail latency.
+Measures the critical async boundary latency in the Linux kernel RX path
+on a SINGLE specified interface.
 
 Measurement points:
 - Stage 1: enqueue_to_backlog - Packet queued to per-CPU backlog
@@ -15,13 +15,19 @@ Measurement points:
 Includes comprehensive debugging framework to diagnose missing probe hits.
 
 Usage:
+    # Monitor physical NIC
     sudo ./enqueue_to_iprec_latency.py \
-        --phy-interface enp24s0f0np0 \
+        --interface enp24s0f0np0 \
         --src-ip 70.0.0.32 --dst-ip 70.0.0.31 \
         --dst-port 2181 --protocol tcp --interval 1
 
+    # Monitor OVS internal port
+    sudo ./enqueue_to_iprec_latency.py \
+        --interface br-int \
+        --dst-ip 70.0.0.31 --protocol tcp --interval 1
+
 Debug mode:
-    sudo ./enqueue_to_iprec_latency.py ... --debug
+    sudo ./enqueue_to_iprec_latency.py --interface enp24s0f0np0 --debug
 """
 
 # BCC module import with fallback
@@ -68,8 +74,7 @@ bpf_text = """
 #define SRC_PORT_FILTER %d
 #define DST_PORT_FILTER %d
 #define PROTOCOL_FILTER %d  // 0=all, 6=TCP, 17=UDP
-#define TARGET_IFINDEX1 %d
-#define TARGET_IFINDEX2 %d
+#define TARGET_IFINDEX %d
 
 // Stage definitions
 #define STAGE_ENQUEUE     1  // enqueue_to_backlog
@@ -164,7 +169,7 @@ static __always_inline bool is_target_ifindex(const struct sk_buff *skb) {
         return false;
     }
 
-    return (ifindex == TARGET_IFINDEX1 || ifindex == TARGET_IFINDEX2);
+    return (ifindex == TARGET_IFINDEX);
 }
 
 // Packet parsing
@@ -655,30 +660,38 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  Measure critical async boundary latency:
-    sudo %(prog)s --phy-interface enp24s0f0np0 \\
+  Measure physical NIC RX latency:
+    sudo %(prog)s --interface enp24s0f0np0 \\
                   --src-ip 70.0.0.32 --dst-ip 70.0.0.31 \\
                   --dst-port 2181 --protocol tcp --interval 1
 
+  Measure OVS internal port RX latency:
+    sudo %(prog)s --interface br-int \\
+                  --dst-ip 70.0.0.31 --protocol tcp --interval 1
+
   Enable debug mode to diagnose missing probe hits:
-    sudo %(prog)s --phy-interface enp24s0f0np0 \\
+    sudo %(prog)s --interface enp24s0f0np0 \\
                   --src-ip 70.0.0.32 --dst-ip 70.0.0.31 \\
                   --dst-port 2181 --protocol tcp --debug
 
-This tool measures 3 critical stages:
+This tool measures 3 critical stages on a SINGLE interface:
   1. enqueue_to_backlog - Queue insertion
   2. __netif_receive_skb - Softirq processing (CRITICAL ASYNC POINT)
   3. ip_rcv - IP layer entry
 
 The latency between stage 1 and 2 reveals softirq scheduling delays,
 CPU migration overhead, and queue contention issues.
+
+NOTE: This tool monitors packets on the specified interface only.
+In OVS environments, packets traverse multiple interfaces:
+  - Physical NIC (e.g., enp24s0f0np0): Hardware → Kernel
+  - OVS internal port (e.g., br-int): OVS → Protocol stack
+Use separate runs to measure each interface independently.
 """
     )
 
-    parser.add_argument('--phy-interface', type=str, required=True,
-                        help='Physical interface (e.g., enp24s0f0np0)')
-    parser.add_argument('--internal-interface', type=str, required=False,
-                        help='OVS internal interface (optional)')
+    parser.add_argument('--interface', type=str, required=True,
+                        help='Target interface to monitor (e.g., enp24s0f0np0 or br-int)')
     parser.add_argument('--src-ip', type=str, required=False,
                         help='Source IP filter')
     parser.add_argument('--dst-ip', type=str, required=False,
@@ -705,12 +718,9 @@ CPU migration overhead, and queue contention issues.
     protocol_map = {'tcp': 6, 'udp': 17, 'all': 0}
     protocol_filter = protocol_map[args.protocol]
 
-    # Get interface indices
+    # Get interface index
     try:
-        ifindex1 = get_if_index(args.phy_interface)
-        ifindex2 = ifindex1
-        if args.internal_interface:
-            ifindex2 = get_if_index(args.internal_interface)
+        target_ifindex = get_if_index(args.interface)
     except OSError as e:
         print("Error getting interface index: %s" % e)
         sys.exit(1)
@@ -718,6 +728,7 @@ CPU migration overhead, and queue contention issues.
     print("=" * 80)
     print("Focused RX Latency Measurement: enqueue_to_backlog → ip_rcv")
     print("=" * 80)
+    print("Target interface: %s (ifindex %d)" % (args.interface, target_ifindex))
     print("Protocol filter: %s" % args.protocol.upper())
     if args.src_ip:
         print("Source IP: %s" % args.src_ip)
@@ -727,9 +738,6 @@ CPU migration overhead, and queue contention issues.
         print("Source port: %d" % src_port)
     if dst_port:
         print("Destination port: %d" % dst_port)
-    print("Physical interface: %s (ifindex %d)" % (args.phy_interface, ifindex1))
-    if args.internal_interface:
-        print("Internal interface: %s (ifindex %d)" % (args.internal_interface, ifindex2))
     print("Statistics interval: %d seconds" % args.interval)
     if args.debug:
         print("Debug mode: ENABLED")
@@ -742,7 +750,7 @@ CPU migration overhead, and queue contention issues.
     try:
         b = BPF(text=bpf_text % (
             src_ip_hex, dst_ip_hex, src_port, dst_port,
-            protocol_filter, ifindex1, ifindex2
+            protocol_filter, target_ifindex
         ))
         print("\nBPF program loaded successfully")
         print("All 3 kprobes attached:")

@@ -188,6 +188,14 @@ TRACEPOINT_PROBE(sched, sched_switch)
 }
 """
 
+# Cumulative statistics (from start to end)
+cumulative_stats = {
+    'cpu_data': {},  # {cpu: {slot: count}}
+    'wakeup_counts': {},  # {cpu: count}
+    'run_counts': {},  # {cpu: count}
+    'high_latency_counts': {}  # {cpu: count}
+}
+
 def parse_cpu_list(cpu_str):
     """Parse CPU list string like '1,2,5-8' into list of CPU IDs"""
     if not cpu_str:
@@ -203,8 +211,10 @@ def parse_cpu_list(cpu_str):
 
     return sorted(list(cpus))
 
-def print_histogram_summary(b, target_cpus, interval_start_time):
+def print_histogram_summary(b, target_cpus, interval_start_time, update_cumulative=True):
     """Print histogram summary for the current interval"""
+    global cumulative_stats
+
     current_time = datetime.datetime.now()
     print("\n" + "=" * 80)
     print("[%s] ksoftirqd Scheduling Latency Report (Interval: %.1fs)" % (
@@ -231,6 +241,12 @@ def print_histogram_summary(b, target_cpus, interval_start_time):
             if cpu not in cpu_data:
                 cpu_data[cpu] = {}
             cpu_data[cpu][slot] = count
+
+            # Update cumulative histogram
+            if update_cumulative:
+                if cpu not in cumulative_stats['cpu_data']:
+                    cumulative_stats['cpu_data'][cpu] = {}
+                cumulative_stats['cpu_data'][cpu][slot] = cumulative_stats['cpu_data'][cpu].get(slot, 0) + count
     except Exception as e:
         print("Error reading histogram data:", str(e))
         return
@@ -248,7 +264,7 @@ def print_histogram_summary(b, target_cpus, interval_start_time):
         return
 
     # Print per-CPU statistics
-    print("\nPer-CPU ksoftirqd Scheduling Latency:")
+    print("\nPer-CPU ksoftirqd Scheduling Latency (Interval):")
     print("-" * 80)
 
     for cpu in sorted(cpu_data.keys()):
@@ -259,6 +275,12 @@ def print_histogram_summary(b, target_cpus, interval_start_time):
         wakeup_cnt = wakeup_counts[cpu_key].value
         run_cnt = run_counts[cpu_key].value
         high_lat_cnt = high_latency_counts[cpu_key].value
+
+        # Update cumulative counters
+        if update_cumulative:
+            cumulative_stats['wakeup_counts'][cpu] = cumulative_stats['wakeup_counts'].get(cpu, 0) + wakeup_cnt
+            cumulative_stats['run_counts'][cpu] = cumulative_stats['run_counts'].get(cpu, 0) + run_cnt
+            cumulative_stats['high_latency_counts'][cpu] = cumulative_stats['high_latency_counts'].get(cpu, 0) + high_lat_cnt
 
         print("  Wakeup count: %d" % wakeup_cnt)
         print("  Run count:    %d" % run_cnt)
@@ -323,6 +345,101 @@ def print_histogram_summary(b, target_cpus, interval_start_time):
     # Clear histogram for next interval
     hist.clear()
 
+def print_cumulative_summary(target_cpus, program_start_time):
+    """Print cumulative statistics from start to end"""
+    global cumulative_stats
+
+    current_time = datetime.datetime.now()
+    total_duration = time_time() - program_start_time
+
+    print("\n" + "=" * 80)
+    print("[%s] CUMULATIVE ksoftirqd Scheduling Latency Report (Total Duration: %.1fs)" % (
+        current_time.strftime("%Y-%m-%d %H:%M:%S"),
+        total_duration
+    ))
+    print("=" * 80)
+
+    cpu_data = cumulative_stats['cpu_data']
+
+    # Filter CPUs if target_cpus specified
+    if target_cpus:
+        cpu_data = {cpu: data for cpu, data in cpu_data.items() if cpu in target_cpus}
+
+    if not cpu_data:
+        print("No cumulative data collected")
+        return
+
+    # Print per-CPU cumulative statistics
+    print("\nPer-CPU ksoftirqd Scheduling Latency (Cumulative):")
+    print("-" * 80)
+
+    for cpu in sorted(cpu_data.keys()):
+        print("\nCPU %d (ksoftirqd/%d):" % (cpu, cpu))
+
+        wakeup_cnt = cumulative_stats['wakeup_counts'].get(cpu, 0)
+        run_cnt = cumulative_stats['run_counts'].get(cpu, 0)
+        high_lat_cnt = cumulative_stats['high_latency_counts'].get(cpu, 0)
+
+        print("  Wakeup count: %d" % wakeup_cnt)
+        print("  Run count:    %d" % run_cnt)
+        print("  High latency events (>100us): %d" % high_lat_cnt)
+
+        if wakeup_cnt != run_cnt:
+            print("  WARNING: Wakeup/run count mismatch (%d wakeups but %d runs)" % (
+                wakeup_cnt, run_cnt))
+
+        # Print histogram
+        slots = cpu_data[cpu]
+        total_samples = sum(slots.values())
+
+        if total_samples == 0:
+            print("  No latency samples")
+            continue
+
+        print("  Total samples: %d" % total_samples)
+        print("  Latency distribution:")
+
+        sorted_slots = sorted(slots.items())
+        max_count = max(slots.values())
+
+        for slot, count in sorted_slots:
+            if count > 0:
+                if slot == 0:
+                    range_str = "0-1us"
+                else:
+                    low = 1 << (slot - 1)
+                    high = (1 << slot) - 1
+                    range_str = "%d-%dus" % (low, high)
+
+                bar_width = int(40 * count / max_count)
+                bar = "*" * bar_width
+                percentage = 100.0 * count / total_samples
+
+                print("    %-16s: %6d (%5.1f%%) |%-40s|" % (
+                    range_str, count, percentage, bar))
+
+        # Highlight high latency
+        high_latency_slots = [slot for slot, count in sorted_slots if slot >= 7 and count > 0]
+        if high_latency_slots:
+            print("    ^^^ WARNING: High scheduling latency detected (>= 64us) ^^^")
+
+    # Print summary
+    print("\n" + "=" * 80)
+    print("Cumulative Summary:")
+    total_wakeups = sum(cumulative_stats['wakeup_counts'].get(cpu, 0) for cpu in cpu_data.keys())
+    total_runs = sum(cumulative_stats['run_counts'].get(cpu, 0) for cpu in cpu_data.keys())
+    total_high = sum(cumulative_stats['high_latency_counts'].get(cpu, 0) for cpu in cpu_data.keys())
+
+    print("  Total wakeups:           %d" % total_wakeups)
+    print("  Total runs:              %d" % total_runs)
+    print("  Total high latency (>100us): %d" % total_high)
+
+    if total_runs > 0:
+        high_latency_rate = 100.0 * total_high / total_runs
+        print("  High latency rate:       %.2f%%" % high_latency_rate)
+
+    print("=" * 80)
+
 def main():
     if os.geteuid() != 0:
         print("This program must be run as root")
@@ -355,6 +472,8 @@ which is the delay between wakeup and actual execution. High latency
                         help='Target CPU(s) to monitor (e.g., 105 or 105,106 or 100-110). Default: all CPUs')
     parser.add_argument('--interval', type=int, default=5,
                         help='Statistics interval in seconds (default: 5)')
+    parser.add_argument('--duration', type=int, default=0,
+                        help='Total execution time in seconds (default: 0 = run indefinitely)')
 
     args = parser.parse_args()
 
@@ -375,6 +494,10 @@ which is the delay between wakeup and actual execution. High latency
         print("Target CPUs: All")
 
     print("Statistics interval: %d seconds" % args.interval)
+    if args.duration > 0:
+        print("Total duration: %d seconds" % args.duration)
+    else:
+        print("Total duration: Unlimited (run until Ctrl-C)")
     print("\nMeasuring ksoftirqd scheduling latency...")
     print("  - Wakeup event: sched:sched_wakeup")
     print("  - Run event: sched:sched_switch")
@@ -395,9 +518,13 @@ which is the delay between wakeup and actual execution. High latency
     print("Statistics will be displayed every %d seconds\n" % args.interval)
 
     # Setup signal handler
+    program_start_time = time_time()
+
     def signal_handler(sig, frame):
-        print("\n\nFinal statistics:")
-        print_histogram_summary(b, target_cpus, interval_start_time)
+        print("\n\nFinal interval statistics:")
+        print_histogram_summary(b, target_cpus, interval_start_time, update_cumulative=False)
+        print("\n")
+        print_cumulative_summary(target_cpus, program_start_time)
         print("\nExiting...")
         sys.exit(0)
 
@@ -409,10 +536,24 @@ which is the delay between wakeup and actual execution. High latency
     try:
         while True:
             sleep(args.interval)
-            print_histogram_summary(b, target_cpus, interval_start_time)
+
+            # Check if duration limit exceeded
+            if args.duration > 0 and (time_time() - program_start_time) >= args.duration:
+                print("\n\nDuration limit reached (%d seconds)" % args.duration)
+                print("\nFinal interval statistics:")
+                print_histogram_summary(b, target_cpus, interval_start_time, update_cumulative=False)
+                print("\n")
+                print_cumulative_summary(target_cpus, program_start_time)
+                break
+
+            print_histogram_summary(b, target_cpus, interval_start_time, update_cumulative=True)
             interval_start_time = time_time()
     except KeyboardInterrupt:
-        pass
+        print("\n\nInterrupted by user")
+        print("\nFinal interval statistics:")
+        print_histogram_summary(b, target_cpus, interval_start_time, update_cumulative=False)
+        print("\n")
+        print_cumulative_summary(target_cpus, program_start_time)
 
 if __name__ == "__main__":
     main()

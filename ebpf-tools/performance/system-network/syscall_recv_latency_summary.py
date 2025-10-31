@@ -443,6 +443,16 @@ TRACEPOINT_PROBE(syscalls, sys_exit_recvmsg)
 # Global event counter
 high_latency_event_count = 0
 
+# Cumulative statistics (from start to end)
+cumulative_stats = {
+    'total_calls': 0,
+    'total_bytes': 0,
+    'cpu_migrations': 0,
+    'errors': 0,
+    'zero_reads': 0,
+    'histogram': {}
+}
+
 def print_high_latency_event(cpu, data, size):
     """Callback for high latency recv events"""
     global high_latency_event_count, b
@@ -469,8 +479,10 @@ def print_high_latency_event(cpu, data, size):
     print("  Bytes received: %d" % event.bytes)
     print("=" * 80)
 
-def print_summary(b, interval_start_time, enable_high_latency=False):
+def print_summary(b, interval_start_time, enable_high_latency=False, update_cumulative=True):
     """Print summary statistics"""
+    global cumulative_stats
+
     current_time = datetime.datetime.now()
     print("\n" + "=" * 80)
     print("[%s] recv() System Call Statistics (Interval: %.1fs)" % (
@@ -486,7 +498,15 @@ def print_summary(b, interval_start_time, enable_high_latency=False):
     errors = counters[ctypes.c_int(3)].value
     zero_reads = counters[ctypes.c_int(4)].value
 
-    print("\nOverall Statistics:")
+    # Update cumulative statistics
+    if update_cumulative:
+        cumulative_stats['total_calls'] += total_calls
+        cumulative_stats['total_bytes'] += total_bytes
+        cumulative_stats['cpu_migrations'] += cpu_migrations
+        cumulative_stats['errors'] += errors
+        cumulative_stats['zero_reads'] += zero_reads
+
+    print("\nInterval Statistics:")
     print("  Total recv() calls:    %d" % total_calls)
     print("  Total bytes received:  %d (%.2f MB)" % (total_bytes, total_bytes / 1024.0 / 1024.0))
     print("  CPU migrations:        %d" % cpu_migrations)
@@ -503,7 +523,7 @@ def print_summary(b, interval_start_time, enable_high_latency=False):
 
     # Print latency histogram
     hist = b["recv_latency_hist"]
-    print("\nrecv() Latency Distribution:")
+    print("\nrecv() Latency Distribution (Interval):")
     print("-" * 80)
 
     hist_data = {}
@@ -513,37 +533,39 @@ def print_summary(b, interval_start_time, enable_high_latency=False):
             count = v.value if hasattr(v, 'value') else int(v)
             if count > 0:
                 hist_data[slot] = count
+                # Update cumulative histogram
+                if update_cumulative:
+                    cumulative_stats['histogram'][slot] = cumulative_stats['histogram'].get(slot, 0) + count
     except Exception as e:
         print("Error reading histogram:", str(e))
         return
 
     if not hist_data:
         print("No latency data collected")
-        return
+    else:
+        total_samples = sum(hist_data.values())
+        max_count = max(hist_data.values())
 
-    total_samples = sum(hist_data.values())
-    max_count = max(hist_data.values())
+        for slot in sorted(hist_data.keys()):
+            count = hist_data[slot]
+            if slot == 0:
+                range_str = "0-1us"
+            else:
+                low = 1 << (slot - 1)
+                high = (1 << slot) - 1
+                range_str = "%d-%dus" % (low, high)
 
-    for slot in sorted(hist_data.keys()):
-        count = hist_data[slot]
-        if slot == 0:
-            range_str = "0-1us"
-        else:
-            low = 1 << (slot - 1)
-            high = (1 << slot) - 1
-            range_str = "%d-%dus" % (low, high)
+            bar_width = int(40 * count / max_count)
+            bar = "*" * bar_width
+            percentage = 100.0 * count / total_samples
 
-        bar_width = int(40 * count / max_count)
-        bar = "*" * bar_width
-        percentage = 100.0 * count / total_samples
+            print("  %-16s: %6d (%5.1f%%) |%-40s|" % (
+                range_str, count, percentage, bar))
 
-        print("  %-16s: %6d (%5.1f%%) |%-40s|" % (
-            range_str, count, percentage, bar))
-
-    # Highlight slow calls
-    slow_slots = [s for s in hist_data.keys() if s >= 10]  # >= 512us
-    if slow_slots:
-        print("  ^^^ WARNING: Slow recv() calls detected (>= 512us) ^^^")
+        # Highlight slow calls
+        slow_slots = [s for s in hist_data.keys() if s >= 10]  # >= 512us
+        if slow_slots:
+            print("  ^^^ WARNING: Slow recv() calls detected (>= 512us) ^^^")
 
     if enable_high_latency:
         print("\nHigh Latency Events: %d" % high_latency_event_count)
@@ -551,6 +573,75 @@ def print_summary(b, interval_start_time, enable_high_latency=False):
 
     # Clear histogram
     hist.clear()
+
+def print_cumulative_summary(program_start_time):
+    """Print cumulative statistics from start to end"""
+    global cumulative_stats
+
+    current_time = datetime.datetime.now()
+    total_duration = time_time() - program_start_time
+
+    print("\n" + "=" * 80)
+    print("[%s] CUMULATIVE recv() System Call Statistics (Total Duration: %.1fs)" % (
+        current_time.strftime("%Y-%m-%d %H:%M:%S"),
+        total_duration
+    ))
+    print("=" * 80)
+
+    total_calls = cumulative_stats['total_calls']
+    total_bytes = cumulative_stats['total_bytes']
+    cpu_migrations = cumulative_stats['cpu_migrations']
+    errors = cumulative_stats['errors']
+    zero_reads = cumulative_stats['zero_reads']
+
+    print("\nCumulative Statistics:")
+    print("  Total recv() calls:    %d" % total_calls)
+    print("  Total bytes received:  %d (%.2f MB)" % (total_bytes, total_bytes / 1024.0 / 1024.0))
+    print("  CPU migrations:        %d" % cpu_migrations)
+    print("  Zero-byte reads:       %d" % zero_reads)
+    print("  Errors (ret < 0):      %d" % errors)
+
+    if total_calls > 0:
+        print("\nDerived Metrics:")
+        print("  Avg bytes per call:    %.2f" % (float(total_bytes) / total_calls))
+        print("  CPU migration rate:    %.2f%%" % (100.0 * cpu_migrations / total_calls))
+        if total_bytes > 0 and total_duration > 0:
+            throughput_mbps = (total_bytes * 8.0) / total_duration / 1000000.0
+            print("  Throughput:            %.2f Mbps" % throughput_mbps)
+
+    # Print cumulative latency histogram
+    hist_data = cumulative_stats['histogram']
+    print("\nrecv() Latency Distribution (Cumulative):")
+    print("-" * 80)
+
+    if not hist_data:
+        print("No latency data collected")
+    else:
+        total_samples = sum(hist_data.values())
+        max_count = max(hist_data.values())
+
+        for slot in sorted(hist_data.keys()):
+            count = hist_data[slot]
+            if slot == 0:
+                range_str = "0-1us"
+            else:
+                low = 1 << (slot - 1)
+                high = (1 << slot) - 1
+                range_str = "%d-%dus" % (low, high)
+
+            bar_width = int(40 * count / max_count)
+            bar = "*" * bar_width
+            percentage = 100.0 * count / total_samples
+
+            print("  %-16s: %6d (%5.1f%%) |%-40s|" % (
+                range_str, count, percentage, bar))
+
+        # Highlight slow calls
+        slow_slots = [s for s in hist_data.keys() if s >= 10]  # >= 512us
+        if slow_slots:
+            print("  ^^^ WARNING: Slow recv() calls detected (>= 512us) ^^^")
+
+    print("=" * 80)
 
 def get_pid_by_name(process_name):
     """Get PID by process name"""
@@ -606,6 +697,8 @@ This tool helps diagnose:
                         help='Port to monitor (requires netstat/ss parsing)')
     parser.add_argument('--interval', type=int, default=5,
                         help='Statistics interval in seconds (default: 5)')
+    parser.add_argument('--duration', type=int, default=0,
+                        help='Total execution time in seconds (default: 0 = run indefinitely)')
     parser.add_argument('--high-latency-threshold', type=int, metavar='MICROSECONDS',
                         help='Enable high-latency event tracking with threshold in microseconds (e.g., 1000 for 1ms). '
                              'When specified, individual slow calls exceeding this threshold will be reported in real-time. '
@@ -643,6 +736,10 @@ This tool helps diagnose:
         print("Target Port: %d" % target_port)
 
     print("Statistics interval: %d seconds" % args.interval)
+    if args.duration > 0:
+        print("Total duration: %d seconds" % args.duration)
+    else:
+        print("Total duration: Unlimited (run until Ctrl-C)")
 
     # High latency event tracking configuration
     high_latency_threshold = 0
@@ -680,9 +777,13 @@ This tool helps diagnose:
         b["recv_events"].open_perf_buffer(print_high_latency_event)
 
     # Setup signal handler
+    program_start_time = time_time()
+
     def signal_handler(sig, frame):
-        print("\n\nFinal statistics:")
-        print_summary(b, interval_start_time, enable_high_latency)
+        print("\n\nFinal interval statistics:")
+        print_summary(b, interval_start_time, enable_high_latency, update_cumulative=False)
+        print("\n")
+        print_cumulative_summary(program_start_time)
         print("\nExiting...")
         sys.exit(0)
 
@@ -699,12 +800,25 @@ This tool helps diagnose:
             else:
                 sleep(0.1)
 
+            # Check if duration limit exceeded
+            if args.duration > 0 and (time_time() - program_start_time) >= args.duration:
+                print("\n\nDuration limit reached (%d seconds)" % args.duration)
+                print("\nFinal interval statistics:")
+                print_summary(b, interval_start_time, enable_high_latency, update_cumulative=False)
+                print("\n")
+                print_cumulative_summary(program_start_time)
+                break
+
             # Check if interval elapsed
             if time_time() - interval_start_time >= args.interval:
-                print_summary(b, interval_start_time, enable_high_latency)
+                print_summary(b, interval_start_time, enable_high_latency, update_cumulative=True)
                 interval_start_time = time_time()
     except KeyboardInterrupt:
-        print_summary(b, interval_start_time, enable_high_latency)
+        print("\n\nInterrupted by user")
+        print("\nFinal interval statistics:")
+        print_summary(b, interval_start_time, enable_high_latency, update_cumulative=False)
+        print("\n")
+        print_cumulative_summary(program_start_time)
 
 if __name__ == "__main__":
     main()

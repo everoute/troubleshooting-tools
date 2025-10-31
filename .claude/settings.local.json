@@ -15,7 +15,8 @@
     ],
     "deny": [],
     "additionalDirectories": [
-      "/Users/admin/workspace/kernel/"
+      "/Users/admin/workspace/kernel/",
+      "/Users/admin/workspace/bcc-program/"
     ]
   }
 }

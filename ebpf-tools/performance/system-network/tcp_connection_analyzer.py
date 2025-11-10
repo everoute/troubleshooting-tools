@@ -124,6 +124,7 @@ class TCPConnectionInfo:
         # Application and receiver metrics
         self.app_limited = False
         self.rcv_rtt = 0.0
+        self.rcv_ooopack = 0  # Out-of-order packets received
 
         # Socket memory (skmem)
         self.skmem_r = 0  # RX queue
@@ -704,6 +705,11 @@ class TCPConnectionAnalyzer:
             conn.process_pid = int(match.group(2))
             conn.process_fd = int(match.group(3))
 
+        # Out-of-order packets: rcv_ooopack:715154
+        match = re.search(r'rcv_ooopack:(\d+)', line)
+        if match:
+            conn.rcv_ooopack = int(match.group(1))
+
     def _parse_rate(self, value, unit):
         """Parse rate value with unit (K/M/G)"""
         value = float(value)
@@ -810,6 +816,14 @@ class TCPConnectionAnalyzer:
         # NEW: Reordering
         if conn.reordering > 0:
             analysis['metrics']['reordering'] = conn.reordering
+
+        # NEW: Out-of-order packets received
+        if conn.rcv_ooopack > 0:
+            analysis['metrics']['rcv_ooopack'] = f"{conn.rcv_ooopack:,} packets"
+            # Calculate OOO ratio if we have total received segments
+            if conn.segs_in > 0:
+                ooo_ratio = (conn.rcv_ooopack / conn.segs_in) * 100
+                analysis['metrics']['ooo_ratio'] = f"{ooo_ratio:.3f}%"
 
         # NEW: ACK timeout
         if conn.ato > 0:
@@ -1012,6 +1026,45 @@ class TCPConnectionAnalyzer:
                     "# May indicate ECMP or per-packet load balancing"
                 ]
             })
+
+        # NEW: Check for high out-of-order packets
+        if conn.rcv_ooopack > 1000:
+            severity = 'CRITICAL' if conn.rcv_ooopack > 10000 else 'WARNING'
+            ooo_ratio = (conn.rcv_ooopack / conn.segs_in * 100) if conn.segs_in > 0 else 0
+
+            analysis['bottlenecks'].append({
+                'type': 'high_ooo_packets',
+                'severity': severity,
+                'value': f"{conn.rcv_ooopack:,} ({ooo_ratio:.2f}%)",
+                'description': f"High out-of-order packets: {conn.rcv_ooopack:,} packets ({ooo_ratio:.2f}% of received)"
+            })
+
+            recommendations = {
+                'issue': f'Severe packet reordering ({conn.rcv_ooopack:,} OOO packets)',
+                'current': f"rcv_ooopack={conn.rcv_ooopack:,}, ratio={ooo_ratio:.2f}%",
+                'action': 'Fix packet ordering issues',
+                'commands': []
+            }
+
+            # Provide specific recommendations based on the scenario
+            if 'ovs' in conn.local_addr.lower() or 'port-' in conn.local_addr.lower():
+                recommendations['commands'].extend([
+                    "# OVS multi-queue may cause reordering",
+                    "ovs-vsctl list Interface port-storage | grep n_rxq",
+                    "# Set to single queue if needed:",
+                    "sudo ovs-vsctl set Interface port-storage options:n_rxq=1",
+                ])
+
+            recommendations['commands'].extend([
+                "# Check CPU interrupt distribution",
+                "cat /proc/interrupts | grep -E 'virtio|vhost|eth'",
+                "# Disable irqbalance if running",
+                "sudo systemctl stop irqbalance",
+                "# Check for RSS/RPS settings",
+                "cat /sys/class/net/*/queues/rx-*/rps_cpus"
+            ])
+
+            analysis['recommendations'].append(recommendations)
 
         # NEW: Check for MSS mismatch
         if conn.rcvmss > 0 and conn.advmss > 0 and abs(conn.rcvmss - conn.advmss) > 500:

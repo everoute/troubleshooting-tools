@@ -96,7 +96,6 @@ import fcntl # Needed for ioctl
 # --- BPF Program ---
 bpf_text = """
 #include <uapi/linux/ptrace.h>
-#include <net/sock.h>
 #include <bcc/proto.h>
 #include <linux/skbuff.h>
 #include <linux/icmp.h>
@@ -105,7 +104,6 @@ bpf_text = """
 #include <linux/if_vlan.h>
 #include <linux/sched.h>
 #include <linux/netdevice.h>
-#include <net/flow.h>
 
 // User-defined filters
 #define SRC_IP_FILTER 0x%x
@@ -394,26 +392,26 @@ static __always_inline int parse_packet_key(struct sk_buff *skb, struct packet_k
     return 1;
 }
 
-static __always_inline void handle_event(struct pt_regs *ctx, struct sk_buff *skb, 
+static __always_inline void handle_event(struct pt_regs *ctx, struct sk_buff *skb,
                                          u64 current_stage_global_id, struct packet_key_t *parsed_packet_key, u8 actual_icmp_type) {
     if (skb == NULL) {
         //bpf_trace_printk("HdlEvt: SKB NULL. Stg=%%d", current_stage_global_id);
         return;
     }
 
-    if (TRACE_DIRECTION == 0 && current_stage_global_id == PATH2_STAGE_0) { 
+    if (TRACE_DIRECTION == 0 && current_stage_global_id == PATH2_STAGE_0) {
         if (!is_target_ifindex(skb)){
             //bpf_trace_printk("HdlEvt: Out P2S0 !target_if. Stg=%%d", current_stage_global_id);
             return;
         }
     }
-    if (TRACE_DIRECTION == 1 && current_stage_global_id == PATH1_STAGE_0) { 
+    if (TRACE_DIRECTION == 1 && current_stage_global_id == PATH1_STAGE_0) {
          if (!is_target_ifindex(skb)){
             //bpf_trace_printk("HdlEvt: In P1S0 !target_if. Stg=%%d", current_stage_global_id);
             return;
         }
     }
-    
+
     u64 current_ts = bpf_ktime_get_ns();
     int stack_id = stack_traces.get_stackid(ctx, BPF_F_REUSE_STACKID); // Attempt kernel stacks only
     
@@ -555,8 +553,8 @@ int kprobe__internal_dev_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
     return 0;
 }
 
-RAW_TRACEPOINT_PROBE(netif_receive_skb) {
-    struct sk_buff *skb = (struct sk_buff *)ctx->args[0];
+TRACEPOINT_PROBE(net, netif_receive_skb) {
+    struct sk_buff *skb = (struct sk_buff *)args->skbaddr;
     if (!skb) return 0;
 
     struct packet_key_t key = {};
@@ -564,11 +562,11 @@ RAW_TRACEPOINT_PROBE(netif_receive_skb) {
 
     if (TRACE_DIRECTION == 0) {
         if (parse_packet_key(skb, &key, &icmp_type, 0, PATH2_STAGE_0)) {
-            handle_event(ctx, skb, PATH2_STAGE_0, &key, icmp_type);
+            handle_event(args, skb, PATH2_STAGE_0, &key, icmp_type);
         }
     } else {
         if (parse_packet_key(skb, &key, &icmp_type, 1, PATH1_STAGE_0)) {
-            handle_event(ctx, skb, PATH1_STAGE_0, &key, icmp_type);
+            handle_event(args, skb, PATH1_STAGE_0, &key, icmp_type);
         }
     }
     return 0;

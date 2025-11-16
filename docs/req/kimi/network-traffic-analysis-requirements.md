@@ -476,56 +476,67 @@ TCPSocket 分析工具用于分析通过 `tcp_connection_analyzer.py` 采集的 
   - 表示发送缓冲区限制
   - 可能原因：tcp_wmem 过小
 
-#### 2.5.2 各类速率的意义与计算方式
+#### 2.5.2 各类速率的意义与计算方式（已调研）
 
 **调研结果**：详见附录 B《Kernel 代码调研报告》
 
 **结论**：
-- **delivery_rate**：在 kernel `tcp_rate.c` 中基于 RTT 采样计算，估算网络有效吞吐量能力
+- **delivery_rate**：在 kernel `tcp_rate.c` 中基于 ACK 采样计算，估算网络有效吞吐量能力
 - **pacing_rate**：在 kernel `tcp_input.c` 中计算，公式明确：`pacing_rate = pacing_ratio × (mss × cwnd / srtt)`
-- **send_rate**：没有找到明确的 kernel 计算代码，可能是用户空间估算值，作为参考指标
+- **send_rate**：不是内核计算值，ss命令显示的是**发送缓冲区内存使用量**（来自`inet_diag_meminfo.idiag_wmem`）
 
 **详细说明**：
 
 **传输速率（delivery_rate）**：
-- 来源：基于 ACK 测量，在 `tcp_rate.c:tcp_rate_gen()` 中计算
-- 计算方式：每个 ACK 采样，计算交付速率
+- **内核实现**：`net/ipv4/tcp_rate.c:tcp_rate_gen()`
+- **采样时机**：每个 ACK 到达时触发（约 RTT 间隔）
+- **计算公式**：
   ```
   delivery_rate = delivered_packets × MSS × 8 / interval_us
+  interval_us = max(send_interval, ack_interval)
   ```
-- interval_us = max(send_interval, ack_interval)
-- 意义：**估算网络实际能传输的有效吞吐量能力**
-- 特点：
+- **平滑机制**：
+  - 只保留非 app_limited 或带宽更高的样本
+  - 受 tcp_min_rtt 约束（丢弃小于 min_rtt 的异常样本）
+- **意义**：估算网络实际能传输的有效吞吐量能力（BBR等算法使用）
+- **特点**：
   - 使用较长阶段（发送或 ACK）确保准确性
   - 不受应用限制（app_limited）的数据影响
-  - 用于 BBR 等拥塞控制算法
+  - 每个 ACK 采样一次
 
 **Pacing 速率（pacing_rate）**：
-- 来源：存储在 `sk->sk_pacing_rate`（struct sock 字段）
-- 计算公式（tcp_input.c）：
+- **内核实现**：`net/ipv4/tcp_input.c:tcp_update_pacing_rate()`
+- **更新时机**：每个 ACK 到达时（约 RTT 间隔）
+- **计算公式**：
   ```
-  rate = mss_cache × (USEC_PER_SEC / 100) << 3  // 基础值
+  // 基础值：mss × cwnd / srtt
+  rate = (u64)tp->mss_cache × ((USEC_PER_SEC / 100) << 3);
 
-  // 慢启动 (cwnd < ssthresh/2):
-  pacing_rate = rate × tcp_pacing_ss_ratio / srtt_us
-  // pacing_ss_ratio 默认值: 200 (%)
+  // 慢启动阶段（cwnd < ssthresh/2）:
+  // pacing_ss_ratio = 200 (200%)
+  pacing_rate = rate × 200 / srtt_us
 
-  // 拥塞避免:
-  pacing_rate = rate × tcp_pacing_ca_ratio / srtt_us
-  // pacing_ca_ratio 默认值: 120 (%)
+  // 拥塞避免阶段:
+  // pacing_ca_ratio = 120 (120%)
+  pacing_rate = rate × 120 / srtt_us
 
-  // 最终值
-  pacing_rate = min(pacing_rate, sk_max_pacing_rate)
+  // 最终值（上限限制）
+  pacing_rate = min(pacing_rate, sk->sk_max_pacing_rate)
   ```
-- 更新时机：每个 ACK 到达时
-- 意义：控制数据包发送节奏，减少突发，使流量更平滑
-- 机制：与 FQ（Fair Queue）调度器配合，限制队列长度
+- **sysctl 参数**：
+  ```bash
+  net.ipv4.tcp_pacing_ss_ratio = 200  # 慢启动系数
+  net.ipv4.tcp_pacing_ca_ratio = 120  # 拥塞避免系数
+  ```
+- **意义**：控制数据包发送节奏，减少突发，使流量更平滑
+- **机制**：与 FQ（Fair Queue）调度器配合，限制队列长度
 
 **发送速率（send_rate）**：
-- 调研结果：在 kernel 代码中未找到明确的计算函数
-- 推测来源：ss 命令在用户空间估算
-- 可能计算方式：基于最近时间窗口的实际发送速率
-- 建议：作为参考指标，重点分析 pacing_rate 和 delivery_rate
+- **调研结果**：在 kernel 代码中未找到明确的计算代码
+- **ss命令显示**："send"字段实际是**发送缓冲区内存使用量**（单位：bytes），不是速率
+- **数据来源**：`inet_diag_meminfo.idiag_wmem`（通过Netlink INET_DIAG_MEMINFO获取）
+- **与tcpi_bytes_acked关系**：无直接关系，tcpi_bytes_acked是累计确认字节数
+- **建议**：在TCPSocket分析工具中，send_rate作为**参考值**，重点分析 pacing_rate 和 delivery_rate
 
 **三类 Rate 的关系与对比分析**：
 
@@ -543,34 +554,40 @@ TCPSocket 分析工具用于分析通过 `tcp_connection_analyzer.py` 采集的 
 ```
 
 - **pacing_rate**：**计划发送速率**，拥塞控制计算，用于控制发送节奏
-- **delivery_rate**：**网络交付速率**，测量网络实际能传输的速率，反映网络瓶颈
-- **send_rate**：**实际观测发送速率**（估算值）
+- **delivery_rate**：**网络交付速率**，测量网络实际能传输的速率，反映网络瓶颈的真实能力
+- **send_rate**：SS命令显示的发送缓冲区内存使用量（单位：bytes）
 
 **对比分析结论**：
 - **理想情况**：`delivery_rate ≈ pacing_rate × 0.8-1.0`（网络充分利用）
 - **异常情况 1**：`delivery_rate << pacing_rate` → 网络瓶颈（丢包、拥塞、对端接收慢）
-- **异常情况 2**：`send_rate << pacing_rate` → 应用限制（app_limited）
+- **异常情况 2**：`delivery_rate >> pacing_rate` → ACK压缩导致的异常样本（会被tcp_min_rtt过滤）
 
-**带宽利用率**：
+**带宽利用率分析**：
 ```
 带宽利用率 = (平均 delivery_rate / 物理链路带宽) × 100%
-```
-- < 30%：利用率低，需要优化
+
+分析标准：
+- < 30%：利用率低，可能存在CWND限制、RWND限制或应用受限
 - 30%-70%：正常范围
 - > 70%：利用率良好
+- > 90%：接近带宽上限，可能存在排队和延迟
+```
 
 **pacing_rate vs delivery_rate 对比**：
 ```
 比值 = delivery_rate / pacing_rate
-- > 0.8：网络状况良好，充分利用
+
+分析标准：
+- > 0.8：网络状况良好，带宽充分利用
 - 0.5-0.8：网络有一定压力但仍可接受
-- < 0.5：网络瓶颈严重或存在拥塞
+- < 0.5：网络瓶颈严重或存在拥塞、丢包
+- > 1.0：异常值（通常由ACK压缩引起），会被tcp_min_rtt过滤
 ```
 
 **更新频率**：
 - **delivery_rate**：每个 ACK 触发（约 RTT 间隔）
 - **pacing_rate**：每个 ACK 触发（约 RTT 间隔）
-- **send_rate**：ss 命令显示时刻的估算值
+- **send_rate**：即时快照（当前发送缓冲区内存使用）
 
 #### 2.5.3 重传深度分析
 
@@ -594,118 +611,608 @@ TCPSocket 分析工具用于分析通过 `tcp_connection_analyzer.py` 采集的 
 - TLP 探测重传
 - 重传时间分布
 
-#### 2.5.4 Buffer 状态深度分析
+#### 2.5.4 Buffer 状态深度分析（已调研）
 
-**需要调研**：
-- `ss -m` 输出中的 skmem 字段来源（来自 kernel `struct tcp_sock` 中的 `sk->sk_mem_*` 字段）
-- 每个字段的精确意义
-- 在数据包收发 pipeline 中的位置和关系
+**调研结果**：skmem 字段来源于 kernel `struct sock` 结构，详见附录 B《Kernel 代码调研报告》
 
-**skmem 字段详细说明**：
+**内核数据结构说明**：
+
+**skmem 字段完整说明**：
 ```
 skmem:(r<r>,rb<rb>,t<t>,tb<tb>,f<f>,w<w>,o<o>,bl<bl>,d<d>)
 ```
 
-- **r**：sk_rmem_alloc - RX 队列中已分配内存
-  - 位置：在 skb 从网络层传递到传输层后
-  - 意义：socket 接收队列中累积的数据量
-  - 与 Recv-Q 的关系：Recv-Q 是未读数据，r 是已接收但未处理的数据
+- **r** (`sk_rmem_alloc`): Receive Queue 中已分配内存
+  - **类型**: `atomic_t`
+  - **位置**: `include/net/sock.h:394`
+  - **含义**: 已通过校验和验证、TCP序列号检查、放入socket接收队列的数据
+  - **单位**: bytes
+  - **增加位置**: `tcp_data_queue()` → `atomic_add(skb->truesize, &sk->sk_rmem_alloc)`
+  - **减少位置**: `tcp_recvmsg()` → `atomic_sub(skb->truesize, &sk->sk_rmem_alloc)`
+  - **与 Recv-Q 的关系**: r = 接收队列总量，Recv-Q = 未读部分
+    - 数值关系: `r >= Recv-Q`
+    - Recv-Q很小但r很大: 应用已读取数据，但内核未释放内存（延迟释放优化）
+    - Recv-Q和r都很大: 应用读取慢
 
-- **rb**：sk_rcvbuf - RX 缓冲区大小上限
-  - 来源：由 tcp_rmem[1] 或 setsockopt(SO_RCVBUF) 设置
-  - 意义：接收缓冲区的最大容量
-  - 溢出判断：如果 r 接近 rb，接收缓冲区压力高
+- **rb** (`sk_rcvbuf`): RX 缓冲区大小上限
+  - **类型**: `int`
+  - **来源**:
+    1. 系统默认值: `net.core.rmem_default`
+    2. TCP 默认值: `tcp_rmem[1]`
+    3. 用户设置: `setsockopt(SO_RCVBUF)`
+  - **sysctl 参数**: `net.ipv4.tcp_rmem = "4096 87380 6291456"`
 
-- **t**：sk_wmem_alloc - TX 队列中已分配内存
-  - 位置：数据从发送队列进入网络层前
-  - 意义：socket 发送队列中待发送的数据量
-  - 与 Send-Q 的关系：t 包含已发送未确认 + 未发送数据
+- **t** (`sk_wmem_alloc`): TX 队列中已分配内存
+  - **类型**: `refcount_t`
+  - **位置**: `include/net/sock.h:419`
+  - **含义**: 已发送但未确认 + 待发送的数据（已分配内存）
+  - **注意事项**: 初始值为1（占位符），实际使用 `sk_wmem_alloc_get() - 1`
+  - **增加位置**: `tcp_transmit_skb()` → `skb_set_owner_w(skb, sk)`
+  - **减少位置**: `tcp_clean_rtx_queue()` → `tcp_free_skb()`
 
-- **tb**：sk_sndbuf - TX 缓冲区大小上限
-  - 来源：由 tcp_wmem[1] 或 setsockopt(SO_SNDBUF) 设置
-  - 意义：发送缓冲区的最大容量
-  - 溢出判断：如果 t 接近 tb，发送缓冲区压力高
+- **tb** (`sk_sndbuf`): TX 缓冲区大小上限
+  - **类型**: `int`
+  - **来源**:
+    1. 系统默认值: `net.core.wmem_default`
+    2. TCP 默认值: `tcp_wmem[1]`
+    3. 用户设置: `setsockopt(SO_SNDBUF)`
+  - **sysctl 参数**: `net.ipv4.tcp_wmem = "4096 16384 4194304"`
 
-- **f**：sk_forward_alloc - 预分配内存
-  - 位置：为 socket 预留的内存池
-  - 意义：用于快速分配 skb，避免每包分配开销
+- **f** (`sk_forward_alloc`): 预分配内存
+  - **类型**: `int`
+  - **位置**: `include/net/sock.h:396`
+  - **作用**: 为socket预分配的内存池，提高内存分配效率
+  - **机制**: 需要用内存时从forward_alloc扣除，不足时再申请大块内存
+  - **典型值**: 几百KB到几MB
 
-- **w**：sk_wmem_queued - 写队列中排队的内存
-  - 位置：TCP 写队列（包括发送中 + 待发送）
-  - 与 t 的关系：w <= t，因为 t 包含所有分配
+- **w** (`sk_wmem_queued`): 写队列中排队的内存
+  - **类型**: `int`
+  - **位置**: `include/net/sock.h:418`
+  - **含义**: TCP写队列中排队待发送的数据（persistent queue size）
+  - **与t的关系**: `w <= t`（t包含已发送未确认，w仅包含待发送）
+  - **数值关系**: `w = t - unacked_memory`
+  - **增加位置**: `tcp_write_xmit()` → `sk->sk_wmem_queued += skb->truesize`
+  - **减少位置**: `tcp_transmit_skb()` → `sk->sk_wmem_queued -= skb->truesize`
+  - **监控意义**: w值持续高表示应用写入快于网络发送速度
+  - **典型值**:
+    - 低速网络（1Gbps）: w通常 < 100KB
+    - 高速网络（10Gbps+）: w可达几百KB到几MB
+    - 应用受限（app_limited）: w接近0
 
-- **o**：sk_omem_alloc - 选项内存分配
-  - 用于 TCP 选项存储
-  - 通常很小
+- **o** (`sk_omem_alloc`): Options Memory Allocation（选项内存分配）
+  - **类型**: `atomic_t`
+  - **用途**: 存储TCP选项相关的内存
+  - **典型值**: 很小（几十到几百bytes）
 
-- **bl**：sk_ack_backlog - ACK 积压队列
-  - 位置：等待用户 accept() 的连接
-  - 意义：在监听 socket 上，已完成三次握手但未被 accept 的队列
+- **bl** (`sk_ack_backlog`): ACK Backlog 队列长度
+  - **类型**: `u32`
+  - **应用场景**: **仅用于监听socket（Listen Socket）**
+  - **含义**: 已完成三次握手但尚未被accept()的连接数量
+  - **对于已连接socket**: 该值始终为0
 
-- **d**：sk_drops - 丢包计数
-  - 发生位置：从网络层传递到传输层时
-  - 原因：接收队列满（r >= rb）、socket buffer 过小
-  - 最关键字段：>0 表示有数据丢失！
-
-**Receive Path 数据流**：
-```
-NIC → 网络层 → 传输层(skb队列) → socket接收队列(r) → Recv-Q → 应用程序
-                       ↑                                    ↑
-                  压力点1                              压力点2
-                     sk_drops                            Recv-Q
-```
-
-- **压力点1（sk_drops）**：
-  - 条件：`sk_drops > 0`
-  - 原因：接收缓冲区 rb 太小、kernel tcp_rmem[2] 太小、应用读取慢导致 r 累积
-  - 解决方案：
+- **d** (`sk_drops`): 丢包计数
+  - **类型**: `unsigned long`
+  - **发生位置**: 数据包从网络层传递到传输层时
+  - **原因**:
+    1. 接收队列满（r >= rb）→ **最常见**
+    2. 内存分配失败（罕见）
+    3. socket locked（罕见）
+  - **影响**: **d > 0 表示确定有数据丢失！**
+  - **解决方案**: 立即增大接收缓冲区
     ```bash
     sudo sysctl -w net.core.rmem_max=134217728
     sudo sysctl -w net.ipv4.tcp_rmem="4096 87380 134217728"
-    # 或增大应用读取速度
     ```
+  - **与其他指标区别**:
+    - `sk_drops`: 在socket层丢弃（应用读取慢导致）
+    - `TCPBacklogDrop`: 在网络层丢弃（TCP协议栈）
 
-- **压力点2（Recv-Q）**：
-  - 条件：`Recv-Q > 0` 且持续增大
-  - 原因：应用读取速度慢于数据到达速度
-  - 查因方法：
-    ```bash
-    # 查看进程状态
-    pidstat -p <pid> -r 1
-    # 查看进程阻塞情况
-    ps -eo pid,state,command | grep <pid>
-    # D 状态：I/O 等待
-    # S 状态：睡眠（正常）
-    ```
+**数据包收发 Pipeline 与 Buffer 关系**：
 
-**Send Path 数据流**：
+**接收路径（Receive Path）**：
 ```
-应用程序 → Recv-Q → socket发送缓冲区(t/w) → CWND → 网络排队的数据 → 网络发送
-                       ↑                       ↑
-                  压力点3                 压力点4
-                    Send-Q              unacked_cwnd
+NIC收到数据包
+    ↓
+硬件中断 → NAPI/softirq处理
+    ↓
+netif_receive_skb()        # 网络层入口
+    ↓
+ip_rcv()                  # IP层处理
+    ↓
+tcp_v4_rcv()              # TCP层入口
+    ↓
+tcp_v4_do_rcv() → tcp_rcv_established()
+    ↓
+TCP校验和、序列号、窗口检查
+    ↓
+tcp_data_queue()          # 数据包排队
+    ↓
+atomic_add(skb->truesize, &sk->sk_rmem_alloc)  # r增加
+    ↓
+__skb_queue_tail(&sk->sk_receive_queue, skb)
+    ↓
+socket层
+    ↓
+tcp_recvmsg()             # 应用读取
+    ↓
+__skb_unlink(skb, &sk->sk_receive_queue)
+    ↓
+atomic_sub(skb->truesize, &sk->sk_rmem_alloc)  # r减少
+    ↓
+copy_to_user()            # 复制到用户空间
+    ↓
+应用程序缓冲区
 ```
 
-- **压力点3（Send-Q）**：
-  - 含义：应用已发送但 TCP 未读取的数据（内核与应用层之间的队列）
-  - 位置：用户空间到内核空间的边界
-  - 条件：`Send-Q > 0` 且持续增大
-  - 原因：应用写入过快，超过 TCP 发送能力
+**关键压力点分析**：
 
-- **压力点4（unacked）**：
-  - 含义：已发送但未确认的数据量
-  - 约束：`unacked <= CWND`
-  - 条件：`unacked ≈ CWND` 持续多个 RTT
-  - 原因：网络瓶颈、对端接收慢、RWND 小
+**压力点1：sk_drops（socket层丢包，最重要！）**
+```
+位置: tcp_data_queue() 函数
+条件: if (atomic_read(&sk->sk_rmem_alloc) >= sk->sk_rcvbuf)
+       {
+           sk->sk_drops++;  // 丢包计数增加
+           goto drop;       // 丢弃数据包
+       }
+本质: 接收缓冲区不足（r >= rb）
+优先级: **最高（确定有数据丢失）**
+影响: 数据在socket层被丢弃，应用永远不会收到
+解决方案: 立即增大接收缓冲区
+解决方案优先级:
+  1. 增大tcp_rmem上限（sysctl）
+  2. 增大net.core.rmem_max
+  3. 优化应用读取速度
+检测命令:
+  ss -tm | grep skmem  # 查看d值
+  # d>0 表示有丢包！
+```
 
-**压力点5（CWND < 预期）**：
-- 原因：丢包、ECN、网络拥塞
-- 分析：见 2.5.1 窗口分析
+**压力点2：TCPBacklogDrop（协议栈丢包）**
+```
+位置: tcp_v4_rcv() 之前的网络层
+原因: 半连接队列（SYN Queue）或全连接队列（Accept Queue）满
+查看方法:
+  netstat -s | grep TCPBacklogDrop
+解决方案:
+  sysctl -w net.core.somaxconn=4096  # 增大accept队列
+  sysctl -w net.ipv4.tcp_max_syn_backlog=8192  # 增大SYN队列
+```
 
-**Buffer 压力分析可视化**：
-- 时序图：r、rb、t、tb 随时间变化
-- 堆积图：Send-Q、socket 缓冲区、网络中数据（unacked）的比例
-- 热图：按时间段的 buffer 使用率分布
+**压力点3：Application Recv-Q堆积**
+```
+位置: socket接收队列 → 应用层边界
+现象: Recv-Q持续增大，r接近rb
+原因: 应用读取慢于数据到达速度
+排查方法:
+  # 1. 查看应用状态
+  pidstat -p <pid> -r 1    # 查看内存使用
+  pidstat -p <pid> -d 1    # 查看IO等待
+  # 2. 查看系统调用延迟
+  strace -p <pid> -T -c   # 统计系统调用耗时
+  # 3. 查看进程状态
+  ps -eo pid,state,wchan:20,command | grep <pid>
+  # D状态: I/O等待（可能是存储慢）
+  # S状态: 睡眠（可能是锁等待）
+```
+
+**压力点4：NIC/Ring Buffer丢包**
+```
+位置: 网卡层、Ring Buffer
+查看方法:
+  ethtool -S eth0 | grep -E "drop|miss|error|fault"
+  # 常见指标:
+  # rx_missed_errors: RX ring满，数据包到达但无可用buffer
+  # rx_fifo_errors: RX FIFO溢出
+  # rx_crc_errors: CRC校验错误
+解决方案:
+  1. 增大Ring Buffer:
+     ethtool -G eth0 rx 4096 tx 4096
+  2. 检查CPU负载（NAPI处理不及时）
+     mpstat -P ALL 1
+  3. 检查软中断分布:
+     cat /proc/softirqs
+```
+
+**发送路径（Send Path）与 Buffer 关系**：
+```
+应用程序 send()/write()
+    ↓
+socket层（write系统调用）
+    ↓
+tcp_sendmsg()            # TCP发送入口
+    ↓
+数据放入sk_send_queue
+    ↓
+tcp_push_one() → tcp_push_pending_frames()
+    ↓
+tcp_write_xmit()         # 构建数据包
+    ↓
+tcp_transmit_skb()       # 发送skb
+    ↓
+skb_set_owner_w(skb, sk)
+    ↓
+sk->sk_wmem_alloc += skb->truesize      # t增加
+    ↓
+sk->sk_wmem_queued += skb->truesize     # w增加（排队）
+    ↓
+构建网络层头部
+    ↓
+邻居子系统（ARP）
+    ↓
+Qdisc（流量控制）sch_fq / sch_htb
+    ↓ (pacing_rate在此生效)
+NIC发送Ring Buffer
+    ↓
+网卡硬件队列
+    ↓
+网络物理链路
+    ↓
+对端接收
+    ↓
+对端发送ACK
+    ↓
+数据返回
+    ↓
+tcp_ack()                # 处理ACK
+    ↓
+tcp_clean_rtx_queue()    # 清理重传队列
+    ↓
+tcp_free_skb()
+    ↓
+sk->sk_wmem_alloc -= skb->truesize      # t减少（已确认）
+sk->sk_wmem_queued -= skb->truesize     # w减少（已发送）
+    ↓
+重传定时器更新
+```
+
+**发送端压力点分析**：
+
+**压力点1：Send-Q堆积**
+```
+条件: Send-Q > 0 且持续增长
+本质: 应用发送快于内核TCP处理速度
+排查方法:
+  ss -tm  # 查看Send-Q值
+  # 正常情况: < 100KB
+  # 异常情况: > 1MB 且持续增长
+
+压力分析:
+  如果 CWND 正常（> 10）:
+    → 应用写入过快（正常现象）
+  如果 CWND 很小（< 5）:
+    → 网络或拥塞控制限制了发送
+    分析: pacing_rate、delivery_rate、丢包率
+```
+
+**压力点2：Socket Buffer压力（t）**
+```
+优先级: **中高**
+本质: 发送缓冲区配置不足
+条件: t >= tb × 0.8
+现象:
+  1. 应用write()阻塞或返回EAGAIN/EWOULDBLOCK
+  2. 吞吐量下降
+  3. sndbuf_limited比例高
+
+解决方案:
+  1. 增大发送缓冲区:
+     sysctl -w net.ipv4.tcp_wmem="4096 16384 4194304"
+     sysctl -w net.core.wmem_max=212992
+  2. 或应用层设置SO_SNDBUF
+
+检查方法:
+  ss -tm | grep skmem
+  # 输出: skmem:(r0,rb87380,t81920,tb87040,f0,w40960,o0,bl0,d0)
+  # t=81920, tb=87040 (94%使用率)
+```
+
+**压力点3：Write Queue堆积（w）**
+```
+本质: 应用写入快于网络发送速度
+条件: w持续较高（> tb × 0.5）
+诊断意义:
+  w值高 + delivery_rate低:
+    → 网络瓶颈（丢包、RTT高、带宽不足）
+
+  w值高 + delivery_rate高:
+    → 网络正常，pacing_rate限制发送
+    → 检查pacing_rate vs delivery_rate
+
+  w值高 + pacing_rate >> delivery_rate:
+    → 应用写入过快，网络无法及时处理
+    → 正常现象，或需要应用层限流
+
+理想状态:
+  w < tb × 0.3  # 低水位
+  w ≈ unacked  # 排队数据 ≈ 已发送未确认数据
+```
+
+**压力点4：窗口限制**
+
+**A. CWND限制（拥塞窗口）**
+```
+条件: unacked ≈ cwnd 持续多个RTT
+原因: 网络拥塞、丢包、ECN标记
+特征: delivery_rate可能突然下降
+
+排查方法:
+  # 1. 查看cwnd大小
+  ss -ti | grep cwnd
+  # 2. 查看重传率
+  ss -ti | grep retrans
+  # 3. 查看各阶段受限时间
+  ss -ti | grep limited
+  # 输出示例:
+  # rwnd_limited:157971ms(95.6%)
+  # sndbuf_limited:1000ms(5.0%)
+  # cwnd_limited:500ms(2.5%)
+
+如果 cwnd_limited 比例高:
+  → 检查丢包率
+  → 检查ECN（Explicit Congestion Notification）
+  → 检查RTT波动
+```
+
+**B. RWND限制（接收窗口）**
+```
+条件: snd_wnd < cwnd 持续多个RTT
+本质: 对端接收缓冲区不足
+原因:
+  1. 对端应用读取慢
+  2. 对端tcp_rmem配置小
+  3. 接收方CPU负载高
+
+诊断:
+  分析server端和client端的rwnd_limited比例
+
+  client端rwnd_limited高:
+    → server端发送快于client接收
+    → 优化client端应用或增大client tcp_rmem
+
+  server端rwnd_limited高:
+    → client端发送快于server接收
+    → 优化server端应用或增大server tcp_rmem
+
+解决:
+  无法直接控制，需要优化对端配置或应用
+```
+
+**C. sndbuf限制（发送缓冲区）**
+```
+条件: t >= tb
+本质: 发送缓冲区配置不足
+现象: send_rate下降，应用可能阻塞
+
+解决方案:
+  1. 增大发送缓冲区:
+     sysctl -w net.ipv4.tcp_wmem="4096 131072 16777216"
+  2. 应用层设置SO_SNDBUF（需root权限或<=net.core.wmem_max）
+```
+
+**压力点5：内存分配失败**
+```
+条件: 分配skb失败（罕见）
+查看方法:
+  dmesg | grep -i "tcp.*oom\|tcp.*memory"
+原因:
+  1. 系统内存不足
+  2. TCP内存配额耗尽（tcp_mem）
+
+    tcp_mem参数（sysctl）:
+    net.ipv4.tcp_mem = "min pressure max"（单位: page）
+    - 当tcp内存使用量 > pressure: TCP开始限制内存分配
+    - 当tcp内存使用量 > max: TCP拒绝分配新内存
+
+解决:
+  1. 释放系统内存
+  2. 或增大tcp_mem（不建议，可能导致OOM）
+```
+
+**压力点6：Qdisc/NIC队列满**
+```
+现象: pacing_rate受限，发送延迟增加
+检查方法:
+  # 1. 查看Qdisc队列长度
+  tc -s qdisc show dev eth0
+  # 2. 查看网卡队列统计
+  ethtool -S eth0 | grep -E "drop|fifo|miss"
+  # 3. 查看网卡Ring Buffer
+  ethtool -g eth0
+
+可能问题:
+  1. tx_queue_len太小
+     → 增大: ifconfig eth0 txqueuelen 1000
+  2. Ring Buffer太小
+     → 增大: ethtool -G eth0 tx 4096
+  3. 驱动或硬件限速
+```
+
+**Buffer 压力分析可视化（工具应提供）**：
+
+**1. 时序图（时间序列）**
+```
+X轴: 时间
+Y轴: 内存使用量（bytes）
+
+曲线:
+  - r（sk_rmem_alloc，接收队列）
+  - rb（sk_rcvbuf，接收上限，参考线）
+  - t（sk_wmem_alloc，发送队列）
+  - tb（sk_sndbuf，发送上限，参考线）
+  - w（sk_wmem_queued，写队列）
+
+用途:
+  - 识别buffer压力爆发时间点
+  - 对比r/rb、t/tb关系
+  - 观察w与t的差值变化
+```
+
+**2. 阶段堆积图（堆栈图）**
+```
+X轴: 时间
+Y轴: 数据量比例（%）
+
+堆栈:
+  [底层] Send-Q（应用→内核）
+  [中层] Socket Buffer w（内核排队）
+  [上层] Unacked（网络中待确认）
+
+用途:
+  - 识别瓶颈位置
+  - 如果底层占比大: 应用写入快
+  - 如果中层占比大: 网络发送慢
+  - 如果上层占比大: 网络延迟高或CWND小
+```
+
+**3. Buffer使用率热图**
+```
+X轴: 时间段（小时）
+Y轴: buffer使用率区间
+颜色: 采样点数量（颜色越深表示时间越长）
+
+分类:
+  - r/rb 接收buffer使用率热图
+  - t/tb 发送buffer使用率热图
+  - w/tb 写队列使用率热图
+
+用途:
+  - 识别长期的buffer压力模式
+  - 找出压力高峰的时间段
+  - 评估调优效果
+```
+
+**4. 窗口限制饼图**
+```
+数据: rwnd_limited、sndbuf_limited、cwnd_limited的时间占比
+
+示例:
+  rwnd_limited: 95.6%
+  sndbuf_limited: 5.0%
+  cwnd_limited: 2.5%
+
+用途:
+  - 快速识别主要限制因素
+  - 指导优化方向
+```
+
+**Buffer 健康度评估（自动化打分）**：
+
+```python
+def buffer_health_score(conn_stats):
+    """评估buffer健康度（0-100分）"""
+    score = 100
+
+    # 丢包惩罚（最严重）
+    if conn_stats.sk_drops > 0:
+        score -= 50  # 直接扣50分
+
+    # 接收缓冲区压力
+    r_ratio = conn_stats.r / conn_stats.rb
+    if r_ratio > 0.9:
+        score -= 20
+    elif r_ratio > 0.8:
+        score -= 10
+    elif r_ratio > 0.7:
+        score -= 5
+
+    # 发送缓冲区压力
+    t_ratio = conn_stats.t / conn_stats.tb
+    if t_ratio > 0.9:
+        score -= 15
+    elif t_ratio > 0.8:
+        score -= 7
+    elif t_ratio > 0.7:
+        score -= 3
+
+    # 写队列堆积
+    w_ratio = conn_stats.w / conn_stats.tb
+    if w_ratio > 0.8:
+        score -= 10
+    elif w_ratio > 0.6:
+        score -= 5
+
+    return max(0, score)
+
+# 健康度解释
+90-100: 优秀（无压力，配置合理）
+70-89: 良好（轻度压力，可接受）
+50-69: 一般（中度压力，建议关注）
+30-49: 较差（重度压力，需要优化）
+0-29: 严重（有丢包或严重堆积，立即处理）
+```
+
+**Buffer 调优建议（自动化）**：
+
+```python
+def buffer_tuning_recommendations(conn):
+    """基于统计数据生成调优建议"""
+    recs = []
+
+    # 检查丢包
+    if conn.sk_drops > 0:
+        recs.append({
+            'priority': 'HIGH',
+            'issue': 'Socket层丢包',
+            'evidence': f'sk_drops={conn.sk_drops}',
+            'recommendation': '立即增大接收缓冲区',
+            'commands': [
+                'sysctl -w net.core.rmem_max=134217728',
+                'sysctl -w net.ipv4.tcp_rmem="4096 87380 134217728"'
+            ]
+        })
+
+    # 检查接收缓冲区压力
+    r_ratio = conn.r / conn.rb
+    if r_ratio > 0.9:
+        recs.append({
+            'priority': 'HIGH',
+            'issue': '接收缓冲区压力严重',
+            'evidence': f'r/rb={r_ratio:.1%}',
+            'recommendation': '增大tcp_rmem上限，并检查应用读取性能',
+            'metrics_to_check': ['Recv-Q', '应用CPU使用率', '系统调用延迟']
+        })
+    elif r_ratio > 0.8:
+        recs.append({
+            'priority': 'MEDIUM',
+            'issue': '接收缓冲区压力较高',
+            'evidence': f'r/rb={r_ratio:.1%}',
+            'recommendation': '建议增大tcp_rmem或优化应用读取'
+        })
+
+    # 检查发送缓冲区压力
+    t_ratio = conn.t / conn.tb
+    if t_ratio > 0.9:
+        recs.append({
+            'priority': 'MEDIUM',
+            'issue': '发送缓冲区压力高',
+            'evidence': f't/tb={t_ratio:.1%}',
+            'recommendation': '增大tcp_wmem上限',
+            'commands': [
+                'sysctl -w net.ipv4.tcp_wmem="4096 16384 4194304"',
+                'sysctl -w net.core.wmem_max=212992'
+            ]
+        })
+
+    # 检查写队列堆积
+    w_ratio = conn.w / conn.tb
+    if w_ratio > 0.8 and conn.delivery_rate < conn.pacing_rate * 0.5:
+        recs.append({
+            'priority': 'MEDIUM',
+            'issue': '网络瓶颈导致写队列堆积',
+            'evidence': f'w/tb={w_ratio:.1%}, delivery_rate={conn.delivery_rate}bps',
+            'recommendation': '检查网络质量（丢包、RTT波动）',
+            'metrics_to_check': ['重传率', 'RTT', 'delivery_rate/pacing_rate比值']
+        })
+    elif w_ratio > 0.8:
+        recs.append({
+            'priority': 'LOW',
+            'issue': '写队列堆积',
+            'evidence': f'w/tb={w_ratio:.1%}',
+            'recommendation': '正常现象（应用写入快于网络发送）'
+        })
+
+    return recs
+```
 
 #### 2.5.5 其他补充分析
 
@@ -804,37 +1311,71 @@ python3 tcpsocket_analyzer.py --input-dir tcpsocket/client/ --bandwidth 10Gbps \
 
 ---
 
-## 附录 B：Kernel 代码调研任务
+## 附录 B：Kernel 代码调研任务（✅ 已完成）
 
-在实现 TCPSocket 分析工具前，需要完成以下调研：
+**调研状态**: 已完成（2024-11-16）
 
-1. **调研 pacing_rate 的精确计算方式**：
-   - 文件：`include/net/tcp.h`, `net/ipv4/tcp_rate.c`, `net/ipv4/tcp_cong.c`
-   - 函数：`tcp_update_pacing_rate()`, `tcp_set_pacing_rate()`
-   - 记录：更新时机、计算公式、与 CWND 的关系
+**调研结果**: 详见《附录-Kernel代码调研报告.md》，主要结论如下：
 
-2. **调研 delivery_rate 的精确计算方式**：
-   - 文件：`net/ipv4/tcp_rate.c`
-   - 函数：`tcp_rate_skb_delivered()`, `tcp_rate_gen()`
-   - 记录：采样窗口、时间区间、平滑算法
+### 调研成果总结
 
-3. **调研 send_rate 的精确计算方式**：
-   - 文件：`net/ipv4/tcp.c`, `net/ipv4/tcp_output.c`
-   - 函数：需要搜索 `send_rate` 相关代码
-   - 确认：是瞬时测量还是统计值，更新频率
+1. ✅ **pacing_rate 精确计算方式**（附录B 1.2节）
+   - 文件：`net/ipv4/tcp_input.c:tcp_update_pacing_rate()`
+   - 公式：`pacing_rate = pacing_ratio × (mss × cwnd / srtt)`
+   - 慢启动系数：200%（`tcp_pacing_ss_ratio`）
+   - 拥塞避免系数：120%（`tcp_pacing_ca_ratio`）
 
-4. **调研 skmem 各字段的详细意义**：
-   - 文件：`include/net/sock.h`, `include/linux/skmem.h`
-   - 结构体：struct sock, struct tcp_sock
-   - 字段：sk_rmem_alloc, sk_wmem_alloc, sk_forward_alloc 等
-   - 绘制：数据包收发路径中各字段的访问位置图
+2. ✅ **delivery_rate 精确计算方式**（附录B 1.1节）
+   - 文件：`net/ipv4/tcp_rate.c:tcp_rate_gen()`
+   - 采样时机：每个ACK到达时
+   - 时间间隔：`max(send_interval, ack_interval)`
+   - 平滑算法：保留非app_limited或带宽更高的样本
+   - 约束：受tcp_min_rtt限制（丢弃异常样本）
 
-5. **调研 Recv-Q 与 r 的关系**：
-   - 文件：net/ipv4/tcp_input.c
-   - 函数：tcp_rcv_established(), tcp_data_queue()
-   - 理解数据从网络层到 socket 接收队列的完整路径
+3. ✅ **send_rate 确切计算方式**（附录B 1.3节 & 4.4.2节）
+   - 调研结论：send_rate **不是内核计算值**
+   - ss命令显示："send"字段是**发送缓冲区内存使用量**（来自`inet_diag_meminfo.idiag_wmem`）
+   - 与tcpi_bytes_acked：无直接关系
+   - 建议：作为参考值，重点分析pacing_rate和delivery_rate
 
-调研结果需要补充到 2.5.2 和 2.5.4 章节，必要时更新分析逻辑。
+4. ✅ **skmem 各字段详细意义**（附录B 2.2节 & 4.4.1节）
+   - r (`sk_rmem_alloc`): 接收队列已分配内存
+   - t (`sk_wmem_alloc`): 发送队列已分配内存
+   - w (`sk_wmem_queued`): 写队列排队内存（新增详细调研）
+   - f (`sk_forward_alloc`): 预分配内存
+   - d (`sk_drops`): 丢包计数（最高优先级）
+   - bl (`sk_ack_backlog`): ACK积压队列（仅监听socket）
+
+5. ✅ **w字段精确含义**（附录B 4.4.1节）
+   - 位置：`include/net/sock.h:418`
+   - 定义：`int sk_wmem_queued;  // persistent queue size`
+   - 与t关系：`w = t - unacked_memory`
+   - 监控意义：反映应用写入 vs 网络发送的速度差
+
+6. ✅ **Recv-Q 与 r 的关系**（附录B 2.3节）
+   - 数值关系：`r >= Recv-Q`
+   - r：接收队列总量（已分配内存）
+   - Recv-Q：未读数据量
+
+7. ✅ **ss命令实现细节**（附录B 4.4.4节）
+   - 源码：`iproute2/misc/ss.c`
+   - 数据获取：Netlink INET_DIAG_INFO + INET_DIAG_MEMINFO
+   - 字段映射：完整梳理（见4.4.4章节）
+
+### 调研成果应用
+
+调研结果已应用到本文档的以下章节：
+
+- **2.5.2**: 补充完整的pacing_rate、delivery_rate计算方式，澄清send_rate真相
+- **2.5.4**: 补充skmem所有字段的详细说明，w字段精确含义，压力点分析，可视化需求
+- **附录B**: 完整的Kernel代码调研报告，包含源码位置、计算公式、数据路径
+
+### 关键发现
+
+1. **w字段**: 表示`sk_wmem_queued`（写队列排队内存），反映应用写入 vs 网络发送速度差
+2. **send_rate**: ss命令显示的是发送缓冲区内存使用量（单位：bytes），不是速率
+3. **delivery_rate采样**: 每个ACK触发，受tcp_min_rtt约束，平滑算法保留高质量样本
+4. **sk_drops**: 最重要的指标，>0表示确定有数据丢失，需要立即处理
 
 ---
 

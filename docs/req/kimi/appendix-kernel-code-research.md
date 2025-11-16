@@ -324,13 +324,70 @@ void sk_mem_uncharge(struct sock *sk, int size)  // size 加回 sk_forward_alloc
 
 ---
 
-#### w - 写队列排队内存
+#### w - sk_wmem_queued（写队列排队内存）
 
-**需要进一步调研**：在 struct sock 中未找到明确对应字段
+**调研结果**：w字段对应 `sk_wmem_queued` 字段
 
-**推测**：可能是 `sk_write_queue` 相关的统计，或是 `tcp_mem` 的一部分
+**详细说明**：
 
-**建议**：在源码中搜索 ss 命令的实现（`iproute2` 包），确认该字段来源
+**定义位置**：`include/net/sock.h:418`
+```c
+int sk_wmem_queued;  // persistent queue size
+```
+
+**类型**：`int`
+
+**详细含义**：写队列中排队的内存（persistent queue size）
+
+**在数据路径中的位置**：
+```
+应用程序 → Send-Q → socket发送缓冲区(t/w) → CWND → 网络
+                          ↑
+                          └─ w = sk_wmem_queued
+                             (持久化写队列大小)
+```
+
+**与t字段的关系**：
+- **t** (`sk_wmem_alloc`): 已分配的发送内存总量（包含已发送未确认 + 待发送）
+- **w** (`sk_wmem_queued`): 写队列中排队的内存（待发送部分）
+- **数值关系**：`w <= t`，通常 `w = t - unacked_memory`
+
+**增加位置**：TCP发送数据排队时
+```c
+// net/ipv4/tcp_output.c:tcp_write_xmit()
+tcp_add_write_queue_tail(sk, skb);
+sk->sk_wmem_queued += skb->truesize;
+```
+
+**减少位置**：数据从写队列发送到网络时
+```c
+// net/ipv4/tcp_output.c:tcp_transmit_skb()
+sk->sk_wmem_queued -= skb->truesize;
+```
+
+**监控意义**：
+- **w值持续较高**：应用写入速度快于网络发送速度
+- **t值接近tb**：发送缓冲区压力高，需要调大tcp_wmem
+- **w ≈ t**：大部分数据都在排队等待发送，网络可能成为瓶颈
+
+**计算公式**：
+```
+unacked内存 = 已发送但未确认的数据量
+w = t - unacked内存
+```
+
+**典型值**：
+- 低速网络（1Gbps）：w通常较小（< 100KB）
+- 高速网络（10Gbps+）：w可能较大（几百KB到几MB）
+- 应用受限（app_limited）：w可能接近0
+
+**调优参考**：
+```bash
+# 查看某个连接的w值
+ss -tm | grep skmem
+# 输出: skmem:(r0,rb87380,t81920,tb87040,f0,w40960,o0,bl0,d0)
+# w=40960 表示40KB数据在写队列中排队
+```
 
 ---
 
@@ -824,27 +881,215 @@ if send_q > tb * 0.5:
 
 ---
 
-### 4.4 建议补充的调研（下一步）
+### 4.4 补充调研结果（2024-11-16）
 
-**需要进一步确认**：
-1. ** w 字段的精确含义 **
-   - 在 ss 源码中查找（iproute2 包）
-   - grep -r "w\>" iproute2/misc/ss.c
+#### 4.4.1 w字段的精确含义（已完成）
 
-2. ** send_rate 的确切计算方式 **
-   - 查看 ss 源码中的计算逻辑
+**调研结果**：w字段对应内核 `struct sock` 中的 `sk_wmem_queued` 字段
 
-3. ** delivery_rate 的采样窗口大小 **
-   - 是否可调？
-   - tcp_min_rtt 的影响？
+**定义位置**：`include/net/sock.h:418`
+```c
+int sk_wmem_queued;  // persistent queue size（持久队列大小）
+```
 
-4. ** skmem 各字段的时间序列变化 **
-   - 采集一些实际数据，观察 r/rb/t/tb 的变化模式
-   - 建立正常流量和异常流量的基准
+**详细说明**：
 
-5. ** ss 命令的实现细节 **
-   - `getsockopt(TCP_INFO)` 返回的 tcp_info 结构
-   - 与 `ss` 输出字段的对应关系
+**在数据包路径中的位置**：
+```
+应用程序 send() → Send-Q → socket发送缓冲区 → CWND → 网络排队 → 网络发送
+                          ↑
+                          └─ w = sk_wmem_queued 持久化写队列
+                             (TCP写队列中排队的数据)
+```
+
+**与t字段的关系**：
+- **t** (`sk_wmem_alloc`): 已分配的发送内存总量（待发送 + 已发送未确认）
+- **w** (`sk_wmem_queued`): 写队列中排队的内存（仅待发送部分）
+- **数值关系**：`w <= t`，通常 `w = t - unacked_memory`
+
+**增加位置**：数据加入TCP写队列时
+```c
+// net/ipv4/tcp_output.c:tcp_write_xmit()
+sk->sk_wmem_queued += skb->truesize;
+```
+
+**减少位置**：数据从写队列发送到网络时
+```c
+// net/ipv4/tcp_output.c:tcp_transmit_skb()
+sk->sk_wmem_queued -= skb->truesize;
+```
+
+**监控意义**：
+- **w值持续较高**：应用写入速度快于网络发送速度
+- **w ≈ t**：大部分数据都在排队等待发送，网络可能成为瓶颈
+- **w值接近0**：网络发送能力足够，数据立即发出
+
+**典型值**：
+- 低速网络（1Gbps）：w通常较小（< 100KB）
+- 高速网络（10Gbps+）：w可能较大（几百KB到几MB）
+- 应用受限（app_limited）：w可能接近0
+
+#### 4.4.2 send_rate的确切计算方式（已完成）
+
+**调研结果**：send_rate **不是内核直接提供的指标**，而是用户空间工具估算值
+
+**实际实现**：ss命令的"send"字段显示的是**发送缓冲区内存使用量**，不是发送速率
+
+**数据来源**：
+```c
+// 来自 inet_diag_meminfo.idiag_wmem
+struct inet_diag_meminfo {
+    __u32 idiag_rmem;  // 接收内存
+    __u32 idiag_wmem;  // 发送内存 ← 这就是"send"字段的来源
+    __u32 idiag_fmem;  // 转发内存
+    __u32 idiag_tmem;  // 临时内存
+};
+```
+
+**获取方式**：通过Netlink的 `INET_DIAG_MEMINFO` 属性
+
+**与tcpi_bytes_acked的关系**：
+- **无直接关系**，tcpi_bytes_acked是累计确认字节数（性能统计）
+- tcpi_bytes_acked用于计算吞吐量，不用于当前发送缓冲区大小
+
+**实际发送速率估算**：
+如果要计算实际发送速率，需要：
+```
+send_rate = (tcpi_bytes_acked_delta × 8) / time_interval
+```
+但ss命令不显示这个值，它显示的是当前内存使用量
+
+**建议**：在TCPSocket分析工具中，send_rate作为**参考值**，重点分析 pacing_rate和delivery_rate
+
+#### 4.4.3 delivery_rate采样窗口大小（已完成）
+
+**实现文件**：`net/ipv4/tcp_rate.c`
+
+**采样机制**：
+
+**1. 采样时机**：每个ACK到达时触发
+```c
+// tcp_rate_skb_delivered() 在每个被ACK的数据包上调用
+void tcp_rate_skb_delivered(struct sock *sk, struct sk_buff *skb, struct rate_sample *rs)
+```
+
+**2. 采样窗口计算**：
+```c
+// tcp_rate_gen() line 146-149
+snd_us = rs->interval_us;  // 发送阶段时间
+ack_us = tcp_stamp_us_delta(tp->tcp_mstamp, rs->prior_mstamp);  // ACK阶段时间
+rs->interval_us = max(snd_us, ack_us);  // 取较长阶段
+```
+
+**3. 存储位置**：
+```c
+// tcp_rate_gen() line 176-179
+tp->rate_delivered = rs->delivered;      // 交付的包数
+tp->rate_interval_us = rs->interval_us;  // 时间间隔
+```
+
+**4. 最小RTT约束**：
+```c
+// tcp_rate_gen() line 162-170
+if (unlikely(rs->interval_us < tcp_min_rtt(tp))) {
+    rs->interval_us = -1;  // 丢弃异常样本
+    return;
+}
+```
+
+**tcp_min_rtt说明**：
+- **定义**：连接的最小RTT（微秒），用于过滤异常样本
+- **函数**：`tcp_min_rtt()` 返回 `tp->rtt_min` 的统计最小值
+- **位置**：`include/net/tcp.h:735-738`
+- **作用**：
+  - 防止ACK压缩导致的异常高带宽估算
+  - 确保采样间隔至少为最小RTT
+  - 提高delivery_rate估算的准确性
+
+**可调参数**：**不可直接调整**，是内核自动统计的最小RTT
+
+**与tcp_min_rtt的关系**：
+- delivery_rate采样窗口**不固定**，动态变化
+- 最小窗口受tcp_min_rtt限制（不能小于最小RTT）
+- 实际窗口 = max(send_interval, ack_interval, tcp_min_rtt)
+
+**5. 应用受限检测**：
+```c
+// tcp_rate_check_app_limited()
+// 检测应用是否限制了发送，如果是则标记rate sample为app_limited
+```
+
+**采样频率**：约每个RTT采样1-2次（每个ACK触发）
+
+**平滑算法**：
+```c
+// 只保留非app_limited或带宽更高的样本
+if (!rs->is_app_limited ||
+    ((u64)rs->delivered * tp->rate_interval_us >=
+     (u64)tp->rate_delivered * rs->interval_us)) {
+    tp->rate_delivered = rs->delivered;
+    tp->rate_interval_us = rs->interval_us;
+}
+```
+
+#### 4.4.4 ss命令实现细节（已完成）
+
+**源码位置**：`iproute2/misc/ss.c`
+
+**核心流程**：
+
+**1. 获取TCP_INFO**：
+```c
+// 通过getsockopt(TCP_INFO)或netlink INET_DIAG_INFO
+struct tcp_info *info = getsockopt(TCP_INFO);
+// 或
+struct tcp_info *info = RTA_DATA(attr[INET_DIAG_INFO]);
+```
+
+**2. ss输出字段映射**：
+```
+ss -tinopm 输出 → 内核字段
+─────────────────────────────────────
+rtt:78.4/36.2        → tp->srtt_us / tp->mdev_us
+cwnd:10              → tp->snd_cwnd
+retrans:0/1195       → tp->retrans_out / total_retrans
+pacing_rate          → sk->sk_pacing_rate
+delivery_rate        → tp->rate_delivered * MSS * 8 / tp->rate_interval_us
+skmem:(r...,rb...,t...,tb...,f...,w...,o...,bl...,d...)
+  r  → sk_rmem_alloc
+  rb → sk_rcvbuf
+  t  → sk_wmem_alloc
+  tb → sk_sndbuf
+  f  → sk_forward_alloc
+  w  → sk_wmem_queued
+  o  → sk_omem_alloc
+  bl → sk_ack_backlog
+  d  → sk_drops
+unacked              → tp->packets_out
+rcv_space            → tp->rcv_space
+```
+
+**3. 数据获取方式**：
+```c
+// 通过getsockopt
+getsockopt(fd, SOL_TCP, TCP_INFO, &info, &len);
+
+// 或通过netlink（ss命令使用）
+nlh.nlmsg_type = SOCK_DIAG_BY_FAMILY;
+idiag_ext = (1 << (INET_DIAG_INFO - 1)) | (1 << (INET_DIAG_MEMINFO - 1));
+```
+
+**4. delivery_rate计算（用户空间）**：
+```c
+// ss命令中计算的伪代码
+delivery_rate = tp->rate_delivered * tp->mss_cache * 8 / tp->rate_interval_us;
+```
+
+**5. pacing_rate获取（直接读取）**：
+```c
+// 内核直接存储，无需计算
+pacing_rate = sk->sk_pacing_rate;  // bytes per second
+```
 
 ---
 

@@ -6,7 +6,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is the main Claude configuration file. Additional context-specific memory files:
 
-- `claude_local_project_overview.md` - Project overview
 - `claude_local_coding.md` - BPF/BCC coding guidelines and conventions
 - `claude_local_test.md` - Testing procedures and environment setup
 
@@ -14,8 +13,8 @@ This is the main Claude configuration file. Additional context-specific memory f
 
 This is an **eBPF-based network troubleshooting and performance analysis toolset** for virtualized environments. The repository contains two major components:
 
-1. **eBPF Tools** (`ebpf-tools/`): Production-ready monitoring tools using BCC and bpftrace
-2. **Traffic Analyzer** (under development): Python-based PCAP and TCP socket analysis tools
+1. **Measurement Tools** (`measurement-tools/`): Production-ready eBPF monitoring tools using BCC and bpftrace
+2. **Traffic Analyzer** (`traffic-analyzer/`): Python-based PCAP and TCP socket analysis tools (under development)
 
 **Target Environment**: openEuler 4.19.90 kernel, virtualized network infrastructure with OVS
 
@@ -24,15 +23,16 @@ This is an **eBPF-based network troubleshooting and performance analysis toolset
 ### Common Commands
 
 ```bash
-# Execute BCC tools (requires root/sudo)
-sudo python ebpf-tools/linux-network-stack/packet-drop/eth_drop.py
-sudo python ebpf-tools/performance/system-network/icmp_rtt_latency.py --src-ip IP1 --dst-ip IP2
+# Execute BCC Python tools (requires root/sudo)
+sudo python measurement-tools/linux-network-stack/packet-drop/eth_drop.py
+sudo python measurement-tools/performance/system-network/kernel_icmp_rtt.py --src-ip IP1 --dst-ip IP2
+sudo python measurement-tools/performance/vm-network/vm_network_latency_summary.py
 
 # Execute bpftrace scripts
-sudo bpftrace ebpf-tools/other/trace-abnormal-arp.bt
-sudo bpftrace ebpf-tools/kvm-virt-network/tun/tun-abnormal-gso-type.bt
+sudo bpftrace measurement-tools/other/trace-abnormal-arp.bt
+sudo bpftrace measurement-tools/kvm-virt-network/tun/tun-abnormal-gso-type.bt
 
-# Run test suite (for automated testing framework)
+# Run test suite (automated testing framework)
 python3 test/workflow/tools/test_case_generator.py --spec test/workflow/spec/performance-test-spec.yaml --output test/workflow/case/performance-test-cases.json
 python3 test/workflow/tools/test_runner.py --config test/workflow/config/performance-test-config.yaml --topic performance
 
@@ -43,47 +43,59 @@ python3 test/workflow/tools/test_runner.py --config test/workflow/config/perform
 
 ## Architecture
 
-### eBPF Tools Directory Structure
+### Measurement Tools Directory Structure
 
 ```
-ebpf-tools/
+measurement-tools/
 ├── linux-network-stack/     # Packet drop monitoring, connection tracking
 │   └── packet-drop/         # kfree_skb tracing with stack analysis
 ├── performance/
-│   ├── system-network/      # Host-level network performance (ICMP/TCP/UDP latency)
-│   └── vm-network/          # VM network latency decomposition and analysis
-├── ovs/                     # Open vSwitch monitoring (megaflow, upcall, drops)
+│   ├── system-network/      # Host-level network performance (ICMP RTT, TCP latency, metrics)
+│   └── vm-network/          # VM network latency decomposition and VM pair analysis
+│       └── vm_pair_latency/ # Inter-VM latency monitoring and gap analysis
+├── ovs/                     # Open vSwitch monitoring (megaflow, upcall, kernel module drops)
 ├── kvm-virt-network/        # Virtio/TUN/TAP/vhost monitoring
-│   ├── kvm/                 # KVM IRQ injection statistics
-│   ├── tun/                 # TUN/TAP device ring buffer and GSO monitoring
-│   ├── vhost-net/           # vhost eventfd, queue correlation
-│   └── virtio-net/          # virtio-net polling, IRQ monitoring
-├── cpu/                     # CPU and scheduler analysis (off-CPU time, futex)
-└── other/                   # Additional tracers (ARP, qdisc, connection tracking)
+│   ├── kvm/                 # KVM IRQ injection statistics (x86/ARM)
+│   ├── tun/                 # TUN/TAP device ring buffer, GSO, TX to vhost correlation
+│   ├── vhost-net/           # vhost eventfd, queue correlation, buffer peek stats
+│   └── virtio-net/          # virtio-net polling, IRQ monitoring, RX path tracing
+├── cpu/                     # CPU and scheduler analysis (off-CPU time, futex, pthread locks)
+└── other/                   # Additional tracers (ARP, OVS conntrack, qdisc, VPC datapath)
 ```
 
 ### Traffic Analyzer Project (Under Development)
 
-**Location**: Development work happens in separate directories:
-- **Design**: `docs/design/traffic-analyzer/claude/`
-- **Requirements**: `docs/prd/traffic-analyzer/claude/`
-- **Original prototypes**: `traffic-analyzer-original/` (reference implementations)
-- **Kimi AI research**: `traffic-analyzer-kimi/` (alternative analysis approaches)
+**Location**: `traffic-analyzer/` contains three subdirectories:
+- **traffic-analyzer-claude/**: Target implementation location (currently empty - awaiting implementation)
+- **traffic-analyzer-kimi/**: Kimi AI-assisted research and prototypes
+- **traffic-analyzer-original/**: Original analysis scripts and test data from real network issues
 
-**Two Independent Tools**:
+**Documentation**:
+- **Design**: `docs/design/traffic-analyzer/claude/` (IEEE 1016 format)
+- **Requirements**: `docs/prd/traffic-analyzer/claude/traffic-analysis-requirements-v3.0.md` (IEEE 830 format)
+
+**Two Independent Tools** (planned):
 1. **PCAP Analyzer**: Packet-level analysis using tshark (Summary/Details/Analysis modes)
 2. **TCP Socket Analyzer**: Kernel socket state analysis from eBPF data (Summary/Detailed/Pipeline modes)
 
-**Key Design Documents**:
-- `traffic-analysis-tools-design.md` - Complete HLD/LLD following IEEE 1016
-- `traffic-analysis-tools-test-plan.md` - Test strategy and acceptance criteria
-- `traffic-analysis-requirements-v3.0.md` - Functional requirements with FR-* IDs
+**Development Status**: Design and requirements complete, implementation pending
 
-**Development Status**: Design phase complete, implementation not started
+### Test Framework
+
+**Location**: `test/` directory contains three subdirectories:
+- **workflow/**: Specification-driven test framework (YAML specs, test cases, results)
+- **automate-performance-test/**: Performance test automation scripts and analysis
+- **debug/**: Debug utilities and tools
+- **tools/**: Shared test utilities
+
+**Test Framework Pattern**:
+- **Specification-driven**: Test specs (YAML) define parameter matrices
+- **Remote execution**: Tools run via SSH on test servers
+- **Results collection**: Stored in `test/workflow/result/`
 
 ## Key Design Patterns
 
-### eBPF Tools Patterns
+### eBPF Tool Patterns
 
 1. **Tool Arguments**: Consistent argparse pattern across tools
    - `--src-ip`, `--dst-ip`: Source and destination IP addresses
@@ -103,12 +115,6 @@ ebpf-tools/
    ```
 
 3. **Data Flow**: eBPF kernel program → BPF maps → Python userspace processing → stdout
-
-### Test Framework Pattern
-
-- **Specification-driven**: Test specs (YAML) define parameter matrices
-- **Remote execution**: Tools run via SSH on `smartx@172.21.152.82`
-- **Results collection**: Stored in `test/workflow/result/`
 
 ## Virtualized Network Stack
 
@@ -186,16 +192,20 @@ See `claude_local_test.md` for environment details:
 
 ```
 docs/
-├── design/                  # Software Design Descriptions (SDD)
-│   ├── README.md           # IEEE 1016 standard guidelines
-│   ├── traffic-analyzer/   # Traffic analyzer HLD/LLD
-│   └── *.md                # Individual tool designs
-├── prd/                    # Product Requirements Documents
-│   ├── README.md           # IEEE 830 standard guidelines
-│   └── traffic-analyzer/   # Traffic analyzer requirements (FR-*/NFR-*)
-├── analysis/               # Kernel code analysis and research
-├── publish/                # User manuals and deployment guides
-└── tmp/                    # Temporary analysis (cpu-cache, crash dumps)
+├── design/                        # Software Design Descriptions (SDD)
+│   ├── README.md                 # IEEE 1016 standard guidelines
+│   ├── traffic-analyzer/claude/  # Traffic analyzer HLD/LLD
+│   └── *.md                      # Individual tool designs (eth_drop, vm-latency, etc.)
+├── prd/                          # Product Requirements Documents
+│   ├── README.md                 # IEEE 830 standard guidelines
+│   └── traffic-analyzer/claude/  # Traffic analyzer SRS (v3.0)
+├── analysis/                     # Kernel code analysis and research
+│   ├── virtlization-datapath-analysis/  # Virtio/vhost/TUN TX analysis
+│   ├── tcp-perf-doc/            # TCP performance analysis
+│   └── *.md                     # BCC/eBPF compatibility, performance analysis
+├── publish/                      # User manuals and deployment guides
+│   └── tools/                   # Tool-specific documentation
+└── workflow/                     # Test workflow documentation
 ```
 
 ## Target Users
@@ -205,7 +215,8 @@ docs/
 
 ## Reference Materials
 
-- Kernel source: `kernel-source/` directory (openEuler 4.19.90)
-- User manual: `docs/publish/user-manual.md`
-- Design standards: `docs/design/README.md` (IEEE 1016)
-- Requirements standards: `docs/prd/README.md` (IEEE 830)
+- **Kernel probe functions**: `kprobe_functions.txt` (available kprobe points for target kernel)
+- **User manual**: `docs/publish/user-manual.md`
+- **Design standards**: `docs/design/README.md` (IEEE 1016)
+- **Requirements standards**: `docs/prd/README.md` (IEEE 830)
+- **Additional kernel sources**: Available in `/Users/admin/workspace/kernel/` and `/Users/admin/workspace/linux-4.18.0-553.47.1.el8_10/`

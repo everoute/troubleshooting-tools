@@ -6,9 +6,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is the main Claude configuration file. Additional context-specific memory files:
 
-- `claude_local_project_overview.md` - project overview
+- `claude_local_project_overview.md` - Project overview
 - `claude_local_coding.md` - BPF/BCC coding guidelines and conventions
 - `claude_local_test.md` - Testing procedures and environment setup
+
+## Project Overview
+
+This is an **eBPF-based network troubleshooting and performance analysis toolset** for virtualized environments. The repository contains two major components:
+
+1. **eBPF Tools** (`ebpf-tools/`): Production-ready monitoring tools using BCC and bpftrace
+2. **Traffic Analyzer** (under development): Python-based PCAP and TCP socket analysis tools
+
+**Target Environment**: openEuler 4.19.90 kernel, virtualized network infrastructure with OVS
 
 ## Quick Reference
 
@@ -16,134 +25,187 @@ This is the main Claude configuration file. Additional context-specific memory f
 
 ```bash
 # Execute BCC tools (requires root/sudo)
-sudo python2 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py
-sudo python2 ebpf-tools/performance/system-network/icmp_rtt_latency.py --src-ip IP1 --dst-ip IP2
+sudo python ebpf-tools/linux-network-stack/packet-drop/eth_drop.py
+sudo python ebpf-tools/performance/system-network/icmp_rtt_latency.py --src-ip IP1 --dst-ip IP2
 
 # Execute bpftrace scripts
 sudo bpftrace ebpf-tools/other/trace-abnormal-arp.bt
 sudo bpftrace ebpf-tools/kvm-virt-network/tun/tun-abnormal-gso-type.bt
-```
 
-### Architecture Overview
-
-**eBPF-based network troubleshooting toolset** for virtualized environments:
-
-- **ebpf-tools/**: Main directory containing all eBPF tools
-  - **linux-network-stack/**: Packet drop monitoring, connection tracking
-  - **performance/**: System and VM network latency measurement
-  - **ovs/**: Open vSwitch monitoring (megaflow, upcall, drops)
-  - **kvm-virt-network/**: Virtio/TUN/TAP/vhost monitoring
-  - **cpu/**: CPU and scheduler analysis tools
-- **Target Stack**: Physical → OVS → TUN/TAP → VM network layers
-- **Target Kernel**: openEuler 4.19.90
-
-### Critical Safety Notes
-
-- **All tools require root access** - can impact system performance
-- **Test in dev environment first** - never run untested BPF on production
-- **BPF stack limit**: 512 bytes - use maps for large data structures
-- **Python compatibility**: Tools use `#!/usr/bin/env python` for Python 2/3 compatibility
-
-## BCC Tool Development Guidelines
-
-See `claude_local_coding.md` for detailed BPF/BCC coding guidelines including:
-
-- Import patterns and Python compatibility
-- Code style rules
-- eBPF implementation details
-
-## Important Instructions
-
-Do what has been asked; nothing more, nothing less.
-
-NEVER create files unless they're absolutely necessary for achieving your goal.
-ALWAYS prefer editing an existing file to creating a new one.
-NEVER proactively create documentation files (*.md) or README files unless explicitly requested.
-
-## Overview
-
-This is a comprehensive eBPF-based toolset for monitoring, tracing, and analyzing network performance issues in virtualized environments. The tools help identify packet drops, measure latency, trace data paths, and analyze system performance bottlenecks.
-
-## Key Commands
-
-### Testing and Running Tools
-
-**Run the test suite:**
-
-```bash
-# Generate test cases
+# Run test suite (for automated testing framework)
 python3 test/workflow/tools/test_case_generator.py --spec test/workflow/spec/performance-test-spec.yaml --output test/workflow/case/performance-test-cases.json
-
-# Run all tests for a topic
 python3 test/workflow/tools/test_runner.py --config test/workflow/config/performance-test-config.yaml --topic performance
 
-# Run specific test case
-python3 test/workflow/tools/test_runner.py --config test/workflow/config/performance-test-config.yaml --topic performance --cases 1
-```
-
-**Common eBPF tool commands (require sudo):**
-
-```bash
-# System network performance metrics
-sudo python3 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py --internal-interface port-storage --phy-interface ens11 --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --direction rx --protocol tcp
-
-# VM network latency summary
-sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py --vm-interface vnet0 --phy-interface ens4 --direction tx --src-ip 172.21.153.114 --dst-ip 172.21.153.113 --protocol tcp
-
-# Packet drop monitoring
-sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary.py
-
-# OVS monitoring
-sudo python3 ebpf-tools/ovs/ovs_userspace_megaflow.py --debug
+# Traffic Analyzer (under development)
+# Design docs: docs/design/traffic-analyzer/claude/
+# Requirements: docs/prd/traffic-analyzer/claude/traffic-analysis-requirements-v3.0.md
 ```
 
 ## Architecture
 
-### Directory Structure
+### eBPF Tools Directory Structure
 
-- **`ebpf-tools/`**: Main directory containing all eBPF monitoring tools
+```
+ebpf-tools/
+├── linux-network-stack/     # Packet drop monitoring, connection tracking
+│   └── packet-drop/         # kfree_skb tracing with stack analysis
+├── performance/
+│   ├── system-network/      # Host-level network performance (ICMP/TCP/UDP latency)
+│   └── vm-network/          # VM network latency decomposition and analysis
+├── ovs/                     # Open vSwitch monitoring (megaflow, upcall, drops)
+├── kvm-virt-network/        # Virtio/TUN/TAP/vhost monitoring
+│   ├── kvm/                 # KVM IRQ injection statistics
+│   ├── tun/                 # TUN/TAP device ring buffer and GSO monitoring
+│   ├── vhost-net/           # vhost eventfd, queue correlation
+│   └── virtio-net/          # virtio-net polling, IRQ monitoring
+├── cpu/                     # CPU and scheduler analysis (off-CPU time, futex)
+└── other/                   # Additional tracers (ARP, qdisc, connection tracking)
+```
 
-  - `performance/`: Network performance measurement tools
-    - `system-network/`: Host-level network performance tools
-    - `vm-network/`: VM network performance analysis tools
-  - `linux-network-stack/`: Linux kernel network stack tracing
-    - `packet-drop/`: Packet drop analysis tools
-  - `ovs/`: Open vSwitch monitoring tools
-  - `kvm-virt-network/`: KVM/virtio network monitoring
-  - `cpu/`: CPU performance analysis tools
-- **`test/workflow/`**: Testing framework
+### Traffic Analyzer Project (Under Development)
 
-  - `spec/`: Test specifications (YAML files defining test parameters)
-  - `config/`: Test configurations (remote host, paths, etc.)
-  - `case/`: Generated test cases (JSON)
-  - `tools/`: Test runner and generator scripts
-- **`docs/`**: Design documents and detailed analysis guides
+**Location**: Development work happens in separate directories:
+- **Design**: `docs/design/traffic-analyzer/claude/`
+- **Requirements**: `docs/prd/traffic-analyzer/claude/`
+- **Original prototypes**: `traffic-analyzer-original/` (reference implementations)
+- **Kimi AI research**: `traffic-analyzer-kimi/` (alternative analysis approaches)
 
-### Key Design Patterns
+**Two Independent Tools**:
+1. **PCAP Analyzer**: Packet-level analysis using tshark (Summary/Details/Analysis modes)
+2. **TCP Socket Analyzer**: Kernel socket state analysis from eBPF data (Summary/Detailed/Pipeline modes)
 
-1. **Tool Arguments**: Most tools follow a consistent argparse pattern with common flags:
+**Key Design Documents**:
+- `traffic-analysis-tools-design.md` - Complete HLD/LLD following IEEE 1016
+- `traffic-analysis-tools-test-plan.md` - Test strategy and acceptance criteria
+- `traffic-analysis-requirements-v3.0.md` - Functional requirements with FR-* IDs
 
+**Development Status**: Design phase complete, implementation not started
+
+## Key Design Patterns
+
+### eBPF Tools Patterns
+
+1. **Tool Arguments**: Consistent argparse pattern across tools
    - `--src-ip`, `--dst-ip`: Source and destination IP addresses
    - `--protocol`: Protocol type (tcp, udp, icmp)
    - `--direction`: Traffic direction (rx, tx)
    - `--phy-interface`: Physical interface name
    - `--vm-interface`: Virtual machine interface name
    - `--debug`: Enable debug output
-2. **Test Framework**: Uses a specification-driven approach:
 
-   - Test specs define parameter matrices and tool configurations
-   - Test runner executes tools remotely via SSH (configured for `smartx@172.21.152.82`)
-   - Results are collected and stored in `test/workflow/result/`
-3. **eBPF Patterns**: Tools use BCC (BPF Compiler Collection) Python bindings:
+2. **BCC Import Compatibility**: All tools use fallback pattern for `bcc`/`bpfcc` modules
+   ```python
+   #!/usr/bin/env python
+   try:
+       from bcc import BPF
+   except ImportError:
+       from bpfcc import BPF
+   ```
 
-   - Attach to kernel tracepoints, kprobes, or uprobes
-   - Collect metrics in BPF maps
-   - Process and display results in Python userspace
+3. **Data Flow**: eBPF kernel program → BPF maps → Python userspace processing → stdout
 
-## Important Notes
+### Test Framework Pattern
 
-- All eBPF tools require root privileges (sudo)
-- Tools are designed for Linux with eBPF support (kernel 4.1+ recommended)
-- Remote test execution assumes SSH access to configured test hosts
-- Performance tools may introduce overhead in production environments
-- Use filtering options to reduce noise and performance impact
+- **Specification-driven**: Test specs (YAML) define parameter matrices
+- **Remote execution**: Tools run via SSH on `smartx@172.21.152.82`
+- **Results collection**: Stored in `test/workflow/result/`
+
+## Virtualized Network Stack
+
+The tools trace data flow through multiple layers:
+
+```
+Application Layer
+       ↓
+Socket Layer (tcp_sendmsg/tcp_recvmsg)
+       ↓
+TCP/IP Stack (kernel network stack)
+       ↓
+OVS Datapath (megaflow, upcall)
+       ↓
+TUN/TAP Device (vnet interfaces)
+       ↓
+vhost-net (kernel accelerator)
+       ↓
+virtio-net (guest driver)
+       ↓
+VM Network Interface
+```
+
+**Root Cause Analysis Methodology**: Tools trace execution paths to identify unexpected data structure/metadata changes affecting control logic at each layer.
+
+## Critical Development Guidelines
+
+### Code Style (BPF/BCC Tools)
+
+**IMPORTANT**: See `claude_local_coding.md` for complete guidelines
+
+Key rules:
+- Use `#!/usr/bin/env python` for Python 2/3 compatibility
+- **Forbidden**: Emojis in print/log statements
+- **Forbidden**: Chinese characters in comments/print/log
+- Use concise English comments (max 3 per function)
+- BPF stack limit: 512 bytes (use maps for large data structures)
+- No BTF support on target systems (use direct memory read/write)
+
+### Documentation Standards
+
+**NEVER create documentation files unless explicitly requested**. This includes:
+- No proactive creation of README.md files
+- No markdown documentation files
+- No design documents without explicit user request
+
+**Exception**: When working on Traffic Analyzer, follow IEEE 1016 (design) and IEEE 830 (requirements) standards as defined in `docs/design/README.md` and `docs/prd/README.md`.
+
+### Testing Requirements
+
+See `claude_local_test.md` for environment details:
+- **Virtualization Host**: Physical server testing
+- **Virtualization Guest**: VM testing
+- Python 2 (el7 with `python-bcc`) or Python 3 (oe1 with `python3-bpfcc`)
+
+## Important Instructions
+
+**Do what has been asked; nothing more, nothing less.**
+
+- ALWAYS prefer editing an existing file to creating a new one
+- NEVER proactively create documentation files (*.md) or README files
+- All eBPF tools require root access and can impact system performance
+- Test in dev environment first - never run untested BPF on production
+- Output to stdout by default (use redirection for logging)
+
+## Safety Notes
+
+- **All tools require root access** - can impact system performance
+- **BPF stack limit**: 512 bytes - use maps for large data structures
+- **Test in dev first** - never run untested BPF programs on production systems
+- **Symbol resolution**: Stack traces require kernel debug symbols
+- **Performance impact**: Consider overhead when running in production
+
+## Documentation Structure
+
+```
+docs/
+├── design/                  # Software Design Descriptions (SDD)
+│   ├── README.md           # IEEE 1016 standard guidelines
+│   ├── traffic-analyzer/   # Traffic analyzer HLD/LLD
+│   └── *.md                # Individual tool designs
+├── prd/                    # Product Requirements Documents
+│   ├── README.md           # IEEE 830 standard guidelines
+│   └── traffic-analyzer/   # Traffic analyzer requirements (FR-*/NFR-*)
+├── analysis/               # Kernel code analysis and research
+├── publish/                # User manuals and deployment guides
+└── tmp/                    # Temporary analysis (cpu-cache, crash dumps)
+```
+
+## Target Users
+
+1. **Development Team**: Configure tracing parameters, analyze complex execution paths
+2. **Field Support Team**: Collect logs following documented procedures, forward to dev team
+
+## Reference Materials
+
+- Kernel source: `kernel-source/` directory (openEuler 4.19.90)
+- User manual: `docs/publish/user-manual.md`
+- Design standards: `docs/design/README.md` (IEEE 1016)
+- Requirements standards: `docs/prd/README.md` (IEEE 830)

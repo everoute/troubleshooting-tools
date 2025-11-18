@@ -159,21 +159,21 @@ process_pidstat_output() {
     # Process each CPU separately
     for cpu in $target_cpus; do
         # Get CPU usage from mpstat result for this CPU
-        local cpu_usage=$(echo "$mpstat_result" | grep -oP "(?<=\b${cpu}:)[0-9.]+" || echo "0.0")
+        local cpu_usage=$(echo "$mpstat_result" | awk -F" |:" '{for(i=1;i<=NF;i++) if ($i == "'"$cpu"'") {print $(i+1); exit}}' || echo "0.0")
 
         # Skip if CPU usage is below threshold (unless threshold is 0)
-        if [ -n "$threshold" ] && [[ "$threshold" =~ ^[0-9]+([.][0-9]+)?$ ]] && (( $(echo "$threshold > 0" | bc -l) )) && (( $(echo "$cpu_usage < $threshold" | bc -l) )); then
+        if [ -n "$threshold" ] && [[ "$threshold" =~ ^[0-9]+([.][0-9]+)?$ ]] && [ "$(echo "$threshold > 0" | bc -l | tr -d '\n')" -eq 1 ] && [ "$(echo "$cpu_usage < $threshold" | bc -l | tr -d '\n')" -eq 1 ]; then
             # Create empty file (so the script knows we processed this CPU)
             > "/tmp/fast_cpu_monitor_$$_cpu${cpu}"
             continue
         fi
 
-        # Filter lines for this CPU, with dynamic column detection
+        # Filter lines for this CPU, with improved column detection
         # Different pidstat versions have different output formats:
         # Format 1 (el7, 4.19.90): Time UID PID %usr %system %guest    %CPU CPU Command
         # Format 2 (oe1, 5.10.0): Time UID PID %usr %system %guest %wait %CPU CPU Command
         # The key difference is the %wait column which appears in newer kernels
-        # Strategy: Count from the end, since Command is always last, CPU is always 2nd from last, %CPU is always 3rd from last
+        # Strategy: Scan header line to find column positions by name
         awk -v target_cpu="$cpu" -v topk="$topk" '
         BEGIN {
             count = 0
@@ -181,24 +181,21 @@ process_pidstat_output() {
             cpu_usage_col = 0
             pid_col = 0
             command_col = 0
+            uid_col = 0
             format_detected = 0
         }
         {
             # Auto-detect format based on header line (look for UID and Command)
-            if ($0 ~ /UID/ && $0 ~ /Command/) {
-                # Determine total number of fields in this format
-                total_fields = NF
+            if ($0 ~ /UID/ && $0 ~ /Command/ && !format_detected) {
+                # Find column positions by scanning header fields for exact column names
+                for (i = 1; i <= NF; i++) {
+                    if ($i == "UID") uid_col = i
+                    if ($i == "PID") pid_col = i
+                    if ($i == "%CPU") cpu_usage_col = i
+                    if ($i == "CPU") cpu_col = i
+                    if ($i == "Command") command_col = i
+                }
 
-                # In all formats, columns from the end have fixed relationships:
-                # - Command is always the last field
-                # - CPU is always the 2nd last field
-                # - %CPU is always the 3rd last field
-                # - PID is always the 5th field
-                # - Command starts from the last field and includes all remaining fields
-                cpu_col = total_fields - 1             # CPU column (2nd from end)
-                cpu_usage_col = total_fields - 2       # %CPU column (3rd from end)
-                pid_col = 5                            # PID is always field 5
-                command_col = total_fields             # Command starts at last field
                 format_detected = 1
                 next  # Skip header line
             }
@@ -208,27 +205,19 @@ process_pidstat_output() {
                 next
             }
 
-            # Skip non-process lines (blank lines, averages, etc.)
-            # Process lines have numeric PID in field 5 and enough fields
-            if ($pid_col !~ /^[0-9]+$/ || NF < 8) {
+            # Skip non-process lines (UID must be numeric, skip average lines, etc.)
+            if ($(uid_col) !~ /^[0-9]+$/ || NF < 8) {
                 next
             }
 
-            # Debug: print detected columns for the first process line
-            # pid = $pid_col
-            # cpu_usage = $cpu_usage_col + 0
-            # cpu_num = $cpu_col
-            # printf "DEBUG: NF=%d, pid_col=%d(%s), cpu_usage_col=%d(%s), cpu_col=%d(%s)\n", \
-            #        NF, pid_col, $pid_col, cpu_usage_col, $cpu_usage_col, cpu_col, $cpu_col | "cat>&2"
-
             # Extract values from detected column positions
-            pid = $pid_col
-            cpu_usage = $cpu_usage_col + 0
-            cpu_num = $cpu_col
+            pid = $(pid_col)
+            cpu_usage = $(cpu_usage_col) + 0
+            cpu_num = $(cpu_col)
 
             # Build command string (combine all remaining fields from command_col)
             # Command may contain spaces, so we need to rebuild it properly
-            command = $command_col
+            command = $(command_col)
             for (i = command_col + 1; i <= NF; i++) {
                 command = command " " $i
             }
@@ -310,7 +299,7 @@ display_report() {
         $(echo "$target_cpus" | wc -w) "$interval" "$collection_duration"
 
     # Show threshold if set
-    if (( $(echo "$threshold > 0" | bc -l) )); then
+    if [ "$(echo "$threshold > 0" | bc -l | tr -d '\n')" -eq 1 ]; then
         printf ", Threshold: %.0f%%" "$threshold"
     fi
     echo ""
@@ -322,9 +311,9 @@ display_report() {
 
         # Color code based on usage
         local color="$NC"
-        if (( $(echo "$usage > 80" | bc -l) )); then
+        if [ "$(echo "$usage > 80" | bc -l | tr -d '\n')" -eq 1 ]; then
             color="$RED"
-        elif (( $(echo "$usage > 50" | bc -l) )); then
+        elif [ "$(echo "$usage > 50" | bc -l | tr -d '\n')" -eq 1 ]; then
             color="$YELLOW"
         else
             color="$GREEN"
@@ -334,7 +323,7 @@ display_report() {
 
         # Only show processes if threshold is exceeded or threshold is 0
         local show_processes=true
-        if (( $(echo "$threshold > 0" | bc -l) )) && (( $(echo "$usage < $threshold" | bc -l) )); then
+        if [ "$(echo "$threshold > 0" | bc -l | tr -d '\n')" -eq 1 ] && [ "$(echo "$usage < $threshold" | bc -l | tr -d '\n')" -eq 1 ]; then
             show_processes=false
         fi
 
@@ -440,7 +429,7 @@ start_monitoring() {
         local cycle_end=$(date +%s.%N)
         local elapsed=$(echo "$cycle_end - $cycle_start" | bc)
         local sleep_needed=$(echo "$interval - $elapsed" | bc)
-        if (( $(echo "$sleep_needed > 0" | bc -l) )); then
+        if [ "$(echo "$sleep_needed > 0" | bc -l | tr -d '\n')" -eq 1 ]; then
             sleep "$sleep_needed"
         fi
     done

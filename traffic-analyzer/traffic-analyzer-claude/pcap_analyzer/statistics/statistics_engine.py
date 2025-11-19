@@ -44,8 +44,11 @@ class StatisticsEngine:
         """
         ethernet_types = Counter()
         frame_sizes = Counter()
+        total_frames = 0
 
         for packet in packets:
+            total_frames += 1
+
             # Ethernet type statistics
             eth_type = packet.get('eth_type', 'UNKNOWN')
             ethernet_types[eth_type] += 1
@@ -57,7 +60,8 @@ class StatisticsEngine:
 
         return L2Stats(
             ethernet_types=dict(ethernet_types),
-            frame_size_distribution=dict(frame_sizes)
+            frame_size_distribution=dict(frame_sizes),
+            total_frames=total_frames
         )
 
     def compute_l3_stats(self, packets: Iterator[Dict]) -> L3Stats:
@@ -94,9 +98,8 @@ class StatisticsEngine:
 
         return L3Stats(
             ip_versions=dict(ip_versions),
-            protocols=dict(protocols),
-            total_packets=total_packets,
-            total_bytes=total_bytes
+            protocol_distribution=dict(protocols),
+            total_packets=total_packets
         )
 
     def compute_l4_stats(self, packets: Iterator[Dict]) -> L4Stats:
@@ -141,7 +144,8 @@ class StatisticsEngine:
             udp_packets=udp_packets,
             udp_bytes=udp_bytes,
             other_packets=other_packets,
-            other_bytes=other_bytes
+            other_bytes=other_bytes,
+            total_bytes=tcp_bytes + udp_bytes + other_bytes
         )
 
     def _get_size_range(self, frame_len: int) -> str:

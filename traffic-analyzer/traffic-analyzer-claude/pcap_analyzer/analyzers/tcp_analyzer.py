@@ -17,14 +17,10 @@ class TCPAnalyzer:
 
     def analyze_retransmissions(self, tcp_flow: Flow) -> RetransStats:
         """
-        Analyze TCP retransmissions
+        Analyze TCP retransmissions using tshark analysis fields
 
-        Algorithm:
-        1. Iterate through packets checking tcp.analysis.retransmission flag
-        2. Distinguish fast retransmission vs timeout retransmission:
-           - Fast retrans: 3 DupACKs received before retransmission
-           - Timeout retrans: No DupACKs before retransmission
-        3. Detect spurious retransmissions (D-SACK)
+        Uses tshark's tcp.analysis.retransmission, tcp.analysis.fast_retransmission,
+        and tcp.analysis.spurious_retransmission fields for accurate detection.
 
         Args:
             tcp_flow: Flow object containing TCP packets
@@ -35,44 +31,39 @@ class TCPAnalyzer:
         Implements: FR-PCAP-DET-005
         """
         total_packets = len(tcp_flow.packets)
-        retrans_packets = []
-        fast_retrans = []
-        timeout_retrans = []
-        spurious_retrans = []
+        retrans_count = 0
+        fast_retrans_count = 0
+        spurious_retrans_count = 0
 
-        for i, packet in enumerate(tcp_flow.packets):
-            # Check for retransmission flag
+        for packet in tcp_flow.packets:
+            # Check tshark analysis fields
             if packet.get('tcp_analysis_retransmission'):
-                retrans_packets.append(packet)
+                retrans_count += 1
 
-                # Distinguish fast vs timeout retransmission
-                if self._is_fast_retransmission(tcp_flow.packets, i):
-                    fast_retrans.append(packet)
-                else:
-                    timeout_retrans.append(packet)
+            if packet.get('tcp_analysis_fast_retransmission'):
+                fast_retrans_count += 1
 
-            # Check for spurious retransmission (D-SACK)
-            if packet.get('tcp_options_sack_dsack'):
-                spurious_retrans.append(packet)
+            if packet.get('tcp_analysis_spurious_retransmission'):
+                spurious_retrans_count += 1
 
-        retrans_count = len(retrans_packets)
+        # Timeout retrans = total retrans - fast retrans
+        timeout_retrans_count = retrans_count - fast_retrans_count
 
         return RetransStats(
             total_packets=total_packets,
             retrans_packets=retrans_count,
             retrans_rate=retrans_count / total_packets if total_packets > 0 else 0.0,
-            fast_retrans=len(fast_retrans),
-            timeout_retrans=len(timeout_retrans),
-            spurious_retrans=len(spurious_retrans)
+            fast_retrans=fast_retrans_count,
+            timeout_retrans=timeout_retrans_count,
+            spurious_retrans=spurious_retrans_count
         )
 
     def analyze_dupack(self, tcp_flow: Flow) -> DupACKStats:
         """
-        Analyze Duplicate ACKs
+        Analyze Duplicate ACKs using tshark analysis fields
 
-        Algorithm:
-        1. Check tcp.analysis.duplicate_ack flag
-        2. Count maximum consecutive DupACKs
+        Uses tshark's tcp.analysis.duplicate_ack field for accurate detection.
+        Also computes max consecutive DupACKs.
 
         Args:
             tcp_flow: Flow object containing TCP packets
@@ -87,6 +78,7 @@ class TCPAnalyzer:
         max_consecutive = 0
 
         for packet in tcp_flow.packets:
+            # Check tshark analysis field
             if packet.get('tcp_analysis_duplicate_ack'):
                 dupack_count += 1
                 current_consecutive += 1
@@ -108,7 +100,7 @@ class TCPAnalyzer:
         Analyze Zero Window events
 
         Algorithm:
-        1. Detect tcp.analysis.zero_window flag
+        1. Detect tcp_win == 0
         2. Calculate Zero Window duration
 
         Args:
@@ -124,7 +116,9 @@ class TCPAnalyzer:
         event_start = None
 
         for packet in tcp_flow.packets:
-            if packet.get('tcp_analysis_zero_window'):
+            tcp_win = packet.get('tcp_win')
+
+            if tcp_win == 0:
                 if not in_zero_window:
                     in_zero_window = True
                     event_start = packet.get('timestamp')

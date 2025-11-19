@@ -3,12 +3,13 @@
 Socket Data Parser
 
 Parses dual-side TCP socket data, validates connection matching, and performs time alignment.
+Supports raw socket log format only.
 Implements FR-SOCKET-SUM-001, FR-SOCKET-SUM-014.
 """
 
 import os
 import re
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, List
 from datetime import datetime
 import pandas as pd
 
@@ -21,17 +22,7 @@ class ConnectionMismatchError(Exception):
 
 
 class SocketDataParser:
-    """TCP Socket data parser with dual-side support"""
-
-    # Expected column names in socket data files
-    EXPECTED_COLUMNS = [
-        'timestamp', 'connection', 'state',
-        'rtt', 'cwnd', 'ssthresh', 'rwnd',
-        'pacing_rate', 'delivery_rate',
-        'socket_tx_queue', 'socket_tx_buffer',
-        'socket_rx_queue', 'socket_rx_buffer',
-        'packets_out', 'retrans', 'retrans_rate'
-    ]
+    """TCP Socket data parser with dual-side support (log format only)"""
 
     def parse_dual_directories(
         self,
@@ -71,33 +62,44 @@ class SocketDataParser:
 
         return client_df, server_df, aligned_df
 
-    def parse_directory(self, dir_path: str, side: str) -> pd.DataFrame:
+    def parse_directory(self, path: str, side: str) -> pd.DataFrame:
         """
-        Parse all socket data files in a directory
+        Parse socket log data from a directory or single file
 
         Args:
-            dir_path: Path to directory containing socket data files
+            path: Path to directory containing socket log files, or path to single log file
             side: 'client' or 'server'
 
         Returns:
             DataFrame with all parsed data
 
         Raises:
-            FileNotFoundError: If directory doesn't exist
-            ValueError: If no valid data files found
+            FileNotFoundError: If path doesn't exist
+            ValueError: If no valid log files found
         """
-        if not os.path.isdir(dir_path):
-            raise FileNotFoundError(f"Directory not found: {dir_path}")
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Path not found: {path}")
+
+        # Handle single file
+        if os.path.isfile(path):
+            df = self.parse_file(path, side)
+            if df is None or df.empty:
+                raise ValueError(f"No valid data could be parsed from {path}")
+            return df
+
+        # Handle directory
+        if not os.path.isdir(path):
+            raise FileNotFoundError(f"Path is neither file nor directory: {path}")
 
         # Find all data files (skip hidden files)
         data_files = [
-            os.path.join(dir_path, f)
-            for f in os.listdir(dir_path)
-            if not f.startswith('.') and os.path.isfile(os.path.join(dir_path, f))
+            os.path.join(path, f)
+            for f in os.listdir(path)
+            if not f.startswith('.') and os.path.isfile(os.path.join(path, f))
         ]
 
         if not data_files:
-            raise ValueError(f"No data files found in {dir_path}")
+            raise ValueError(f"No data files found in {path}")
 
         # Parse each file and concatenate
         dfs = []
@@ -111,7 +113,7 @@ class SocketDataParser:
                 continue
 
         if not dfs:
-            raise ValueError(f"No valid data could be parsed from {dir_path}")
+            raise ValueError(f"No valid data could be parsed from {path}")
 
         # Concatenate all DataFrames
         combined_df = pd.concat(dfs, ignore_index=True)
@@ -124,26 +126,22 @@ class SocketDataParser:
 
     def parse_file(self, file_path: str, side: str) -> Optional[pd.DataFrame]:
         """
-        Parse a single socket data file
+        Parse a socket log file
 
-        Expected format: Space-separated values with header line
-        Example line:
-        1699999999.123 192.168.1.1:12345->192.168.1.2:80 ESTABLISHED 45.2 1000 ...
+        Supported format:
+        - Raw log format: Human-readable TCP socket analyzer output
 
         Args:
-            file_path: Path to socket data file
+            file_path: Path to socket log file
             side: 'client' or 'server'
 
         Returns:
             DataFrame with parsed data, or None if parsing fails
         """
         try:
-            # Read file with space separator
-            df = pd.read_csv(file_path, sep=r'\s+', comment='#')
-
-            # Convert timestamp to datetime
-            if 'timestamp' in df.columns:
-                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+            df = self._parse_raw_log_file(file_path)
+            if df is None or df.empty:
+                return None
 
             # Add side column
             df['side'] = side
@@ -153,6 +151,238 @@ class SocketDataParser:
         except Exception as e:
             print(f"Error parsing file {file_path}: {e}")
             return None
+
+    def _parse_raw_log_file(self, file_path: str) -> Optional[pd.DataFrame]:
+        """
+        Parse raw socket log file into DataFrame
+
+        Implements the same logic as convert_socket_log_to_csv.py
+        but returns DataFrame directly instead of writing to file.
+
+        Args:
+            file_path: Path to raw socket log file
+
+        Returns:
+            DataFrame with parsed data, or None if parsing fails
+        """
+        records = []
+        current_record = {}
+        in_metrics_section = False
+
+        try:
+            with open(file_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+
+                    # Detect new record
+                    if line.startswith('TCP Connection Analysis'):
+                        # Save previous record
+                        if current_record and 'timestamp' in current_record:
+                            records.append(current_record)
+
+                        # Start new record
+                        current_record = {}
+                        timestamp = self._parse_timestamp_from_line(line)
+                        if timestamp:
+                            current_record['timestamp'] = timestamp
+                        in_metrics_section = False
+                        continue
+
+                    # Parse connection
+                    if line.startswith('Connection:'):
+                        conn = self._parse_connection_from_line(line)
+                        if conn:
+                            current_record['connection'] = conn
+                        continue
+
+                    # Parse state
+                    if line.startswith('State:'):
+                        state = self._parse_state_from_line(line)
+                        if state:
+                            current_record['state'] = state
+                        continue
+
+                    # Enter metrics section
+                    if line.startswith('Metrics:'):
+                        in_metrics_section = True
+                        continue
+
+                    # Parse metrics
+                    if in_metrics_section and line:
+                        self._parse_metric_line(line, current_record)
+
+            # Save last record
+            if current_record and 'timestamp' in current_record:
+                records.append(current_record)
+
+            if not records:
+                return None
+
+            # Convert to DataFrame
+            df = pd.DataFrame(records)
+
+            # Convert timestamp to datetime
+            if 'timestamp' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
+
+            # Fill missing values with appropriate defaults
+            numeric_columns = [
+                'rtt', 'rttvar', 'minrtt', 'rto', 'cwnd', 'ssthresh', 'rwnd',
+                'pacing_rate', 'delivery_rate', 'send_rate',
+                'socket_tx_queue', 'socket_tx_buffer',
+                'socket_rx_queue', 'socket_rx_buffer',
+                'packets_out', 'retrans', 'retrans_rate'
+            ]
+
+            for col in numeric_columns:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
+
+            return df
+
+        except Exception as e:
+            print(f"Error parsing raw log file {file_path}: {e}")
+            return None
+
+    def _parse_timestamp_from_line(self, line: str) -> Optional[float]:
+        """Extract timestamp from header line"""
+        match = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)', line)
+        if match:
+            dt = datetime.strptime(match.group(1), '%Y-%m-%d %H:%M:%S.%f')
+            return dt.timestamp()
+        return None
+
+    def _parse_connection_from_line(self, line: str) -> Optional[str]:
+        """Extract connection string from Connection line"""
+        match = re.search(r'Connection: (.+)', line)
+        if match:
+            conn_str = match.group(1).strip()
+            conn_str = conn_str.replace(' -> ', '->')
+            conn_str = conn_str.replace(' ', '')
+            conn_str = conn_str.replace('::ffff:', '')
+            return conn_str
+        return None
+
+    def _parse_state_from_line(self, line: str) -> Optional[str]:
+        """Extract state from State line"""
+        match = re.search(r'State: (\w+)', line)
+        if match:
+            return match.group(1)
+        return None
+
+    def _parse_metric_line(self, line: str, record: Dict) -> None:
+        """Parse metric line and add to record"""
+        if ':' not in line:
+            return
+
+        parts = line.split(':', 1)
+        if len(parts) != 2:
+            return
+
+        key = parts[0].strip()
+        value = parts[1].strip()
+
+        # Map to expected column names
+        key_mapping = {
+            'rtt': 'rtt', 'rttvar': 'rttvar', 'minrtt': 'minrtt', 'rto': 'rto',
+            'cwnd': 'cwnd', 'ssthresh': 'ssthresh',
+            'rcv_space': 'rwnd', 'rcv_ssthresh': 'rcv_ssthresh', 'snd_wnd': 'snd_wnd',
+            'mss': 'mss', 'pmtu': 'pmtu', 'advmss': 'advmss', 'rcvmss': 'rcvmss',
+            'send_rate': 'send_rate', 'pacing_rate': 'pacing_rate', 'delivery_rate': 'delivery_rate',
+            'send_q': 'send_q', 'recv_q': 'recv_q',
+            'socket_tx_queue': 'socket_tx_queue', 'socket_tx_buffer': 'socket_tx_buffer',
+            'socket_rx_queue': 'socket_rx_queue', 'socket_rx_buffer': 'socket_rx_buffer',
+            'socket_forward_alloc': 'socket_forward_alloc', 'socket_write_queue': 'socket_write_queue',
+            'unacked': 'packets_out', 'inflight_data': 'inflight_data',
+            'retrans': 'retrans', 'retrans_ratio': 'retrans_rate',
+            'lost': 'lost', 'sacked': 'sacked',
+            'segs_out': 'segs_out', 'segs_in': 'segs_in',
+            'data_segs_out': 'data_segs_out', 'data_segs_in': 'data_segs_in',
+            'bytes_sent': 'bytes_sent', 'bytes_acked': 'bytes_acked', 'bytes_received': 'bytes_received',
+            'lastsnd': 'lastsnd', 'lastrcv': 'lastrcv', 'lastack': 'lastack',
+            'app_limited': 'app_limited', 'rcv_rtt': 'rcv_rtt', 'ato': 'ato',
+            'congestion_algorithm': 'congestion_algorithm', 'ca_state': 'ca_state',
+            'reordering': 'reordering', 'rcv_ooopack': 'rcv_ooopack',
+            'busy_time': 'busy_time',
+            'rwnd_limited_time': 'rwnd_limited_time', 'rwnd_limited_ratio': 'rwnd_limited_ratio',
+            'sndbuf_limited_time': 'sndbuf_limited_time', 'sndbuf_limited_ratio': 'sndbuf_limited_ratio',
+            'cwnd_limited_time': 'cwnd_limited_time', 'cwnd_limited_ratio': 'cwnd_limited_ratio'
+        }
+
+        mapped_key = key_mapping.get(key)
+        if mapped_key:
+            # Handle string values specially
+            if key in ['congestion_algorithm', 'ca_state', 'app_limited']:
+                record[mapped_key] = value.strip()
+            else:
+                numeric_value = self._extract_numeric_value(value)
+                if isinstance(numeric_value, tuple):
+                    # Handle retrans format "current/total"
+                    record['retrans'] = numeric_value[0]
+                    record['retrans_total'] = numeric_value[1]
+                elif numeric_value is not None:
+                    record[mapped_key] = numeric_value
+
+    def _extract_numeric_value(self, value_str: str) -> Optional[float]:
+        """Extract numeric value from string like '10.5 Gbps' or '123 bytes'"""
+        if not value_str:
+            return None
+
+        value_str = value_str.replace(',', '')
+
+        # Handle bandwidth units
+        if 'Gbps' in value_str:
+            match = re.search(r'([\d.]+)', value_str)
+            if match:
+                return float(match.group(1)) * 1e9
+        elif 'Mbps' in value_str:
+            match = re.search(r'([\d.]+)', value_str)
+            if match:
+                return float(match.group(1)) * 1e6
+        elif 'Kbps' in value_str:
+            match = re.search(r'([\d.]+)', value_str)
+            if match:
+                return float(match.group(1)) * 1e3
+
+        # Handle size units
+        elif 'bytes' in value_str or 'KB' in value_str or 'MB' in value_str or 'GB' in value_str:
+            match = re.search(r'([\d.]+)', value_str)
+            if match:
+                value = float(match.group(1))
+                if 'KB' in value_str:
+                    value *= 1024
+                elif 'MB' in value_str:
+                    value *= 1024 * 1024
+                elif 'GB' in value_str:
+                    value *= 1024 * 1024 * 1024
+                return value
+
+        # Handle time units
+        elif 'ms' in value_str:
+            match = re.search(r'([\d.]+)', value_str)
+            if match:
+                return float(match.group(1))
+
+        # Handle percentages
+        elif '%' in value_str:
+            match = re.search(r'([\d.]+)%', value_str)
+            if match:
+                return float(match.group(1)) / 100.0
+
+        # Handle fractions like "0/590"
+        elif '/' in value_str:
+            match = re.search(r'(\d+)/(\d+)', value_str)
+            if match:
+                current = int(match.group(1))
+                total = int(match.group(2))
+                return (current, total)
+
+        # Try to extract plain number
+        match = re.search(r'([\d.]+)', value_str)
+        if match:
+            return float(match.group(1))
+
+        return None
 
     def _validate_connection_match(
         self,
@@ -239,7 +469,9 @@ class SocketDataParser:
         """
         Parse connection string to FiveTuple
 
-        Expected format: "192.168.1.1:12345->192.168.1.2:80"
+        Supported formats:
+        - IPv4: "192.168.1.1:12345->192.168.1.2:80"
+        - IPv4-mapped IPv6: "::ffff:192.168.1.1:12345->::ffff:192.168.1.2:80"
 
         Args:
             conn_str: Connection string
@@ -250,9 +482,13 @@ class SocketDataParser:
         Raises:
             ValueError: If connection string format is invalid
         """
+        # Normalize IPv4-mapped IPv6 to IPv4
+        # Remove ::ffff: prefix if present
+        normalized = conn_str.replace('::ffff:', '')
+
         # Match pattern: IP:PORT->IP:PORT
         pattern = r'(\d+\.\d+\.\d+\.\d+):(\d+)->(\d+\.\d+\.\d+\.\d+):(\d+)'
-        match = re.match(pattern, conn_str)
+        match = re.match(pattern, normalized)
 
         if not match:
             raise ValueError(f"Invalid connection string format: {conn_str}")

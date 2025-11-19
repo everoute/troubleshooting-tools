@@ -81,8 +81,11 @@ class L3Stats:
 class L4Stats:
     """Layer 4 statistics"""
     tcp_packets: int
+    tcp_bytes: int
     udp_packets: int
+    udp_bytes: int
     other_packets: int
+    other_bytes: int
     total_bytes: int
 
 

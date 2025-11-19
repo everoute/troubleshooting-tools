@@ -736,47 +736,55 @@ class TCPConnectionAnalyzer:
         # Basic metrics
         analysis['metrics']['recv_q'] = conn.recv_q
         analysis['metrics']['send_q'] = conn.send_q
-        analysis['metrics']['rtt'] = f"{conn.rtt:.3f} ms"
-        analysis['metrics']['rttvar'] = f"{conn.rttvar:.3f} ms"
+        analysis['metrics']['rtt'] = f"{conn.rtt:.3f} ms" if conn.rtt > 0 else "0.000 ms"
+        analysis['metrics']['rttvar'] = f"{conn.rttvar:.3f} ms" if conn.rttvar > 0 else "0.000 ms"
+        analysis['metrics']['minrtt'] = f"{conn.minrtt:.3f} ms" if conn.minrtt > 0 else ""
+        analysis['metrics']['rto'] = f"{conn.rto} ms" if conn.rto > 0 else ""
         analysis['metrics']['cwnd'] = conn.cwnd
         analysis['metrics']['ssthresh'] = conn.ssthresh
         analysis['metrics']['rcv_space'] = f"{conn.rcv_space} bytes ({conn.rcv_space/1024:.1f} KB)"
+        analysis['metrics']['rcv_ssthresh'] = f"{conn.rcv_ssthresh} bytes" if conn.rcv_ssthresh > 0 else ""
+        analysis['metrics']['snd_wnd'] = f"{conn.snd_wnd} bytes" if conn.snd_wnd > 0 else ""
         analysis['metrics']['mss'] = conn.mss
         analysis['metrics']['pmtu'] = conn.pmtu
+        analysis['metrics']['advmss'] = conn.advmss if conn.advmss > 0 else ""
+        analysis['metrics']['rcvmss'] = conn.rcvmss if conn.rcvmss > 0 else ""
+        analysis['metrics']['wscale'] = conn.wscale if conn.wscale else ""
 
-        # Rate metrics
-        if conn.send_rate > 0:
-            analysis['metrics']['send_rate'] = f"{conn.send_rate/1000000000:.2f} Gbps"
-        if conn.pacing_rate > 0:
-            analysis['metrics']['pacing_rate'] = f"{conn.pacing_rate/1000000000:.2f} Gbps"
-        if conn.delivery_rate > 0:
-            analysis['metrics']['delivery_rate'] = f"{conn.delivery_rate/1000000000:.2f} Gbps"
+        # Rate metrics (always output)
+        analysis['metrics']['send_rate'] = f"{conn.send_rate/1000000000:.2f} Gbps" if conn.send_rate > 0 else ""
+        analysis['metrics']['pacing_rate'] = f"{conn.pacing_rate/1000000000:.2f} Gbps" if conn.pacing_rate > 0 else ""
+        analysis['metrics']['delivery_rate'] = f"{conn.delivery_rate/1000000000:.2f} Gbps" if conn.delivery_rate > 0 else ""
 
-        # Retransmission
+        # Retransmission (always output)
         analysis['metrics']['retrans'] = f"{conn.retrans}/{conn.retrans_total}"
-        if conn.lost > 0:
-            analysis['metrics']['lost'] = conn.lost
+        analysis['metrics']['lost'] = conn.lost if conn.lost > 0 else ""
 
-        # NEW: Unacknowledged and SACK metrics
-        if conn.unacked > 0:
-            analysis['metrics']['unacked'] = conn.unacked
-            # Calculate in-flight data
-            if conn.mss > 0:
-                inflight_bytes = conn.unacked * conn.mss
-                analysis['metrics']['inflight_data'] = f"{inflight_bytes} bytes ({inflight_bytes/1024:.1f} KB)"
+        # Unacknowledged and SACK metrics (always output)
+        analysis['metrics']['unacked'] = conn.unacked if conn.unacked > 0 else ""
+        # Calculate in-flight data
+        if conn.unacked > 0 and conn.mss > 0:
+            inflight_bytes = conn.unacked * conn.mss
+            analysis['metrics']['inflight_data'] = f"{inflight_bytes} bytes ({inflight_bytes/1024:.1f} KB)"
+        else:
+            analysis['metrics']['inflight_data'] = ""
 
-        if conn.sacked > 0:
-            analysis['metrics']['sacked'] = conn.sacked
+        analysis['metrics']['sacked'] = conn.sacked if conn.sacked > 0 else ""
+        analysis['metrics']['dsack_dups'] = conn.dsack_dups if conn.dsack_dups > 0 else ""
 
-        if conn.dsack_dups > 0:
-            analysis['metrics']['dsack_dups'] = conn.dsack_dups
-            # Calculate spurious retransmission rate
-            if conn.retrans_total > 0:
-                spurious_rate = (conn.dsack_dups / conn.retrans_total) * 100
-                analysis['metrics']['spurious_retrans_rate'] = f"{spurious_rate:.3f}%"
+        # Calculate spurious retransmission rate
+        if conn.dsack_dups > 0 and conn.retrans_total > 0:
+            spurious_rate = (conn.dsack_dups / conn.retrans_total) * 100
+            analysis['metrics']['spurious_retrans_rate'] = f"{spurious_rate:.3f}%"
+        else:
+            analysis['metrics']['spurious_retrans_rate'] = ""
 
-        if conn.fackets > 0:
-            analysis['metrics']['fackets'] = conn.fackets
+        analysis['metrics']['fackets'] = conn.fackets if conn.fackets > 0 else ""
+
+        # Bytes metrics (always output)
+        analysis['metrics']['bytes_sent'] = conn.bytes_sent if conn.bytes_sent > 0 else ""
+        analysis['metrics']['bytes_acked'] = conn.bytes_acked if conn.bytes_acked > 0 else ""
+        analysis['metrics']['bytes_received'] = conn.bytes_received if conn.bytes_received > 0 else ""
 
         # NEW: Segment counters and retransmission ratio
         if conn.segs_out > 0:
@@ -793,47 +801,44 @@ class TCPConnectionAnalyzer:
                 data_efficiency = (conn.data_segs_out / conn.segs_out) * 100
                 analysis['metrics']['data_efficiency'] = f"{data_efficiency:.1f}%"
 
-        # NEW: Timing metrics
-        if conn.lastsnd > 0:
-            analysis['metrics']['lastsnd'] = f"{conn.lastsnd} ms ago"
-        if conn.lastrcv > 0:
-            analysis['metrics']['lastrcv'] = f"{conn.lastrcv} ms ago"
-        if conn.lastack > 0:
-            analysis['metrics']['lastack'] = f"{conn.lastack} ms ago"
+        # Timing metrics (always output)
+        analysis['metrics']['lastsnd'] = f"{conn.lastsnd} ms ago" if conn.lastsnd > 0 else ""
+        analysis['metrics']['lastrcv'] = f"{conn.lastrcv} ms ago" if conn.lastrcv > 0 else ""
+        analysis['metrics']['lastack'] = f"{conn.lastack} ms ago" if conn.lastack > 0 else ""
 
-        # NEW: Application and receiver metrics
-        if conn.app_limited:
-            analysis['metrics']['app_limited'] = "YES"
-        if conn.rcv_rtt > 0:
-            analysis['metrics']['rcv_rtt'] = f"{conn.rcv_rtt:.3f} ms"
-        if conn.minrtt > 0:
-            analysis['metrics']['minrtt'] = f"{conn.minrtt:.3f} ms"
+        # Application and receiver metrics (always output)
+        analysis['metrics']['app_limited'] = "YES" if conn.app_limited else ""
+        analysis['metrics']['rcv_rtt'] = f"{conn.rcv_rtt:.3f} ms" if conn.rcv_rtt > 0 else ""
+        analysis['metrics']['ato'] = f"{conn.ato} ms" if conn.ato > 0 else ""
 
-        # NEW: Congestion control
-        if conn.congestion_algorithm:
-            analysis['metrics']['congestion_algorithm'] = conn.congestion_algorithm
+        # Congestion control (always output)
+        analysis['metrics']['congestion_algorithm'] = conn.congestion_algorithm if conn.congestion_algorithm else ""
+        analysis['metrics']['ca_state'] = conn.ca_state if conn.ca_state else ""
 
-        # NEW: Reordering
-        if conn.reordering > 0:
-            analysis['metrics']['reordering'] = conn.reordering
+        # Reordering (always output)
+        analysis['metrics']['reordering'] = conn.reordering if conn.reordering > 0 else ""
 
-        # NEW: Out-of-order packets received
+        # Out-of-order packets received (always output)
         if conn.rcv_ooopack > 0:
             analysis['metrics']['rcv_ooopack'] = f"{conn.rcv_ooopack:,} packets"
             # Calculate OOO ratio if we have total received segments
             if conn.segs_in > 0:
                 ooo_ratio = (conn.rcv_ooopack / conn.segs_in) * 100
                 analysis['metrics']['ooo_ratio'] = f"{ooo_ratio:.3f}%"
+            else:
+                analysis['metrics']['ooo_ratio'] = ""
+        else:
+            analysis['metrics']['rcv_ooopack'] = ""
+            analysis['metrics']['ooo_ratio'] = ""
 
-        # NEW: ACK timeout
-        if conn.ato > 0:
-            analysis['metrics']['ato'] = f"{conn.ato} ms"
-
-        # NEW: MSS metrics
-        if conn.advmss > 0:
-            analysis['metrics']['advmss'] = conn.advmss
-        if conn.rcvmss > 0:
-            analysis['metrics']['rcvmss'] = conn.rcvmss
+        # Limited statistics (always output - may be empty if kernel doesn't support)
+        analysis['metrics']['busy_time'] = f"{conn.busy_time} ms" if conn.busy_time > 0 else ""
+        analysis['metrics']['rwnd_limited_time'] = f"{conn.rwnd_limited_time} ms" if conn.rwnd_limited_time > 0 else ""
+        analysis['metrics']['rwnd_limited_ratio'] = f"{conn.rwnd_limited_ratio:.1f}%" if conn.rwnd_limited_ratio > 0 else ""
+        analysis['metrics']['sndbuf_limited_time'] = f"{conn.sndbuf_limited_time} ms" if conn.sndbuf_limited_time > 0 else ""
+        analysis['metrics']['sndbuf_limited_ratio'] = f"{conn.sndbuf_limited_ratio:.1f}%" if conn.sndbuf_limited_ratio > 0 else ""
+        analysis['metrics']['cwnd_limited_time'] = f"{conn.cwnd_limited_time} ms" if conn.cwnd_limited_time > 0 else ""
+        analysis['metrics']['cwnd_limited_ratio'] = f"{conn.cwnd_limited_ratio:.1f}%" if conn.cwnd_limited_ratio > 0 else ""
 
         # NEW: Socket memory - display all fields (even if 0)
         # Note: only display if at least one skmem field is parsed (skmem_rb or skmem_tb typically present)

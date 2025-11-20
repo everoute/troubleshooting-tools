@@ -293,7 +293,7 @@ display_report() {
     done
 
     # Display report header
-    local current_time=$(date '+%H:%M:%S')
+    local current_time=$(date '+%Y-%m-%d %H:%M:%S')
     echo "======== CPU Usage Report - $current_time ========"
     printf "Monitoring: %d CPUs, Interval: %.1fs, Collection Time: %.2fs" \
         $(echo "$target_cpus" | wc -w) "$interval" "$collection_duration"

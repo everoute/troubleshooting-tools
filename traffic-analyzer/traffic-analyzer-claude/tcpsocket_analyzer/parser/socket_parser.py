@@ -183,17 +183,84 @@ class SocketDataParser:
             if 'timestamp' in df.columns:
                 df['timestamp'] = pd.to_datetime(df['timestamp'], unit='s')
 
-            # Fill missing values with appropriate defaults
-            numeric_columns = [
-                'rtt', 'rttvar', 'minrtt', 'rto', 'cwnd', 'ssthresh', 'rwnd',
-                'pacing_rate', 'delivery_rate', 'send_rate',
-                'socket_tx_queue', 'socket_tx_buffer',
-                'socket_rx_queue', 'socket_rx_buffer',
-                'packets_out', 'retrans', 'retrans_rate'
+            # Define complete column list (102 fields total)
+            # String columns
+            string_columns = [
+                'connection', 'state', 'congestion_algorithm', 'ca_state',
+                'app_limited', 'tcp_features', 'wscale',
+                'timer_state', 'cgroup_path', 'mptcp_flags'
             ]
 
+            # Numeric columns
+            numeric_columns = [
+                # RTT and timeout metrics
+                'rtt', 'rttvar', 'minrtt', 'rto',
+                # Window metrics
+                'cwnd', 'ssthresh', 'rwnd', 'rcv_ssthresh', 'snd_wnd',
+                # MSS and MTU
+                'mss', 'pmtu', 'advmss', 'rcvmss',
+                # Window scaling
+                'wscale_snd', 'wscale_rcv',
+                # Rate metrics
+                'send_rate', 'pacing_rate', 'delivery_rate', 'max_pacing_rate',
+                # Queue sizes
+                'send_q', 'recv_q',
+                # Socket memory
+                'socket_tx_queue', 'socket_tx_buffer',
+                'socket_rx_queue', 'socket_rx_buffer',
+                'socket_forward_alloc', 'socket_write_queue',
+                'socket_opt_mem', 'socket_backlog', 'socket_dropped',
+                # Packet metrics
+                'packets_out', 'inflight_data',
+                # Retransmission metrics
+                'retrans', 'retrans_rate', 'retrans_total',
+                'lost', 'sacked', 'dsack_dups', 'spurious_retrans_rate',
+                # Segment counters
+                'segs_out', 'segs_in', 'data_segs_out', 'data_segs_in',
+                # Byte counters
+                'bytes_sent', 'bytes_acked', 'bytes_received', 'bytes_retrans',
+                # Delivery metrics
+                'delivered', 'delivered_ce',
+                # Reordering metrics
+                'reordering', 'rcv_ooopack', 'reord_seen',
+                # Not sent bytes
+                'notsent',
+                # Timing metrics
+                'lastsnd', 'lastrcv', 'lastack',
+                # Receiver metrics
+                'rcv_rtt', 'ato',
+                # Limitation statistics
+                'busy_time',
+                'rwnd_limited_time', 'rwnd_limited_ratio',
+                'sndbuf_limited_time', 'sndbuf_limited_ratio',
+                'cwnd_limited_time', 'cwnd_limited_ratio',
+                # TCP options (boolean, stored as 0/1)
+                'tcp_ecn', 'tcp_ecnseen', 'tcp_fastopen',
+                # BDP calculation
+                'bdp', 'recommended_window',
+                # Timer information
+                'timer_expires_ms', 'timer_retrans', 'backoff',
+                # Socket identity
+                'uid', 'ino', 'sk_cookie', 'bpf_id',
+                'tos', 'tclass', 'priority',
+                # BBR specific metrics
+                'bbr_bw', 'bbr_mrtt', 'bbr_pacing_gain', 'bbr_cwnd_gain',
+                # DCTCP specific metrics
+                'dctcp_ce_state', 'dctcp_alpha', 'dctcp_ab_ecn', 'dctcp_ab_tot',
+                # MPTCP specific metrics
+                'mptcp_token', 'mptcp_seq', 'mptcp_maplen'
+            ]
+
+            # Add missing string columns with empty string
+            for col in string_columns:
+                if col not in df.columns:
+                    df[col] = ''
+
+            # Add missing numeric columns with 0.0
             for col in numeric_columns:
-                if col in df.columns:
+                if col not in df.columns:
+                    df[col] = 0.0
+                else:
                     df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0)
 
             return df
@@ -250,8 +317,10 @@ class SocketDataParser:
         Align client and server time-series data
 
         Algorithm:
-        Use pandas merge_asof for nearest-neighbor timestamp matching
-        Tolerance is max_offset seconds (default 1 second)
+        1. Add suffixes to all columns except timestamp (before merge)
+        2. Use pandas merge_asof for nearest-neighbor timestamp matching
+        3. Remove all-zero and all-null columns from aligned data
+        4. Tolerance is max_offset seconds (default 1 second)
 
         Args:
             client_df: Client-side DataFrame
@@ -260,23 +329,56 @@ class SocketDataParser:
 
         Returns:
             Aligned DataFrame with both client and server metrics
+            All columns have _client or _server suffix (except timestamp)
         """
         # Reset index to ensure timestamp is a column
-        client_reset = client_df.reset_index(drop=True)
-        server_reset = server_df.reset_index(drop=True)
+        client_reset = client_df.reset_index(drop=True).copy()
+        server_reset = server_df.reset_index(drop=True).copy()
+
+        # Manually add suffixes to all columns except timestamp
+        # This ensures ALL columns get suffixes, even if they only exist on one side
+        client_cols_to_rename = {col: f'{col}_client' for col in client_reset.columns if col != 'timestamp'}
+        server_cols_to_rename = {col: f'{col}_server' for col in server_reset.columns if col != 'timestamp'}
+
+        client_reset.rename(columns=client_cols_to_rename, inplace=True)
+        server_reset.rename(columns=server_cols_to_rename, inplace=True)
 
         # Perform merge_asof (requires sorted data)
+        # Now suffixes parameter won't be used since all columns already have suffixes
         aligned = pd.merge_asof(
             client_reset,
             server_reset,
             on='timestamp',
             direction='nearest',
-            tolerance=pd.Timedelta(seconds=max_offset),
-            suffixes=('_client', '_server')
+            tolerance=pd.Timedelta(seconds=max_offset)
         )
 
         # Drop rows with missing data (no match within tolerance)
         aligned = aligned.dropna()
+
+        # Remove all-zero and all-null columns
+        # Keep only columns that have at least one non-zero, non-null value
+        cols_to_keep = ['timestamp']  # Always keep timestamp
+        for col in aligned.columns:
+            if col == 'timestamp':
+                continue
+
+            # Check if column is all zeros or all nulls
+            col_data = pd.to_numeric(aligned[col], errors='coerce')
+            has_nonzero = (col_data != 0).any()
+            has_nonnull = col_data.notna().any()
+
+            # Keep if it has any non-zero or non-null values
+            if has_nonzero or has_nonnull:
+                # Additional check: if column is string type, check for non-empty strings
+                if aligned[col].dtype == 'object':
+                    has_nonempty = (aligned[col].astype(str).str.strip() != '').any()
+                    if has_nonempty:
+                        cols_to_keep.append(col)
+                else:
+                    cols_to_keep.append(col)
+
+        aligned = aligned[cols_to_keep]
 
         # Set timestamp as index
         aligned.set_index('timestamp', inplace=True)

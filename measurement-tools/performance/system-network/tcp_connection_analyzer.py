@@ -56,6 +56,12 @@ class TCPConnectionInfo:
         self.recv_q = 0
         self.send_q = 0
 
+        # Timer information
+        self.timer_state = ""
+        self.timer_expires_ms = 0
+        self.timer_retrans = 0
+        self.backoff = 0
+
         # RTT metrics
         self.rtt = 0.0
         self.rttvar = 0.0
@@ -73,10 +79,13 @@ class TCPConnectionInfo:
         self.snd_wnd = 0
         self.advmss = 0
         self.rcvmss = 0
+        self.wscale_snd = 0
+        self.wscale_rcv = 0
 
         # Rate metrics
         self.send_rate = 0
         self.pacing_rate = 0
+        self.max_pacing_rate = 0
         self.delivery_rate = 0
 
         # Retransmission
@@ -87,6 +96,10 @@ class TCPConnectionInfo:
         self.sacked = 0  # SACKed segments
         self.dsack_dups = 0  # D-SACK duplicate reports
         self.fackets = 0  # Forward acknowledgment
+        self.reord_seen = 0
+        self.notsent = 0
+        self.delivered = 0
+        self.delivered_ce = 0
 
         # Time limited statistics
         self.busy_time = 0
@@ -101,6 +114,7 @@ class TCPConnectionInfo:
         self.bytes_sent = 0
         self.bytes_acked = 0
         self.bytes_received = 0
+        self.bytes_retrans = 0
 
         # Other metrics
         self.mss = 0
@@ -140,11 +154,40 @@ class TCPConnectionInfo:
         # TCP options/features
         self.tcp_ts = False  # TCP timestamps enabled
         self.tcp_sack = False  # SACK enabled
+        self.tcp_ecn = False
+        self.tcp_ecnseen = False
+        self.tcp_fastopen = False
 
-        # Process information
+        # Process and socket identity information
         self.process_name = ""
         self.process_pid = 0
         self.process_fd = 0
+        self.uid = 0
+        self.ino = 0
+        self.sk_cookie = 0
+        self.bpf_id = 0
+        self.cgroup_path = ""
+        self.tos = 0
+        self.tclass = 0
+        self.priority = 0
+
+        # BBR congestion control specific
+        self.bbr_bw = 0
+        self.bbr_mrtt = 0.0
+        self.bbr_pacing_gain = 0.0
+        self.bbr_cwnd_gain = 0.0
+
+        # DCTCP congestion control specific
+        self.dctcp_ce_state = 0
+        self.dctcp_alpha = 0
+        self.dctcp_ab_ecn = 0
+        self.dctcp_ab_tot = 0
+
+        # MPTCP specific
+        self.mptcp_flags = ""
+        self.mptcp_token = 0
+        self.mptcp_seq = 0
+        self.mptcp_maplen = 0
 
         # Timestamp
         self.timestamp = datetime.now()
@@ -478,6 +521,18 @@ class TCPConnectionAnalyzer:
     def _parse_metrics(self, conn, line):
         """Parse metrics from ss output line"""
 
+        # Timer: timer:(on,200ms,0)
+        match = re.search(r'timer:\((\w+),([\d.]+)ms,(\d+)\)', line)
+        if match:
+            conn.timer_state = match.group(1)
+            conn.timer_expires_ms = int(float(match.group(2)))
+            conn.timer_retrans = int(match.group(3))
+
+        # Backoff: backoff:5
+        match = re.search(r'backoff:(\d+)', line)
+        if match:
+            conn.backoff = int(match.group(1))
+
         # RTT: rtt:0.078/0.036
         match = re.search(r'rtt:([\d.]+)/([\d.]+)', line)
         if match:
@@ -513,6 +568,13 @@ class TCPConnectionAnalyzer:
         match = re.search(r'wscale:([\d,]+)', line)
         if match:
             conn.wscale = match.group(1)
+            parts = match.group(1).split(',')
+            if len(parts) == 2:
+                try:
+                    conn.wscale_snd = int(parts[0])
+                    conn.wscale_rcv = int(parts[1])
+                except ValueError:
+                    pass
 
         # Send rate: send 148512820bps
         match = re.search(r'send ([\d.]+)([KMG]?)bps', line)
@@ -523,6 +585,11 @@ class TCPConnectionAnalyzer:
         match = re.search(r'pacing_rate ([\d.]+)([KMG]?)bps', line)
         if match:
             conn.pacing_rate = self._parse_rate(match.group(1), match.group(2))
+
+        # Max pacing rate: max_pacing_rate 300000000bps
+        match = re.search(r'max_pacing_rate ([\d.]+)([KMG]?)bps', line)
+        if match:
+            conn.max_pacing_rate = self._parse_rate(match.group(1), match.group(2))
 
         # Delivery rate: delivery_rate 3200000000bps
         match = re.search(r'delivery_rate ([\d.]+)([KMG]?)bps', line)
@@ -559,6 +626,26 @@ class TCPConnectionAnalyzer:
         match = re.search(r'fackets:(\d+)', line)
         if match:
             conn.fackets = int(match.group(1))
+
+        # Reordering seen: reord_seen:10
+        match = re.search(r'reord_seen:(\d+)', line)
+        if match:
+            conn.reord_seen = int(match.group(1))
+
+        # Not sent bytes: notsent:1024
+        match = re.search(r'notsent:(\d+)', line)
+        if match:
+            conn.notsent = int(match.group(1))
+
+        # Delivered packets: delivered:100
+        match = re.search(r'delivered:(\d+)', line)
+        if match:
+            conn.delivered = int(match.group(1))
+
+        # Delivered CE packets: delivered_ce:5
+        match = re.search(r'delivered_ce:(\d+)', line)
+        if match:
+            conn.delivered_ce = int(match.group(1))
 
         # Receive space: rcv_space:14480
         match = re.search(r'rcv_space:(\d+)', line)
@@ -612,6 +699,11 @@ class TCPConnectionAnalyzer:
         match = re.search(r'bytes_received:(\d+)', line)
         if match:
             conn.bytes_received = int(match.group(1))
+
+        # Bytes retransmitted: bytes_retrans:1024
+        match = re.search(r'bytes_retrans:(\d+)', line)
+        if match:
+            conn.bytes_retrans = int(match.group(1))
 
         # Reordering: reordering:56
         match = re.search(r'reordering:(\d+)', line)
@@ -680,10 +772,17 @@ class TCPConnectionAnalyzer:
             conn.congestion_algorithm = ca_match.group(1).lower()
 
         # TCP options/features
-        if 'ts' in line.split():  # Check if 'ts' appears as a standalone word
+        line_words = line.split()
+        if 'ts' in line_words:
             conn.tcp_ts = True
-        if 'sack' in line.split():  # Check if 'sack' appears as a standalone word
+        if 'sack' in line_words:
             conn.tcp_sack = True
+        if 'ecn' in line_words:
+            conn.tcp_ecn = True
+        if 'ecnseen' in line_words:
+            conn.tcp_ecnseen = True
+        if 'fastopen' in line_words:
+            conn.tcp_fastopen = True
 
         # Socket memory: skmem:(r0,rb87380,t0,tb87040,f0,w0,o0,bl0,d0)
         match = re.search(r'skmem:\(r(\d+),rb(\d+),t(\d+),tb(\d+),f(\d+),w(\d+),o(\d+),bl(\d+),d(\d+)\)', line)
@@ -704,6 +803,86 @@ class TCPConnectionAnalyzer:
             conn.process_name = match.group(1)
             conn.process_pid = int(match.group(2))
             conn.process_fd = int(match.group(3))
+
+        # UID: uid:1000
+        match = re.search(r'uid:(\d+)', line)
+        if match:
+            conn.uid = int(match.group(1))
+
+        # Inode: ino:12345
+        match = re.search(r'ino:(\d+)', line)
+        if match:
+            conn.ino = int(match.group(1))
+
+        # Socket cookie: sk:abc123
+        match = re.search(r'sk:([0-9a-fA-F]+)', line)
+        if match:
+            conn.sk_cookie = int(match.group(1), 16)
+
+        # BPF program ID: bpf:15
+        match = re.search(r'bpf:(\d+)', line)
+        if match:
+            conn.bpf_id = int(match.group(1))
+
+        # Cgroup path: cgroup:/system.slice/docker-abc123.scope
+        match = re.search(r'cgroup:([^\s]+)', line)
+        if match:
+            conn.cgroup_path = match.group(1)
+
+        # TOS: tos:0x10
+        match = re.search(r'tos:(0x[0-9a-fA-F]+|\d+)', line)
+        if match:
+            tos_str = match.group(1)
+            conn.tos = int(tos_str, 16) if tos_str.startswith('0x') else int(tos_str)
+
+        # Traffic class: tclass:0x20
+        match = re.search(r'tclass:(0x[0-9a-fA-F]+|\d+)', line)
+        if match:
+            tclass_str = match.group(1)
+            conn.tclass = int(tclass_str, 16) if tclass_str.startswith('0x') else int(tclass_str)
+
+        # Priority: priority:6
+        match = re.search(r'priority:(\d+)', line)
+        if match:
+            conn.priority = int(match.group(1))
+
+        # BBR specific: bbr:(bw:10000000bps,mrtt:10.5,pacing_gain:1.25,cwnd_gain:2.0)
+        match = re.search(r'bbr:\(bw:([\d.]+)([KMG]?)bps,mrtt:([\d.]+),pacing_gain:([\d.]+),cwnd_gain:([\d.]+)\)', line)
+        if match:
+            conn.bbr_bw = self._parse_rate(match.group(1), match.group(2))
+            conn.bbr_mrtt = float(match.group(3))
+            conn.bbr_pacing_gain = float(match.group(4))
+            conn.bbr_cwnd_gain = float(match.group(5))
+
+        # DCTCP specific: dctcp:(ce_state:1,alpha:128,ab_ecn:1000,ab_tot:10000)
+        match = re.search(r'dctcp:\(ce_state:(\d+),alpha:(\d+),ab_ecn:(\d+),ab_tot:(\d+)\)', line)
+        if match:
+            conn.dctcp_ce_state = int(match.group(1))
+            conn.dctcp_alpha = int(match.group(2))
+            conn.dctcp_ab_ecn = int(match.group(3))
+            conn.dctcp_ab_tot = int(match.group(4))
+
+        # MPTCP specific: mptcp:<flags> token:abc123 seq:12345 maplen:100
+        match = re.search(r'mptcp:([^\s]+)', line)
+        if match:
+            conn.mptcp_flags = match.group(1)
+
+        match = re.search(r'token:([0-9a-fA-F]+)', line)
+        if match:
+            conn.mptcp_token = int(match.group(1), 16)
+
+        match = re.search(r'seq:(\d+)', line)
+        if match:
+            conn.mptcp_seq = int(match.group(1))
+
+        match = re.search(r'maplen:(\d+)', line)
+        if match:
+            conn.mptcp_maplen = int(match.group(1))
+
+        # CA state: ca_state:Open
+        match = re.search(r'ca_state:(\w+)', line)
+        if match:
+            conn.ca_state = match.group(1)
 
         # Out-of-order packets: rcv_ooopack:715154
         match = re.search(r'rcv_ooopack:(\d+)', line)
@@ -871,6 +1050,87 @@ class TCPConnectionAnalyzer:
             bdp_bytes = self._calculate_bdp(conn.rtt / 1000, self.args.target_bandwidth)
             analysis['metrics']['bdp'] = f"{bdp_bytes} bytes ({bdp_bytes/1024:.1f} KB)"
             analysis['metrics']['recommended_window'] = f"{bdp_bytes * 4} bytes ({bdp_bytes * 4 / 1024:.1f} KB)"
+
+        # NEW: Timer information
+        if conn.timer_state:
+            analysis['metrics']['timer_state'] = conn.timer_state
+            if conn.timer_expires_ms > 0:
+                analysis['metrics']['timer_expires_ms'] = f"{conn.timer_expires_ms} ms"
+            if conn.timer_retrans > 0:
+                analysis['metrics']['timer_retrans'] = conn.timer_retrans
+            if conn.backoff > 0:
+                analysis['metrics']['backoff'] = conn.backoff
+
+        # NEW: Window scale separation
+        if conn.wscale_snd > 0 or conn.wscale_rcv > 0:
+            analysis['metrics']['wscale_snd'] = conn.wscale_snd
+            analysis['metrics']['wscale_rcv'] = conn.wscale_rcv
+
+        # NEW: Max pacing rate
+        if conn.max_pacing_rate > 0:
+            analysis['metrics']['max_pacing_rate'] = f"{conn.max_pacing_rate/1000000000:.2f} Gbps"
+
+        # NEW: Retransmission/delivery metrics
+        if conn.bytes_retrans > 0:
+            analysis['metrics']['bytes_retrans'] = f"{conn.bytes_retrans} bytes ({conn.bytes_retrans/1024:.1f} KB)"
+        if conn.reord_seen > 0:
+            analysis['metrics']['reord_seen'] = conn.reord_seen
+        if conn.notsent > 0:
+            analysis['metrics']['notsent'] = f"{conn.notsent} bytes ({conn.notsent/1024:.1f} KB)"
+        if conn.delivered > 0:
+            analysis['metrics']['delivered'] = conn.delivered
+        if conn.delivered_ce > 0:
+            analysis['metrics']['delivered_ce'] = conn.delivered_ce
+
+        # NEW: TCP options (ECN, Fast Open)
+        if conn.tcp_ecn:
+            analysis['metrics']['tcp_ecn'] = "YES"
+        if conn.tcp_ecnseen:
+            analysis['metrics']['tcp_ecnseen'] = "YES"
+        if conn.tcp_fastopen:
+            analysis['metrics']['tcp_fastopen'] = "YES"
+
+        # NEW: Socket identity
+        if conn.uid > 0:
+            analysis['metrics']['uid'] = conn.uid
+        if conn.ino > 0:
+            analysis['metrics']['ino'] = conn.ino
+        if conn.sk_cookie > 0:
+            analysis['metrics']['sk_cookie'] = f"0x{conn.sk_cookie:x}"
+        if conn.bpf_id > 0:
+            analysis['metrics']['bpf_id'] = conn.bpf_id
+        if conn.cgroup_path:
+            analysis['metrics']['cgroup_path'] = conn.cgroup_path
+        if conn.tos > 0:
+            analysis['metrics']['tos'] = f"0x{conn.tos:x}"
+        if conn.tclass > 0:
+            analysis['metrics']['tclass'] = f"0x{conn.tclass:x}"
+        if conn.priority > 0:
+            analysis['metrics']['priority'] = conn.priority
+
+        # NEW: BBR specific metrics
+        if conn.bbr_bw > 0:
+            analysis['metrics']['bbr_bw'] = f"{conn.bbr_bw/1000000000:.2f} Gbps"
+            analysis['metrics']['bbr_mrtt'] = f"{conn.bbr_mrtt:.3f} ms"
+            analysis['metrics']['bbr_pacing_gain'] = f"{conn.bbr_pacing_gain:.2f}"
+            analysis['metrics']['bbr_cwnd_gain'] = f"{conn.bbr_cwnd_gain:.2f}"
+
+        # NEW: DCTCP specific metrics
+        if conn.dctcp_alpha > 0:
+            analysis['metrics']['dctcp_ce_state'] = conn.dctcp_ce_state
+            analysis['metrics']['dctcp_alpha'] = conn.dctcp_alpha
+            analysis['metrics']['dctcp_ab_ecn'] = conn.dctcp_ab_ecn
+            analysis['metrics']['dctcp_ab_tot'] = conn.dctcp_ab_tot
+
+        # NEW: MPTCP specific metrics
+        if conn.mptcp_flags:
+            analysis['metrics']['mptcp_flags'] = conn.mptcp_flags
+        if conn.mptcp_token > 0:
+            analysis['metrics']['mptcp_token'] = f"0x{conn.mptcp_token:x}"
+        if conn.mptcp_seq > 0:
+            analysis['metrics']['mptcp_seq'] = conn.mptcp_seq
+        if conn.mptcp_maplen > 0:
+            analysis['metrics']['mptcp_maplen'] = conn.mptcp_maplen
 
         # Bottleneck detection
         self._detect_bottlenecks(conn, analysis)

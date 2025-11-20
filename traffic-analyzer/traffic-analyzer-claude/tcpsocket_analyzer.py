@@ -26,22 +26,25 @@ from convert_socket_log_to_csv import convert_log_to_csv
 def export_csv_files(args):
     """
     Export parsed socket log files to CSV using unified conversion tool
+    Generates client, server, and aligned CSV files with statistics appended
 
     Args:
         args: Command-line arguments containing export settings
+
+    Returns:
+        Dictionary with statistics DataFrames for client, server, and aligned data
     """
     if not args.export_csv:
-        return
+        return None
 
     # Determine output directory
     if args.csv_output_dir:
         output_dir = args.csv_output_dir
     else:
-        # Use client directory as default
-        if os.path.isfile(args.client_dir):
-            output_dir = os.path.dirname(args.client_dir)
-        else:
-            output_dir = args.client_dir
+        # Use client log file directory as default
+        output_dir = os.path.dirname(args.client_log)
+        if not output_dir:
+            output_dir = '.'
 
     # Create output directory if needed
     os.makedirs(output_dir, exist_ok=True)
@@ -49,22 +52,49 @@ def export_csv_files(args):
     # Generate output filenames
     client_csv = os.path.join(output_dir, 'client-socket-parsed.csv')
     server_csv = os.path.join(output_dir, 'server-socket-parsed.csv')
+    aligned_csv = os.path.join(output_dir, 'aligned-socket-parsed.csv')
 
-    # Convert log files to CSV using unified conversion logic
+    # Convert log files to CSV using unified conversion logic (with statistics)
     try:
-        # Determine input log files
-        client_log = args.client_dir
-        server_log = args.server_dir
+        print_info("Converting socket logs to CSV format with statistics...")
 
-        # Convert using unified tool
-        convert_log_to_csv(client_log, client_csv)
-        convert_log_to_csv(server_log, server_csv)
+        # Convert client and server logs (statistics will be auto-appended)
+        stats_client = convert_log_to_csv(args.client_log, client_csv, add_statistics=True)
+        stats_server = convert_log_to_csv(args.server_log, server_csv, add_statistics=True)
 
         print_info(f"Exported client CSV to: {client_csv}")
         print_info(f"Exported server CSV to: {server_csv}")
 
+        # Generate aligned data
+        from tcpsocket_analyzer.parser.socket_parser import SocketDataParser
+        parser = SocketDataParser()
+        client_df, server_df, aligned_df = parser.parse_dual_directories(
+            args.client_log,
+            args.server_log
+        )
+
+        # Export aligned DataFrame to CSV
+        aligned_df.reset_index().to_csv(aligned_csv, index=False)
+
+        # Append statistics to aligned CSV
+        from tcpsocket_analyzer.analyzer.csv_statistics import append_statistics_to_csv
+        stats_aligned = append_statistics_to_csv(aligned_csv)
+
+        print_info(f"Exported aligned CSV to: {aligned_csv}")
+        print_info("All CSV files exported with statistics appended")
+
+        # Return statistics for use by analysis modes
+        return {
+            'client': stats_client,
+            'server': stats_server,
+            'aligned': stats_aligned
+        }
+
     except Exception as e:
         print_error(f"Failed to export CSV files: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 
 def run_summary_mode(args):
@@ -76,9 +106,9 @@ def run_summary_mode(args):
     Args:
         args: Command-line arguments
     """
-    print_info(f"Running summary mode")
-    print_info(f"Client data: {args.client_dir}")
-    print_info(f"Server data: {args.server_dir}")
+    print_info(f"Running summary mode - dual-side analysis")
+    print_info(f"Client log: {args.client_log}")
+    print_info(f"Server log: {args.server_log}")
 
     try:
         # Parse bandwidth
@@ -90,8 +120,8 @@ def run_summary_mode(args):
         parser = SocketDataParser()
         print_info("Parsing client and server data...")
         client_df, server_df, aligned_df = parser.parse_dual_directories(
-            args.client_dir,
-            args.server_dir
+            args.client_log,
+            args.server_log
         )
 
         print_info(f"Client samples: {len(client_df)}")
@@ -148,9 +178,9 @@ def run_detailed_mode(args):
     Args:
         args: Command-line arguments
     """
-    print_info(f"Running detailed mode")
-    print_info(f"Client data: {args.client_dir}")
-    print_info(f"Server data: {args.server_dir}")
+    print_info(f"Running detailed mode - dual-side analysis")
+    print_info(f"Client log: {args.client_log}")
+    print_info(f"Server log: {args.server_log}")
 
     try:
         # Parse bandwidth
@@ -165,8 +195,8 @@ def run_detailed_mode(args):
         parser = SocketDataParser()
         print_info("Parsing client and server data...")
         client_df, server_df, aligned_df = parser.parse_dual_directories(
-            args.client_dir,
-            args.server_dir
+            args.client_log,
+            args.server_log
         )
 
         print_info(f"Client samples: {len(client_df)}")
@@ -221,9 +251,9 @@ def run_pipeline_mode(args):
     Args:
         args: Command-line arguments
     """
-    print_info(f"Running pipeline mode")
-    print_info(f"Client data: {args.client_dir}")
-    print_info(f"Server data: {args.server_dir}")
+    print_info(f"Running pipeline mode - dual-side analysis")
+    print_info(f"Client log: {args.client_log}")
+    print_info(f"Server log: {args.server_log}")
 
     try:
         # Parse bandwidth
@@ -242,8 +272,8 @@ def run_pipeline_mode(args):
         parser = SocketDataParser()
         print_info("Parsing client and server data...")
         client_df, server_df, aligned_df = parser.parse_dual_directories(
-            args.client_dir,
-            args.server_dir
+            args.client_log,
+            args.server_log
         )
 
         print_info(f"Client samples: {len(client_df)}")
@@ -465,24 +495,31 @@ def print_pipeline_results(result, reporter):
 def main():
     """Main entry point for TCP Socket Analyzer CLI"""
     parser = argparse.ArgumentParser(
-        description='TCP Socket Performance Analyzer',
+        description='TCP Socket Performance Analyzer - Dual-Side Analysis Tool\n\n'
+                    'This tool requires BOTH client-side and server-side TCP socket measurements\n'
+                    'of the SAME connection during the SAME time period for accurate analysis.',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Summary mode with log files
-  %(prog)s --mode summary --client-dir client-socket.log --server-dir server-socket.log --bandwidth 1gbps
+  # Summary mode - dual-side analysis
+  %(prog)s --mode summary --client-log client-socket.log --server-log server-socket.log --bandwidth 25gbps
 
   # Detailed mode with timeseries export
-  %(prog)s --mode detailed --client-dir client-socket.log --server-dir server-socket.log --export-timeseries
+  %(prog)s --mode detailed --client-log client-socket.log --server-log server-socket.log --export-timeseries
 
   # Pipeline mode for bottleneck analysis
-  %(prog)s --mode pipeline --client-dir client-socket.log --server-dir server-socket.log --bandwidth 10gbps
-
-  # Using directory containing multiple log files
-  %(prog)s --mode summary --client-dir ./client-logs/ --server-dir ./server-logs/ --bandwidth 25gbps
+  %(prog)s --mode pipeline --client-log client-socket.log --server-log server-socket.log --bandwidth 10gbps
 
   # Export parsed socket data to CSV files
-  %(prog)s --mode summary --client-dir client-socket.log --server-dir server-socket.log --export-csv --csv-output-dir ./output
+  %(prog)s --mode summary --client-log client-socket.log --server-log server-socket.log --export-csv --csv-output-dir ./output
+
+IMPORTANT:
+  This tool performs DUAL-SIDE analysis and requires:
+  - Client-side socket log: measurements from the data sender (e.g., iperf3 client)
+  - Server-side socket log: measurements from the data receiver (e.g., iperf3 server)
+  - Both logs must measure the SAME TCP connection (matching src/dst IPs and ports)
+  - Both logs must cover the SAME time period for accurate time-alignment
+  - Single-side analysis mode is NOT supported
         """
     )
 
@@ -491,17 +528,19 @@ Examples:
         '--mode',
         choices=['summary', 'detailed', 'pipeline'],
         required=True,
-        help='Analysis mode'
+        help='Analysis mode (summary/detailed/pipeline)'
     )
     parser.add_argument(
-        '--client-dir',
+        '--client-log',
         required=True,
-        help='Path to client-side socket log file or directory containing log files'
+        metavar='FILE',
+        help='Path to client-side socket log file (required for dual-side analysis)'
     )
     parser.add_argument(
-        '--server-dir',
+        '--server-log',
         required=True,
-        help='Path to server-side socket log file or directory containing log files'
+        metavar='FILE',
+        help='Path to server-side socket log file (required for dual-side analysis)'
     )
 
     # Optional arguments
@@ -537,20 +576,26 @@ Examples:
 
     args = parser.parse_args()
 
-    # Validate paths (file or directory)
+    # Validate log file paths
     import os
-    if not os.path.exists(args.client_dir):
-        print_error(f"Client path not found: {args.client_dir}")
+    if not os.path.exists(args.client_log):
+        print_error(f"Client log file not found: {args.client_log}")
         sys.exit(1)
-    if not os.access(args.client_dir, os.R_OK):
-        print_error(f"Client path not readable: {args.client_dir}")
+    if not os.path.isfile(args.client_log):
+        print_error(f"Client log path is not a file: {args.client_log}")
+        sys.exit(1)
+    if not os.access(args.client_log, os.R_OK):
+        print_error(f"Client log file not readable: {args.client_log}")
         sys.exit(1)
 
-    if not os.path.exists(args.server_dir):
-        print_error(f"Server path not found: {args.server_dir}")
+    if not os.path.exists(args.server_log):
+        print_error(f"Server log file not found: {args.server_log}")
         sys.exit(1)
-    if not os.access(args.server_dir, os.R_OK):
-        print_error(f"Server path not readable: {args.server_dir}")
+    if not os.path.isfile(args.server_log):
+        print_error(f"Server log path is not a file: {args.server_log}")
+        sys.exit(1)
+    if not os.access(args.server_log, os.R_OK):
+        print_error(f"Server log file not readable: {args.server_log}")
         sys.exit(1)
 
     # Dispatch to appropriate mode

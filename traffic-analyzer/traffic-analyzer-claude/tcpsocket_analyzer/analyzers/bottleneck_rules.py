@@ -28,7 +28,7 @@ class BottleneckRuleBase(ABC):
     path: str = ""  # SEND or RECV
 
     @abstractmethod
-    def detect(self, data: pd.DataFrame) -> Optional[Bottleneck]:
+    def detect(self, data: pd.DataFrame, bandwidth: Optional[float] = None) -> Optional[Bottleneck]:
         """
         Detect bottleneck based on data
 
@@ -62,7 +62,7 @@ class AppSendLimitRule(BottleneckRuleBase):
     rule_name = "Application Send Limitation"
     path = "SEND"
 
-    def detect(self, data: pd.DataFrame) -> Optional[Bottleneck]:
+    def detect(self, data: pd.DataFrame, bandwidth: Optional[float] = None) -> Optional[Bottleneck]:
         """
         Detection logic:
         - Delivery rate << bandwidth (< 50%)
@@ -108,7 +108,7 @@ class SocketTxBufferRule(BottleneckRuleBase):
     rule_name = "Socket Send Buffer Full"
     path = "SEND"
 
-    def detect(self, data: pd.DataFrame) -> Optional[Bottleneck]:
+    def detect(self, data: pd.DataFrame, bandwidth: Optional[float] = None) -> Optional[Bottleneck]:
         """
         Detection condition: socket_tx_queue > 90% socket_tx_buffer
         """
@@ -150,7 +150,7 @@ class TCPWriteQueueRule(BottleneckRuleBase):
     rule_name = "TCP Write Queue Backlog"
     path = "SEND"
 
-    def detect(self, data: pd.DataFrame) -> Optional[Bottleneck]:
+    def detect(self, data: pd.DataFrame, bandwidth: Optional[float] = None) -> Optional[Bottleneck]:
         """
         Detection condition: packets_out close to limit
         """
@@ -189,7 +189,7 @@ class CwndLimitRule(BottleneckRuleBase):
     rule_name = "Congestion Window Limited"
     path = "SEND"
 
-    def detect(self, data: pd.DataFrame) -> Optional[Bottleneck]:
+    def detect(self, data: pd.DataFrame, bandwidth: Optional[float] = None) -> Optional[Bottleneck]:
         """
         Detection condition: packets_out >= 95% CWND
         """
@@ -233,7 +233,7 @@ class RwndLimitRule(BottleneckRuleBase):
     rule_name = "Receiver Window Limited"
     path = "SEND"
 
-    def detect(self, data: pd.DataFrame) -> Optional[Bottleneck]:
+    def detect(self, data: pd.DataFrame, bandwidth: Optional[float] = None) -> Optional[Bottleneck]:
         """
         Detection condition: RWND < CWND frequently
         """
@@ -274,32 +274,30 @@ class NetworkBandwidthRule(BottleneckRuleBase):
     rule_name = "Network Bandwidth Limited"
     path = "SEND"
 
-    def detect(self, data: pd.DataFrame) -> Optional[Bottleneck]:
-        """
-        Detection condition: delivery_rate >= 90% bandwidth
-        """
-        if 'delivery_rate' not in data.columns:
+    def detect(self, data: pd.DataFrame, bandwidth: Optional[float] = None) -> Optional[Bottleneck]:
+        """Detection: delivery_rate approaches configured bandwidth"""
+        if 'delivery_rate' not in data.columns or bandwidth is None or bandwidth <= 0:
             return None
 
-        # Note: Bandwidth parameter needed, use placeholder
-        # In real implementation, pass bandwidth to detect()
         max_delivery_rate = data['delivery_rate'].max()
-
-        # Heuristic: If delivery rate plateaus at high value
         avg_delivery_rate = data['delivery_rate'].mean()
-        if avg_delivery_rate > 900e6:  # > 900 Mbps suggests near 1 Gbps limit
-            utilization = avg_delivery_rate / 1e9
 
+        utilization = avg_delivery_rate / bandwidth if bandwidth else 0.0
+
+        if utilization >= 0.9:
+            severity = 'CRITICAL' if utilization > 0.98 else 'HIGH'
             return Bottleneck(
                 location="NETWORK",
                 path="SEND",
-                pressure=utilization,
-                severity="HIGH",
+                pressure=min(utilization, 1.0),
+                severity=severity,
                 description=f"Network bandwidth saturated at {avg_delivery_rate/1e9:.2f} Gbps",
                 evidence={
                     'avg_delivery_rate': avg_delivery_rate,
                     'max_delivery_rate': max_delivery_rate,
-                    'recommendation': 'Network capacity upgrade may be needed'
+                    'bandwidth': bandwidth,
+                    'utilization': utilization,
+                    'recommendation': 'Network capacity upgrade or LAG/ECMP'
                 }
             )
 
@@ -321,7 +319,7 @@ class NetworkRecvRule(BottleneckRuleBase):
     rule_name = "Network Receive Issues"
     path = "RECV"
 
-    def detect(self, data: pd.DataFrame) -> Optional[Bottleneck]:
+    def detect(self, data: pd.DataFrame, bandwidth: Optional[float] = None) -> Optional[Bottleneck]:
         """
         Detection condition: High retransmission rate or RTT variance
         """
@@ -359,13 +357,37 @@ class TCPRxBufferRule(BottleneckRuleBase):
     rule_name = "TCP Receive Buffer Full"
     path = "RECV"
 
-    def detect(self, data: pd.DataFrame) -> Optional[Bottleneck]:
+    def detect(self, data: pd.DataFrame, bandwidth: Optional[float] = None) -> Optional[Bottleneck]:
         """
         Detection condition: TCP receive queue approaching limit
         """
-        # This would require server-side data
-        # Placeholder implementation
-        return None
+        if 'socket_rx_queue' not in data.columns or 'socket_rx_buffer' not in data.columns:
+            return None
+
+        buf = data['socket_rx_buffer'].mean() if len(data) else 0
+        if buf <= 0:
+            return None
+
+        pressure_series = data['socket_rx_queue'] / data['socket_rx_buffer']
+        pressure = pressure_series.mean()
+
+        if pressure < 0.7:
+            return None
+
+        severity = 'CRITICAL' if pressure > 0.9 else 'HIGH' if pressure > 0.8 else 'MEDIUM'
+
+        return Bottleneck(
+            location="TCP_RX_BUFFER",
+            path="RECV",
+            pressure=pressure,
+            severity=severity,
+            description=f"TCP receive buffer pressure {pressure*100:.1f}%",
+            evidence={
+                'avg_rx_queue': data['socket_rx_queue'].mean(),
+                'avg_rx_buffer': buf,
+                'recommendation': 'Increase tcp_rmem and ensure application drains socket'
+            }
+        )
 
 
 class SocketRxBufferRule(BottleneckRuleBase):
@@ -379,7 +401,7 @@ class SocketRxBufferRule(BottleneckRuleBase):
     rule_name = "Socket Receive Buffer Full"
     path = "RECV"
 
-    def detect(self, data: pd.DataFrame) -> Optional[Bottleneck]:
+    def detect(self, data: pd.DataFrame, bandwidth: Optional[float] = None) -> Optional[Bottleneck]:
         """
         Detection condition: socket_rx_queue > 90% socket_rx_buffer
         """
@@ -421,7 +443,7 @@ class AppReadLimitRule(BottleneckRuleBase):
     rule_name = "Application Read Limitation"
     path = "RECV"
 
-    def detect(self, data: pd.DataFrame) -> Optional[Bottleneck]:
+    def detect(self, data: pd.DataFrame, bandwidth: Optional[float] = None) -> Optional[Bottleneck]:
         """
         Detection condition: Sustained receive buffer pressure
         """

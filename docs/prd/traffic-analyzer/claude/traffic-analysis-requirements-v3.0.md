@@ -242,6 +242,17 @@ scipy>=1.4.0
 - 输出规格
 - 功能需求
 
+### 3.0 通用约束与补充（PCAP 与 TCP Socket）
+
+- 输入过滤与单连接定位：PCAP 工具必须支持 BPF/五元组过滤参数以聚焦单连接；TCP Socket 工具必须强制双端同一连接，检测到多个连接时需报错并终止。
+- 输出格式：所有模式必须支持 JSON 机读输出（text 仅为展示），在需求中明确字段字典；Summary/Detailed/Analysis/Pipeline 需保持报告字段的一致性。
+- 时间对齐：Detailed/Pipeline 场景必须基于双端时间对齐后的数据；若对齐样本不足需给出错误或警告。
+- 瓶颈一致性：Summary 与 Pipeline 的瓶颈结论应一致；如不一致必须输出差异原因和证据。
+- 带宽参数：Pipeline/利用率相关规则必须使用用户提供的带宽参数，禁止使用固定阈值推断网络饱和。
+- 证据与验证：问题/瓶颈输出需给出证据（时间区间/报文或采样值）和验证步骤。
+- 交叉验证：在附录新增 PCAP 与 tcp_info 指标的重叠/差异清单及交叉验证方法，避免误读。
+- 数据质量：输入验证必须覆盖文件存在/可读、格式、单连接约束、字段缺失、时间覆盖不足与对齐失败的处理。
+
 ---
 
 ## 3.A PCAP分析工具特性
@@ -271,7 +282,8 @@ PCAP分析工具从数据包层面分析网络行为，包含以下功能特性�
 **可选参数**:
 ```bash
 --output <file>        # 输出文件路径（默认：stdout）
---format <text|json>   # 输出格式（默认：text）
+--format <text|json>   # 输出格式（默认：text，必须支持json机读）
+--filter <bpf>         # BPF/五元组过滤，仅分析匹配的单连接或流
 --verbose              # 详细输出模式
 ```
 
@@ -304,7 +316,14 @@ PCAP分析工具从数据包层面分析网络行为，包含以下功能特性�
    ├─ 质量指标统计
    └─ Top Talkers分析
 
-5. 格式化输出
+5. （若指定过滤/单连接）执行深度提取
+   ├─ 握手协商：MSS/WS/ECN/SACK 启用情况
+   ├─ 窗口/可靠性：零窗口、重传/乱序、快速重传 vs 超时
+   ├─ 时间序列：基于 TS/握手的 RTT、吞吐/pps、抖动
+   └─ 路径 MTU/DF 异常检测
+   └─ 若指定过滤，则仅针对过滤后的单连接输出事件线/吞吐/窗口/重传
+
+6. 格式化输出
    └─ 按选定格式输出结果
 ```
 
@@ -353,7 +372,7 @@ IP版本:
 TCP:
   数据包数: 1,100,000
   字节数: 1,456,789,012 (1.36 GB)
-  连接数: 1,234
+连接数: 1,234
   端口分布 (Top 5):
     - 443:   450,000 packets (40.9%)
     - 80:    234,567 packets (21.3%)
@@ -961,8 +980,8 @@ TCP Socket分析工具从内核socket状态层面分析TCP性能，包含以下�
 **可选参数**:
 ```bash
 --output <file>              # 输出文件路径
---format <text|json>         # 输出格式
---connection <5tuple>        # 连接过滤（如果有多个连接）
+--format <text|json>         # 输出格式（默认text，必须支持json机读）
+--connection <5tuple>        # 连接过滤（必须唯一；多连接存在时应报错）
 --time-start <time>          # 开始时间
 --time-end <time>            # 结束时间
 ```
@@ -1003,6 +1022,7 @@ Metrics:
 - Client端和Server端数据必须同时提供，用于完整的双向Pipeline分析
 - 两端的采样时间应当基本同步（误差<1秒可接受）
 - 采样点数量可以不完全一致，工具会进行时间对齐
+- 若解析到多个连接，必须报错并中止；仅支持单连接分析
 ```
 
 #### 3.5.3 处理流程
@@ -1047,194 +1067,47 @@ Metrics:
 7. 瓶颈识别
    ├─ Client端瓶颈分析
    ├─ Server端瓶颈分析
-   └─ 双向综合瓶颈评估
+   └─ 双向综合瓶颈评估（需要与Summary瓶颈保持一致或解释差异）
 
-8. 格式化输出
+8. 跨源校验（PCAP/tcp_info）【新增，若提供PCAP可选】
+   ├─ RTT/重传/窗口的交叉验证
+   ├─ 吞吐/带宽利用率对比
+   └─ 输出一致性/差异说明
+
+9. 格式化输出（text + json）
 ```
 
 #### 3.5.4 输出规格
 
+Summary 模式输出（text + json 必须一致）至少包含：
+
+- 摘要头：连接、对齐样本、带宽、主要瓶颈、吞吐/利用率一句话概览。
+- Rate Analysis：pacing_rate、delivery_rate、send_rate（如有）三者统计（min/max/mean/std/CV/P50/P95/P99），带宽利用率；明确“发送侧”/“接收侧”来源。
+- Window Analysis：
+  - BDP、理论/实际 CWND 与利用率；
+  - cwnd/ssthresh 平均比值；新增“按采样点的 cwnd/ssthresh 比值分布”，输出 `<1` 占比（慢启动）、`>=1` 占比（拥塞避免/快速恢复）。
+- RTT Analysis：client/server 各自统计与 jitter；输出 client-server RTT 差异及判定（对称/不对称）。
+- Buffer Analysis：send_q/recv_q 与 socket_tx/rx_queue/buffer 的统计与压力占比；新增 socket_write_queue、socket_backlog、socket_dropped（或同义字段）压力/事件占比，并给出“压力大/正常”判定。
+- Retrans Analysis：client 与 server 各自的重传累计值、周期增量计算出的重传率/重传字节率；需标注来源端；若无法分类 fast/timeout/spurious，需说明计算依据（如全部按增量统计）。
+- 对比分析：双端 RTT/CWND/利用率/重传的差异说明。
+- 瓶颈与建议：与 Pipeline 结论保持一致；提供证据字段（时间区间/样本值）。
+
+示例结构（简化）：
 ```
-===== TCP Socket 性能分析报告 =====
-
-[基本信息]
-分析时间范围: 2025-11-12 14:19:47 ~ 14:25:32 (343秒)
-物理链路带宽: 10 Gbps
-连接信息: 100.100.103.205:53910 -> 100.100.103.201:5001
-采样点数: Client端 172个, Server端 168个, 对齐后 165个 (间隔约 2秒)
-时间同步: 平均偏差 0.3秒, 最大偏差 0.8秒
-
-[性能摘要 - Client端视角]
-指标                Min      Max      Mean     Std      CV      P50      P95      P99
-==================================================================================
-RTT (ms)           4.23     12.45    5.67     1.23     21.7%   5.34     8.92     11.23
-RTTVar (ms)        1.02     15.32    3.45     2.11     61.2%   2.87     9.12     13.45
-CWND (packets)     2847     5846     4523     623      13.8%   4512     5621     5798
-ssthresh (pkts)    7        7        7        0        0%      7        7        7
-Pacing Rate (Gbps) 3.42     9.87     7.23     1.45     20.1%   7.18     9.23     9.65
-Delivery Rate(Gbps)3.21     9.54     6.98     1.52     21.8%   6.89     8.92     9.32
-
-[性能摘要 - Server端视角]
-指标                Min      Max      Mean     Std      CV      P50      P95      P99
-==================================================================================
-RTT (ms)           4.18     12.50    5.71     1.28     22.4%   5.40     8.98     11.30
-CWND (packets)     2830     5820     4490     610      13.6%   4480     5600     5780
-Pacing Rate (Gbps) 3.38     9.80     7.18     1.48     20.6%   7.12     9.18     9.60
-Delivery Rate(Gbps)3.18     9.48     6.92     1.55     22.4%   6.85     8.88     9.28
-
-[双端对比分析]
-RTT差异:
-  Client平均RTT: 5.67 ms
-  Server平均RTT: 5.71 ms
-  差异: 0.04 ms (0.7%)
-  评估: RTT基本一致，无明显不对称
-
-CWND差异:
-  Client平均CWND: 4523 packets
-  Server平均CWND: 4490 packets
-  差异: 33 packets (0.7%)
-  评估: 双向CWND基本均衡
-
-[RTT分析]
-基础统计:
-  最小RTT: 4.23 ms
-  最大RTT: 12.45 ms
-  平均RTT: 5.67 ms
-  标准差: 1.23 ms
-  变异系数 (CV): 21.7%
-  P50: 5.34 ms
-  P95: 8.92 ms
-  P99: 11.23 ms
-
-稳定性评估: 中等 (CV=21.7%, 介于10%-30%)
-RTT趋势: 相对稳定，无明显上升/下降趋势
-
-RTTVar统计:
-  平均: 3.45 ms
-  最大: 15.32 ms
-  P95: 9.12 ms
-评估: 偶有波动，整体可接受
-
-[窗口分析]
-CWND (拥塞窗口):
-  平均值: 4523 packets (6.6 MB)
-  变化范围: 2847 ~ 5846 packets
-  稳定性: 较稳定 (CV=13.8%)
-
-理论最优CWND:
-  BDP = 带宽 × RTT = 10 Gbps × 5.67 ms = 7.09 MB
-  理论最优CWND = BDP / MSS = 7.09 MB / 1460 bytes = 5085 packets
-
-实际 vs 理论:
-  实际平均CWND: 4523 packets
-  理论最优CWND: 5085 packets
-  CWND利用率: 88.9%
-评估: CWND配置基本合理，略低于理论最优
-
-RWND (接收窗口):
-  (基于rcv_space字段)
-  平均值: 8388608 bytes (8 MB)
-  变化范围: 8388608 ~ 8388608 bytes
-评估: 接收窗口固定，未检测到限制
-
-ssthresh (慢启动阈值):
-  值: 7 packets (constant)
-评估: 连接已进入拥塞避免阶段
-
-[速率分析]
-Pacing Rate:
-  平均: 7.23 Gbps
-  P95: 9.23 Gbps
-  变化范围: 3.42 ~ 9.87 Gbps
-  稳定性: 波动 (CV=20.1%)
-
-Delivery Rate:
-  平均: 6.98 Gbps
-  P95: 8.92 Gbps
-  变化范围: 3.21 ~ 9.54 Gbps
-  稳定性: 波动 (CV=21.8%)
-
-带宽利用率:
-  平均 Delivery Rate / 物理带宽 = 6.98 Gbps / 10 Gbps = 69.8%
-评估: 中等带宽利用率
-
-Rate关系分析:
-  Pacing Rate vs Delivery Rate:
-    - 平均比率: 1.036 (pacing略高于delivery，正常)
-    - 差距: 正常范围
-  瓶颈评估: 未检测到明显的速率限制
-
-[重传分析]
-总重传数: 234 packets
-总发送包数: 101,234 packets
-重传率: 0.23%
-评估: 低重传率，网络质量良好
-
-虚假重传:
-  D-SACK总数: 12 packets
-  虚假重传率: 5.1% of retrans
-评估: 虚假重传率正常
-
-重传趋势: 稳定，无突增
-
-[Buffer分析]
-接收侧:
-  recv_q (接收队列):
-    - 平均: 0 bytes
-    - 最大: 0 bytes
-  socket_rx_queue (接收占用):
-    - 平均: 2.1 MB
-    - P95: 3.8 MB
-  socket_rx_buffer (接收限制):
-    - 值: 8 MB
-  Buffer利用率:
-    - 平均: 26.3%
-    - P95: 47.5%
-  丢包事件: 0 次
-评估: 接收侧压力正常，无丢包
-
-发送侧:
-  send_q (发送队列):
-    - 平均: 15.2 MB
-    - P95: 16.8 MB
-  socket_tx_queue (发送占用):
-    - 平均: 18.9 MB
-    - P95: 20.1 MB
-  socket_tx_buffer (发送限制):
-    - 值: 21 MB
-  Buffer利用率:
-    - 平均: 90.0%
-    - P95: 95.7%
-评估: 发送侧压力高，接近buffer限制
-
-inflight_data (在途数据):
-  平均: 6.6 MB (4523 packets × 1460 bytes)
-  P95: 8.5 MB
-  与CWND关系: 正常（inflight ≈ CWND × MSS）
-
-[瓶颈识别]
-主要瓶颈: 发送Buffer压力高
-  - 发送buffer利用率达90%以上
-  - P95利用率达95.7%
-  - 建议: 增大tcp_wmem配置
-
-次要瓶颈: CWND利用率可提升
-  - 实际CWND为理论最优的88.9%
-  - 有约11%的提升空间
-
-未检测到的瓶颈:
-  - 接收侧压力: 正常
-  - 网络质量: 良好（低重传率）
-  - RWND限制: 未检测到
-
-[配置建议]
-1. 增大发送buffer:
-   sysctl -w net.ipv4.tcp_wmem="4096 16384 33554432"
-   (当前推测约21MB，建议提高到32MB)
-
-2. 可选优化:
-   - 考虑调整拥塞控制算法参数（当前已接近理论最优）
-   - 监控应用发送行为，确保持续发送
+[摘要]
+  带宽 25Gbps，主瓶颈: CWND_LIMITED，利用率 53%
+[Rate]
+  pacing/delivery/send_rate 统计...
+[Window]
+  BDP=..., CWND利用率=..., cwnd/ssthresh<1 占比=xx%，>=1 占比=yy%
+[RTT]
+  Client均值/Server均值/差异=...
+[Buffer]
+  send_q/tx_queue/tx_buffer 压力 ...；write_queue/backlog/dropped 事件占比 ...
+[Retrans]
+  Client: 总=..., Rate=...%; Server: 总=..., Rate=...%
+[瓶颈/建议]
+  ...
 ```
 
 #### 3.5.5 功能需求
@@ -1658,8 +1531,11 @@ def analyze_pipeline_bottleneck(data):
   - **双向综合分析**：对比双端瓶颈，识别整体性能限制因素
 - 工具会根据连接方向自动识别哪一端是发送方/接收方
 - 对于双向流量，会分别分析两个方向的Pipeline
+- 带宽参数是必需输入，网络瓶颈判定必须使用该参数（禁止固定阈值）
 
 #### 3.7.5 输出规格
+
+输出要求：必须同时提供 text 与 json；每个瓶颈需给出证据（时间区间/样本值）与验证步骤，且与 Summary 瓶颈保持一致或说明差异原因。
 
 ```
 ===== Pipeline 瓶颈分析 =====

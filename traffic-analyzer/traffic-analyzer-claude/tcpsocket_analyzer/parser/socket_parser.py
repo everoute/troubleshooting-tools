@@ -290,6 +290,10 @@ class SocketDataParser:
         if client_df.empty or server_df.empty:
             raise ConnectionMismatchError("Empty DataFrame provided")
 
+        # Require single connection per side
+        if client_df['connection'].nunique() != 1 or server_df['connection'].nunique() != 1:
+            raise ConnectionMismatchError("Multiple connections detected in input; only single-flow analysis supported")
+
         # Get first connection from each side
         client_conn_str = client_df['connection'].iloc[0]
         server_conn_str = server_df['connection'].iloc[0]

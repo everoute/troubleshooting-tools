@@ -71,14 +71,16 @@ def extract_numeric_value(value_str: str) -> Optional[float]:
 
     # Handle size units (KB, MB, GB, bytes)
     elif 'bytes' in value_str or 'KB' in value_str or 'MB' in value_str or 'GB' in value_str:
-        match = re.search(r'([\d.]+)', value_str)
-        if match:
-            value = float(match.group(1))
-            if 'KB' in value_str:
+        # Pick the number *next to its unit* to avoid mixing "14480 bytes (14.1 KB)"
+        size_match = re.search(r'([\d.]+)\s*(bytes?|KB|MB|GB)\b', value_str, re.IGNORECASE)
+        if size_match:
+            value = float(size_match.group(1))
+            unit = size_match.group(2).lower()
+            if unit.startswith('kb'):
                 value *= 1024
-            elif 'MB' in value_str:
+            elif unit.startswith('mb'):
                 value *= 1024 * 1024
-            elif 'GB' in value_str:
+            elif unit.startswith('gb'):
                 value *= 1024 * 1024 * 1024
             return value
 

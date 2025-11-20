@@ -1961,6 +1961,7 @@ class SummaryAnalyzer:
         1. BDP计算：BDP = Bandwidth × RTT
         2. 理论最优CWND：Optimal_CWND = BDP / MSS
         3. CWND利用率：actual_cwnd / optimal_cwnd
+        4. cwnd/ssthresh 比值分布：逐采样点计算 cwnd/ssthresh，比值<1(慢启动)与>=1(拥塞避免/快速恢复)的占比
         """
         # 计算BDP
         avg_rtt = client_df['rtt'].mean() / 1000  # ms -> s
@@ -1971,6 +1972,11 @@ class SummaryAnalyzer:
         actual_cwnd = client_df['cwnd'].mean()
         cwnd_utilization = actual_cwnd / optimal_cwnd if optimal_cwnd > 0 else 0
 
+        # 比值分布：用于判定慢启动 vs 拥塞避免/快速恢复时间占比
+        ratio_series = client_df['cwnd'] / client_df['ssthresh']
+        slow_start_ratio = (ratio_series < 1).mean()
+        ca_fastrecovery_ratio = (ratio_series >= 1).mean()
+
         return WindowAnalysisResult(
             client_cwnd_stats=self.stats_engine.compute_basic_stats(client_df['cwnd']),
             server_cwnd_stats=self.stats_engine.compute_basic_stats(server_df['cwnd']),
@@ -1979,7 +1985,11 @@ class SummaryAnalyzer:
             actual_cwnd=actual_cwnd,
             cwnd_utilization=cwnd_utilization,
             rwnd_analysis=self._analyze_rwnd(client_df),
-            ssthresh_analysis=self._analyze_ssthresh(client_df)
+            ssthresh_analysis=self._analyze_ssthresh(client_df),
+            cwnd_ssthresh_ratio_distribution={
+                '<1': slow_start_ratio,
+                '>=1': ca_fastrecovery_ratio
+            }
         )
 ```
 
@@ -1996,6 +2006,7 @@ class RateAnalysisResult:
     # 基础统计
     pacing_rate_stats: BasicStats
     delivery_rate_stats: BasicStats
+    send_rate_stats: Optional[BasicStats]
 
     # 带宽利用率
     avg_bandwidth_utilization: float
@@ -2016,7 +2027,7 @@ class SummaryAnalyzer:
         实现需求: FR-SOCKET-SUM-004, FR-SOCKET-SUM-007
 
         分析内容:
-        1. Pacing Rate和Delivery Rate统计
+        1. Pacing Rate、Delivery Rate、Send Rate统计
         2. 带宽利用率计算
         3. 速率比值关系
         """
@@ -2025,6 +2036,10 @@ class SummaryAnalyzer:
 
         # Delivery Rate统计
         delivery_rate_stats = self.stats_engine.compute_basic_stats(client_df['delivery_rate'])
+
+        # Send Rate统计（若采集到 send_rate 字段）
+        send_rate_stats = self.stats_engine.compute_basic_stats(client_df['send_rate']) \
+            if 'send_rate' in client_df.columns else None
 
         # 带宽利用率
         avg_bw_util = delivery_rate_stats.mean / bandwidth if bandwidth > 0 else 0
@@ -2040,6 +2055,7 @@ class SummaryAnalyzer:
         return RateAnalysisResult(
             pacing_rate_stats=pacing_rate_stats,
             delivery_rate_stats=delivery_rate_stats,
+            send_rate_stats=send_rate_stats,
             avg_bandwidth_utilization=avg_bw_util,
             peak_bandwidth_utilization=peak_bw_util,
             pacing_delivery_ratio=pacing_delivery_ratio,
@@ -2061,6 +2077,8 @@ class RTTAnalysisResult:
     server_rtt_stats: BasicStats
     rtt_stability: str  # STABLE/UNSTABLE
     jitter: float  # RTT抖动 (std)
+    rtt_diff: float  # client-server 均值差
+    asymmetry: str  # SYMMETRIC/ASYMMETRIC
 
 class SummaryAnalyzer:
     def analyze_rtt(self,
@@ -2084,11 +2102,17 @@ class SummaryAnalyzer:
         # 抖动 = 标准差
         jitter = client_rtt_stats.std
 
+        # 双端差异
+        rtt_diff = client_rtt_stats.mean - server_rtt_stats.mean
+        asymmetry = 'ASYMMETRIC' if abs(rtt_diff) > max(client_rtt_stats.std, 1) else 'SYMMETRIC'
+
         return RTTAnalysisResult(
             client_rtt_stats=client_rtt_stats,
             server_rtt_stats=server_rtt_stats,
             rtt_stability=stability,
-            jitter=jitter
+            jitter=jitter,
+            rtt_diff=rtt_diff,
+            asymmetry=asymmetry
         )
 ```
 
@@ -2174,6 +2198,9 @@ class BufferAnalysisResult:
     # 发送侧
     send_q_stats: BasicStats
     socket_tx_pressure: float  # 0-1, 平均压力
+    socket_write_queue_stats: BasicStats
+    socket_backlog_stats: BasicStats
+    socket_dropped_stats: BasicStats
     # 接收侧
     recv_q_stats: BasicStats
     socket_rx_pressure: float
@@ -2192,6 +2219,12 @@ class SummaryAnalyzer:
         """
         # 发送侧统计
         send_q_stats = self.stats_engine.compute_basic_stats(client_df['send_q'])
+        write_queue_stats = self.stats_engine.compute_basic_stats(client_df['socket_write_queue']) \
+            if 'socket_write_queue' in client_df.columns else self.stats_engine.compute_basic_stats(pd.Series([0]))
+        backlog_stats = self.stats_engine.compute_basic_stats(client_df['socket_backlog']) \
+            if 'socket_backlog' in client_df.columns else self.stats_engine.compute_basic_stats(pd.Series([0]))
+        dropped_stats = self.stats_engine.compute_basic_stats(client_df['socket_dropped']) \
+            if 'socket_dropped' in client_df.columns else self.stats_engine.compute_basic_stats(pd.Series([0]))
 
         # 发送侧压力
         if 'socket_tx_queue' in client_df.columns and 'socket_tx_buffer' in client_df.columns:
@@ -2211,6 +2244,9 @@ class SummaryAnalyzer:
         return BufferAnalysisResult(
             send_q_stats=send_q_stats,
             socket_tx_pressure=tx_pressure,
+            socket_write_queue_stats=write_queue_stats,
+            socket_backlog_stats=backlog_stats,
+            socket_dropped_stats=dropped_stats,
             recv_q_stats=recv_q_stats,
             socket_rx_pressure=rx_pressure
         )

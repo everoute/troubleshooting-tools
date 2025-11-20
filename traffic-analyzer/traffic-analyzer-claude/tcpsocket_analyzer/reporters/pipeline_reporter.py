@@ -347,4 +347,12 @@ class PipelineReporter:
                     lines.append(f"   Action: {rec.action}")
             lines.append("")
 
+        # Action plans from DiagnosisEngine
+        if result.action_plans:
+            lines.append("=== NEXT STEPS ===")
+            for plan in result.action_plans:
+                lines.append(f"{plan.priority}. [{plan.category}] {plan.action}")
+                lines.append(f"   Impact: {plan.expected_impact}; Effort: {plan.estimated_effort}")
+            lines.append("")
+
         return "\n".join(lines)

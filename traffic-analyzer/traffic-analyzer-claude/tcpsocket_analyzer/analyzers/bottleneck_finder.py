@@ -37,7 +37,7 @@ class BottleneckFinder:
         self.send_rules = SEND_PATH_RULES
         self.recv_rules = RECV_PATH_RULES
 
-    def find_send_path_bottlenecks(self, df: pd.DataFrame) -> List[Bottleneck]:
+    def find_send_path_bottlenecks(self, df: pd.DataFrame, bandwidth: Optional[float] = None) -> List[Bottleneck]:
         """
         Identify send path bottlenecks
 
@@ -64,7 +64,7 @@ class BottleneckFinder:
 
         for rule in self.send_rules:
             try:
-                result = rule.detect(df)
+                result = rule.detect(df, bandwidth)
                 if result:
                     bottlenecks.append(result)
             except Exception as e:
@@ -73,7 +73,7 @@ class BottleneckFinder:
 
         return bottlenecks
 
-    def find_recv_path_bottlenecks(self, df: pd.DataFrame) -> List[Bottleneck]:
+    def find_recv_path_bottlenecks(self, df: pd.DataFrame, bandwidth: Optional[float] = None) -> List[Bottleneck]:
         """
         Identify receive path bottlenecks
 
@@ -98,7 +98,7 @@ class BottleneckFinder:
 
         for rule in self.recv_rules:
             try:
-                result = rule.detect(df)
+                result = rule.detect(df, bandwidth)
                 if result:
                     bottlenecks.append(result)
             except Exception as e:

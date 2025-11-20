@@ -263,6 +263,7 @@ def run_pipeline_mode(args):
         from tcpsocket_analyzer.parser import SocketDataParser
         from tcpsocket_analyzer.reporters import PipelineReporter
         from tcpsocket_analyzer.models import PipelineResult
+        from tcpsocket_analyzer.analyzers.diagnosis_engine import AnalysisContext
 
         bw_parser = BandwidthParser()
         bandwidth = bw_parser.parse(args.bandwidth)
@@ -291,8 +292,8 @@ def run_pipeline_mode(args):
         finder = BottleneckFinder()
 
         # Find bottlenecks in both paths
-        send_bottlenecks = finder.find_send_path_bottlenecks(client_df)
-        recv_bottlenecks = finder.find_recv_path_bottlenecks(server_df)
+        send_bottlenecks = finder.find_send_path_bottlenecks(client_df, bandwidth)
+        recv_bottlenecks = finder.find_recv_path_bottlenecks(server_df, bandwidth)
 
         print_info(f"Send path bottlenecks: {len(send_bottlenecks)}")
         print_info(f"Recv path bottlenecks: {len(recv_bottlenecks)}")
@@ -308,6 +309,23 @@ def run_pipeline_mode(args):
         reporter = PipelineReporter()
         health = reporter.generate_health_overview(all_bottlenecks, primary)
 
+        # Build context for diagnosis
+        avg_rtt_ms = aligned_df['rtt_client'].mean() if 'rtt_client' in aligned_df.columns else client_df['rtt'].mean()
+        avg_rtt = avg_rtt_ms / 1000.0
+        avg_cwnd = client_df['cwnd'].mean() if 'cwnd' in client_df.columns else 0
+        avg_delivery_rate = client_df['delivery_rate'].mean() if 'delivery_rate' in client_df.columns else 0
+        bdp = bandwidth * avg_rtt / 8 if bandwidth else 0
+        context = AnalysisContext(
+            bdp=bdp,
+            bandwidth=bandwidth,
+            avg_rtt=avg_rtt_ms,
+            avg_cwnd=avg_cwnd,
+            avg_delivery_rate=avg_delivery_rate
+        )
+
+        diag_engine = DiagnosisEngine()
+        action_plans = diag_engine.generate_next_steps(optimization_priority, context)
+
         # Create result
         result = PipelineResult(
             connection=connection,
@@ -315,7 +333,8 @@ def run_pipeline_mode(args):
             recv_path_bottlenecks=recv_bottlenecks,
             primary_bottleneck=primary,
             health_score=health.health_score,
-            optimization_priority=optimization_priority
+            optimization_priority=optimization_priority,
+            action_plans=action_plans
         )
 
         # Print results
@@ -336,6 +355,9 @@ def run_pipeline_mode(args):
 
 def _print_basic_stats(stats, unit="", decimals=2):
     """Helper function to print BasicStats in consistent format"""
+    if stats is None:
+        print("  (no data)")
+        return
     fmt = f".{decimals}f"
     print(f"  Min: {stats.min:{fmt}}{unit}, Max: {stats.max:{fmt}}{unit}, Mean: {stats.mean:{fmt}}{unit}")
     print(f"  Std: {stats.std:{fmt}}{unit}, CV: {stats.cv:.3f}")
@@ -350,6 +372,10 @@ def print_summary_results(result, bandwidth):
 
     # Connection info
     print(f"\nConnection: {result.connection}")
+    ra = result.rate_analysis
+    bn = result.bottleneck
+    print(f"Summary: Bandwidth {format_rate(bandwidth)}, Utilization avg={ra.avg_bandwidth_utilization*100:.1f}% "
+          f"Primary Bottleneck: {bn.primary_bottleneck}")
 
     # Window analysis
     wa = result.window_analysis
@@ -358,6 +384,8 @@ def print_summary_results(result, bandwidth):
     print(f"Optimal CWND: {wa.optimal_cwnd:.2f} packets")
     print(f"Actual CWND: {wa.actual_cwnd:.2f} packets")
     print(f"CWND Utilization: {wa.cwnd_utilization*100:.1f}%")
+    print(f"cwnd/ssthresh ratio: <1 {wa.cwnd_ssthresh_distribution.get('<1',0)*100:.1f}% , "
+          f">=1 {wa.cwnd_ssthresh_distribution.get('>=1',0)*100:.1f}%")
     print(f"\nClient CWND Statistics:")
     _print_basic_stats(wa.client_cwnd_stats, " pkts", 0)
     print(f"\nServer CWND Statistics:")
@@ -382,14 +410,22 @@ def print_summary_results(result, bandwidth):
     print(f"  Min: {format_rate(ra.delivery_rate_stats.min)}, Max: {format_rate(ra.delivery_rate_stats.max)}, Mean: {format_rate(ra.delivery_rate_stats.mean)}")
     print(f"  Std: {ra.delivery_rate_stats.std/1e9:.2f} Gbps, CV: {ra.delivery_rate_stats.cv:.3f}")
     print(f"  P50: {format_rate(ra.delivery_rate_stats.p50)}, P95: {format_rate(ra.delivery_rate_stats.p95)}, P99: {format_rate(ra.delivery_rate_stats.p99)}")
+    if ra.send_rate_stats:
+        print(f"\nSend Rate Statistics:")
+        print(f"  Min: {format_rate(ra.send_rate_stats.min)}, Max: {format_rate(ra.send_rate_stats.max)}, Mean: {format_rate(ra.send_rate_stats.mean)}")
+        print(f"  Std: {ra.send_rate_stats.std/1e9:.2f} Gbps, CV: {ra.send_rate_stats.cv:.3f}")
+        print(f"  P50: {format_rate(ra.send_rate_stats.p50)}, P95: {format_rate(ra.send_rate_stats.p95)}, P99: {format_rate(ra.send_rate_stats.p99)}")
 
     # RTT analysis
     rtt = result.rtt_analysis
     print(f"\n--- RTT Analysis ---")
-    print(f"RTT Statistics:")
-    _print_basic_stats(rtt.rtt_stats, " ms", 2)
-    print(f"RTT Stability: {rtt.rtt_stability}")
+    print(f"Client RTT Statistics:")
+    _print_basic_stats(rtt.client_rtt_stats, " ms", 2)
+    print(f"Server RTT Statistics:")
+    _print_basic_stats(rtt.server_rtt_stats, " ms", 2)
+    print(f"RTT Stability: {rtt.rtt_stability}, Jitter: {rtt.jitter:.2f} ms")
     print(f"RTT Trend: {rtt.rtt_trend}")
+    print(f"RTT Diff (client-server): {rtt.rtt_diff:.2f} ms ({rtt.asymmetry})")
 
     # Buffer analysis
     ba = result.buffer_analysis
@@ -399,22 +435,40 @@ def print_summary_results(result, bandwidth):
     print(f"Send Buffer Limited: {ba.send_buffer_limited_ratio*100:.1f}% of time")
     print(f"Send Queue Statistics:")
     _print_basic_stats(ba.send_queue_stats, " bytes", 0)
+    print(f"Raw send_q stats:")
+    _print_basic_stats(ba.send_q_stats, " bytes", 0)
+    print(f"Write Queue Statistics:")
+    _print_basic_stats(ba.write_queue_stats, " bytes", 0)
+    print(f"Backlog Statistics:")
+    _print_basic_stats(ba.backlog_stats, " bytes", 0)
+    print(f"Dropped Statistics:")
+    _print_basic_stats(ba.dropped_stats, " packets", 0)
     print(f"\nRecv Buffer Size: {ba.recv_buffer_size:.0f} bytes ({ba.recv_buffer_size/1024/1024:.2f} MB)")
     print(f"Recv Buffer Pressure: {ba.recv_buffer_pressure*100:.1f}%")
     print(f"Recv Buffer Limited: {ba.recv_buffer_limited_ratio*100:.1f}% of time")
     print(f"Recv Queue Statistics:")
     _print_basic_stats(ba.recv_queue_stats, " bytes", 0)
+    print(f"Raw recv_q stats:")
+    _print_basic_stats(ba.recv_q_stats, " bytes", 0)
 
     # Retransmission analysis
     retrans = result.retrans_analysis
     print(f"\n--- Retransmission Analysis ---")
-    print(f"Total Retransmissions: {retrans.total_retrans}")
-    print(f"Retransmission Rate Statistics:")
-    _print_basic_stats(retrans.retrans_rate_stats, "%", 4)
-    print(f"Retransmission Type Breakdown:")
-    print(f"  Fast Retrans: {retrans.fast_retrans_ratio*100:.1f}%")
-    print(f"  Timeout Retrans: {retrans.timeout_retrans_ratio*100:.1f}%")
-    print(f"  Spurious Retrans: {retrans.spurious_retrans_ratio*100:.1f}%")
+    print(f"Client Total Retransmissions: {retrans.total_retrans_client}")
+    print(f"Client Retrans Rate (packets): {retrans.retrans_rate_client:.3f}%")
+    print(f"Client Retrans Bytes Rate: {retrans.retrans_bytes_rate_client:.3f}%")
+    print(f"Client Retransmission Rate Statistics:")
+    _print_basic_stats(retrans.client_retrans_rate_stats, "%", 4)
+    print(f"Client Breakdown: Fast {retrans.fast_retrans_ratio_client*100:.1f}%, Timeout {retrans.timeout_retrans_ratio_client*100:.1f}%, "
+          f"Spurious {retrans.spurious_retrans_ratio_client*100:.1f}% (count={retrans.spurious_retrans_count_client})")
+    print(f"\nServer Total Retransmissions: {retrans.total_retrans_server}")
+    print(f"Server Retrans Rate (packets): {retrans.retrans_rate_server:.3f}%")
+    print(f"Server Retrans Bytes Rate: {retrans.retrans_bytes_rate_server:.3f}%")
+    print(f"Server Retransmission Rate Statistics:")
+    _print_basic_stats(retrans.server_retrans_rate_stats, "%", 4)
+    print(f"Server Breakdown: Fast {retrans.fast_retrans_ratio_server*100:.1f}% (heuristic), "
+          f"Timeout {retrans.timeout_retrans_ratio_server*100:.1f}% (heuristic), "
+          f"Spurious {retrans.spurious_retrans_ratio_server*100:.1f}% (count={retrans.spurious_retrans_count_server})")
 
     # Bottleneck identification
     bn = result.bottleneck

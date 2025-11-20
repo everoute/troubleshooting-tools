@@ -74,6 +74,7 @@ class WindowAnalysisResult:
     optimal_cwnd: float
     actual_cwnd: float
     cwnd_utilization: float
+    cwnd_ssthresh_distribution: Dict[str, float]
 
     # RWND analysis
     rwnd_min: float
@@ -91,6 +92,7 @@ class RateAnalysisResult:
     # Basic statistics
     pacing_rate_stats: BasicStats
     delivery_rate_stats: BasicStats
+    send_rate_stats: Optional[BasicStats]
 
     # Bandwidth utilization
     avg_bandwidth_utilization: float
@@ -103,10 +105,14 @@ class RateAnalysisResult:
 
 @dataclass
 class RTTAnalysisResult:
-    """RTT analysis result"""
-    rtt_stats: BasicStats
+    """RTT analysis result (dual-side)"""
+    client_rtt_stats: BasicStats
+    server_rtt_stats: BasicStats
     rtt_stability: str  # STABLE/UNSTABLE/HIGHLY_VARIABLE
-    rtt_trend: str  # INCREASING/DECREASING/STABLE
+    jitter: float       # std dev (ms)
+    rtt_trend: str      # INCREASING/DECREASING/STABLE
+    rtt_diff: float
+    asymmetry: str
 
 
 @dataclass
@@ -122,6 +128,13 @@ class BufferAnalysisResult:
     recv_queue_stats: BasicStats
     recv_buffer_pressure: float
 
+    # Additional queue stats (raw send_q/recv_q)
+    send_q_stats: BasicStats
+    recv_q_stats: BasicStats
+    write_queue_stats: BasicStats
+    backlog_stats: BasicStats
+    dropped_stats: BasicStats
+
     # Analysis
     send_buffer_limited_ratio: float
     recv_buffer_limited_ratio: float
@@ -130,11 +143,22 @@ class BufferAnalysisResult:
 @dataclass
 class RetransAnalysisResult:
     """Retransmission analysis result"""
-    retrans_rate_stats: BasicStats
-    total_retrans: int
-    fast_retrans_ratio: float
-    timeout_retrans_ratio: float
-    spurious_retrans_ratio: float
+    client_retrans_rate_stats: BasicStats
+    server_retrans_rate_stats: BasicStats
+    total_retrans_client: int
+    total_retrans_server: int
+    retrans_rate_client: float
+    retrans_rate_server: float
+    retrans_bytes_rate_client: float
+    retrans_bytes_rate_server: float
+    spurious_retrans_count_client: int
+    spurious_retrans_count_server: int
+    fast_retrans_ratio_client: float
+    timeout_retrans_ratio_client: float
+    spurious_retrans_ratio_client: float
+    fast_retrans_ratio_server: float
+    timeout_retrans_ratio_server: float
+    spurious_retrans_ratio_server: float
 
 
 @dataclass
@@ -278,6 +302,7 @@ class PipelineResult:
     primary_bottleneck: Optional[Bottleneck]
     health_score: float  # 0-100
     optimization_priority: List[Bottleneck]
+    action_plans: Optional[List[Any]] = None
 
 
 @dataclass

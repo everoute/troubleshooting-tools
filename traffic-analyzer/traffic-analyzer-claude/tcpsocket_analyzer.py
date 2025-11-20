@@ -10,10 +10,61 @@ import argparse
 import sys
 from typing import Optional
 
+import os
+import sys
 from tcpsocket_analyzer.parser import SocketDataParser, ConnectionMismatchError
 from tcpsocket_analyzer.analyzers import SummaryAnalyzer, BandwidthParser
 from tcpsocket_analyzer.reporters import RecommendationEngine
 from common.utils import print_error, print_info, validate_directory, format_rate
+
+# Import unified conversion tool
+tools_path = os.path.join(os.path.dirname(__file__), 'tools')
+sys.path.insert(0, tools_path)
+from convert_socket_log_to_csv import convert_log_to_csv
+
+
+def export_csv_files(args):
+    """
+    Export parsed socket log files to CSV using unified conversion tool
+
+    Args:
+        args: Command-line arguments containing export settings
+    """
+    if not args.export_csv:
+        return
+
+    # Determine output directory
+    if args.csv_output_dir:
+        output_dir = args.csv_output_dir
+    else:
+        # Use client directory as default
+        if os.path.isfile(args.client_dir):
+            output_dir = os.path.dirname(args.client_dir)
+        else:
+            output_dir = args.client_dir
+
+    # Create output directory if needed
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Generate output filenames
+    client_csv = os.path.join(output_dir, 'client-socket-parsed.csv')
+    server_csv = os.path.join(output_dir, 'server-socket-parsed.csv')
+
+    # Convert log files to CSV using unified conversion logic
+    try:
+        # Determine input log files
+        client_log = args.client_dir
+        server_log = args.server_dir
+
+        # Convert using unified tool
+        convert_log_to_csv(client_log, client_csv)
+        convert_log_to_csv(server_log, server_csv)
+
+        print_info(f"Exported client CSV to: {client_csv}")
+        print_info(f"Exported server CSV to: {server_csv}")
+
+    except Exception as e:
+        print_error(f"Failed to export CSV files: {e}")
 
 
 def run_summary_mode(args):
@@ -46,6 +97,9 @@ def run_summary_mode(args):
         print_info(f"Client samples: {len(client_df)}")
         print_info(f"Server samples: {len(server_df)}")
         print_info(f"Aligned samples: {len(aligned_df)}")
+
+        # Export CSV if requested (using original log files)
+        export_csv_files(args)
 
         # Get connection info
         conn_str = client_df['connection'].iloc[0]
@@ -119,6 +173,9 @@ def run_detailed_mode(args):
         print_info(f"Server samples: {len(server_df)}")
         print_info(f"Aligned samples: {len(aligned_df)}")
 
+        # Export CSV if requested (using original log files)
+        export_csv_files(args)
+
         # Get connection info
         conn_str = client_df['connection'].iloc[0]
         connection = parser._parse_connection_str(conn_str)
@@ -191,6 +248,9 @@ def run_pipeline_mode(args):
 
         print_info(f"Client samples: {len(client_df)}")
         print_info(f"Server samples: {len(server_df)}")
+
+        # Export CSV if requested (using original log files)
+        export_csv_files(args)
 
         # Get connection info
         conn_str = client_df['connection'].iloc[0]
@@ -420,6 +480,9 @@ Examples:
 
   # Using directory containing multiple log files
   %(prog)s --mode summary --client-dir ./client-logs/ --server-dir ./server-logs/ --bandwidth 25gbps
+
+  # Export parsed socket data to CSV files
+  %(prog)s --mode summary --client-dir client-socket.log --server-dir server-socket.log --export-csv --csv-output-dir ./output
         """
     )
 
@@ -456,6 +519,15 @@ Examples:
         '--export-timeseries',
         action='store_true',
         help='Export time-series data (detailed mode only)'
+    )
+    parser.add_argument(
+        '--export-csv',
+        action='store_true',
+        help='Export parsed socket data to CSV files in the output directory'
+    )
+    parser.add_argument(
+        '--csv-output-dir',
+        help='Directory to save CSV files (default: same as log directory)'
     )
     parser.add_argument(
         '--debug',

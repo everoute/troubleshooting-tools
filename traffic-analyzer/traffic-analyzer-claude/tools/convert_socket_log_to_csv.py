@@ -124,9 +124,16 @@ def parse_metric_line(line: str) -> tuple:
     return None, None
 
 
-def convert_log_to_csv(input_file: str, output_file: str):
-    """Convert socket log to CSV format"""
+def parse_socket_log_to_records(input_file: str) -> List[Dict]:
+    """
+    Parse socket log file and return list of records
 
+    Args:
+        input_file: Path to socket log file
+
+    Returns:
+        List of dictionaries, each representing one record
+    """
     records = []
     current_record = {}
     in_metrics_section = False
@@ -174,95 +181,43 @@ def convert_log_to_csv(input_file: str, output_file: str):
                 if key:
                     # Map to expected column names
                     key_mapping = {
-                        # Basic TCP metrics
-                        'rtt': 'rtt',
-                        'rttvar': 'rttvar',
-                        'minrtt': 'minrtt',
-                        'rto': 'rto',
-                        'cwnd': 'cwnd',
-                        'ssthresh': 'ssthresh',
-                        'rcv_space': 'rwnd',
-                        'rcv_ssthresh': 'rcv_ssthresh',
-                        'snd_wnd': 'snd_wnd',
-                        'mss': 'mss',
-                        'pmtu': 'pmtu',
-                        'advmss': 'advmss',
-                        'rcvmss': 'rcvmss',
-                        'wscale': 'wscale',
-                        # Rate metrics
-                        'send_rate': 'send_rate',
-                        'pacing_rate': 'pacing_rate',
-                        'delivery_rate': 'delivery_rate',
-                        # Queue metrics
-                        'send_q': 'send_q',
-                        'recv_q': 'recv_q',
-                        # Socket buffer metrics
-                        'socket_tx_queue': 'socket_tx_queue',
-                        'socket_tx_buffer': 'socket_tx_buffer',
-                        'socket_rx_queue': 'socket_rx_queue',
-                        'socket_rx_buffer': 'socket_rx_buffer',
-                        'socket_forward_alloc': 'socket_forward_alloc',
-                        'socket_write_queue': 'socket_write_queue',
-                        'socket_opt_mem': 'socket_opt_mem',
-                        'socket_backlog': 'socket_backlog',
-                        'socket_dropped': 'socket_dropped',
-                        # Packet metrics
-                        'unacked': 'packets_out',
-                        'inflight_data': 'inflight_data',
-                        'retrans': 'retrans',
-                        'retrans_ratio': 'retrans_rate',
-                        'lost': 'lost',
-                        'sacked': 'sacked',
-                        'dsack_dups': 'dsack_dups',
-                        'fackets': 'fackets',
-                        'spurious_retrans_rate': 'spurious_retrans_rate',
-                        # Segment counters
-                        'segs_out': 'segs_out',
-                        'segs_in': 'segs_in',
-                        'data_segs_out': 'data_segs_out',
-                        'data_segs_in': 'data_segs_in',
-                        # Bytes counters
-                        'bytes_sent': 'bytes_sent',
-                        'bytes_acked': 'bytes_acked',
-                        'bytes_received': 'bytes_received',
-                        # Timing metrics
-                        'lastsnd': 'lastsnd',
-                        'lastrcv': 'lastrcv',
-                        'lastack': 'lastack',
-                        # Application and receiver metrics
-                        'app_limited': 'app_limited',
-                        'rcv_rtt': 'rcv_rtt',
-                        'ato': 'ato',
-                        # Congestion control
-                        'congestion_algorithm': 'congestion_algorithm',
-                        'ca_state': 'ca_state',
-                        # Reordering
-                        'reordering': 'reordering',
-                        'rcv_ooopack': 'rcv_ooopack',
-                        'ooo_ratio': 'ooo_ratio',
-                        # Limited statistics (kernel >= 4.16)
+                        'rtt': 'rtt', 'rttvar': 'rttvar', 'minrtt': 'minrtt', 'rto': 'rto',
+                        'cwnd': 'cwnd', 'ssthresh': 'ssthresh',
+                        'rcv_space': 'rwnd', 'rcv_ssthresh': 'rcv_ssthresh', 'snd_wnd': 'snd_wnd',
+                        'mss': 'mss', 'pmtu': 'pmtu', 'advmss': 'advmss', 'rcvmss': 'rcvmss',
+                        'send_rate': 'send_rate', 'pacing_rate': 'pacing_rate', 'delivery_rate': 'delivery_rate',
+                        'send_q': 'send_q', 'recv_q': 'recv_q',
+                        'socket_tx_queue': 'socket_tx_queue', 'socket_tx_buffer': 'socket_tx_buffer',
+                        'socket_rx_queue': 'socket_rx_queue', 'socket_rx_buffer': 'socket_rx_buffer',
+                        'socket_forward_alloc': 'socket_forward_alloc', 'socket_write_queue': 'socket_write_queue',
+                        'socket_opt_mem': 'socket_opt_mem', 'socket_backlog': 'socket_backlog', 'socket_dropped': 'socket_dropped',
+                        'unacked': 'packets_out', 'inflight_data': 'inflight_data',
+                        'retrans': 'retrans', 'retrans_ratio': 'retrans_rate',
+                        'lost': 'lost', 'sacked': 'sacked',
+                        'dsack_dups': 'dsack_dups', 'spurious_retrans_rate': 'spurious_retrans_rate',
+                        'segs_out': 'segs_out', 'segs_in': 'segs_in',
+                        'data_segs_out': 'data_segs_out', 'data_segs_in': 'data_segs_in',
+                        'bytes_sent': 'bytes_sent', 'bytes_acked': 'bytes_acked', 'bytes_received': 'bytes_received',
+                        'lastsnd': 'lastsnd', 'lastrcv': 'lastrcv', 'lastack': 'lastack',
+                        'app_limited': 'app_limited', 'rcv_rtt': 'rcv_rtt', 'ato': 'ato',
+                        'congestion_algorithm': 'congestion_algorithm', 'ca_state': 'ca_state',
+                        'reordering': 'reordering', 'rcv_ooopack': 'rcv_ooopack',
                         'busy_time': 'busy_time',
-                        'rwnd_limited_time': 'rwnd_limited_time',
-                        'rwnd_limited_ratio': 'rwnd_limited_ratio',
-                        'sndbuf_limited_time': 'sndbuf_limited_time',
-                        'sndbuf_limited_ratio': 'sndbuf_limited_ratio',
-                        'cwnd_limited_time': 'cwnd_limited_time',
-                        'cwnd_limited_ratio': 'cwnd_limited_ratio',
-                        # Analysis metrics
-                        'bdp': 'bdp',
-                        'recommended_window': 'recommended_window'
+                        'rwnd_limited_time': 'rwnd_limited_time', 'rwnd_limited_ratio': 'rwnd_limited_ratio',
+                        'sndbuf_limited_time': 'sndbuf_limited_time', 'sndbuf_limited_ratio': 'sndbuf_limited_ratio',
+                        'cwnd_limited_time': 'cwnd_limited_time', 'cwnd_limited_ratio': 'cwnd_limited_ratio',
+                        'tcp_features': 'tcp_features', 'bdp': 'bdp', 'recommended_window': 'recommended_window'
                     }
 
                     mapped_key = key_mapping.get(key)
                     if mapped_key:
                         # Handle string values specially
-                        if key in ['congestion_algorithm', 'ca_state', 'app_limited', 'wscale']:
+                        if key in ['congestion_algorithm', 'ca_state', 'app_limited', 'tcp_features']:
                             current_record[mapped_key] = value.strip()
                         else:
                             numeric_value = extract_numeric_value(value)
-
-                            # Handle retrans specially (format: "current/total")
-                            if key == 'retrans' and isinstance(numeric_value, tuple):
+                            if isinstance(numeric_value, tuple):
+                                # Handle retrans format "current/total"
                                 current_record['retrans'] = numeric_value[0]
                                 current_record['retrans_total'] = numeric_value[1]
                             elif numeric_value is not None:
@@ -272,51 +227,45 @@ def convert_log_to_csv(input_file: str, output_file: str):
     if current_record and 'timestamp' in current_record:
         records.append(current_record)
 
+    return records
+
+
+def convert_log_to_csv(input_file: str, output_file: str):
+    """Convert socket log to CSV format"""
+
+    records = parse_socket_log_to_records(input_file)
+
     if not records:
         print(f"No records found in {input_file}")
         return
 
-    # Define CSV columns (comprehensive - all available metrics)
+    # Define CSV columns - comprehensive list of all TCP socket metrics
     columns = [
-        # Basic info
         'timestamp', 'connection', 'state',
-        # TCP metrics
         'rtt', 'rttvar', 'minrtt', 'rto',
         'cwnd', 'ssthresh', 'rwnd', 'rcv_ssthresh', 'snd_wnd',
-        'mss', 'pmtu', 'advmss', 'rcvmss', 'wscale',
-        # Rate metrics
+        'mss', 'pmtu', 'advmss', 'rcvmss',
         'send_rate', 'pacing_rate', 'delivery_rate',
-        # Queue metrics
         'send_q', 'recv_q',
-        # Socket buffer metrics
         'socket_tx_queue', 'socket_tx_buffer',
         'socket_rx_queue', 'socket_rx_buffer',
         'socket_forward_alloc', 'socket_write_queue',
         'socket_opt_mem', 'socket_backlog', 'socket_dropped',
-        # Packet metrics
         'packets_out', 'inflight_data',
         'retrans', 'retrans_rate', 'retrans_total',
-        'lost', 'sacked', 'dsack_dups', 'fackets', 'spurious_retrans_rate',
-        # Segment counters
+        'lost', 'sacked', 'dsack_dups', 'spurious_retrans_rate',
         'segs_out', 'segs_in',
         'data_segs_out', 'data_segs_in',
-        # Bytes counters
         'bytes_sent', 'bytes_acked', 'bytes_received',
-        # Timing metrics
         'lastsnd', 'lastrcv', 'lastack',
-        # Application and receiver metrics
         'app_limited', 'rcv_rtt', 'ato',
-        # Congestion control
         'congestion_algorithm', 'ca_state',
-        # Reordering
-        'reordering', 'rcv_ooopack', 'ooo_ratio',
-        # Limited statistics (kernel >= 4.16)
+        'reordering', 'rcv_ooopack',
         'busy_time',
         'rwnd_limited_time', 'rwnd_limited_ratio',
         'sndbuf_limited_time', 'sndbuf_limited_ratio',
         'cwnd_limited_time', 'cwnd_limited_ratio',
-        # Analysis metrics
-        'bdp', 'recommended_window'
+        'tcp_features', 'bdp', 'recommended_window'
     ]
 
     # Write CSV
@@ -327,12 +276,11 @@ def convert_log_to_csv(input_file: str, output_file: str):
         for record in records:
             # Fill missing columns with defaults
             row = {}
+            string_cols = ['connection', 'state', 'congestion_algorithm', 'ca_state', 'app_limited', 'tcp_features']
             for col in columns:
                 if col in record:
                     row[col] = record[col]
-                elif col in ['state']:
-                    row[col] = record.get(col, 'UNKNOWN')
-                elif col == 'connection':
+                elif col in string_cols:
                     row[col] = record.get(col, '')
                 else:
                     row[col] = 0.0

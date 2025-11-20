@@ -8,12 +8,17 @@ Implements FR-SOCKET-SUM-001, FR-SOCKET-SUM-014.
 """
 
 import os
+import sys
 import re
 from typing import Tuple, Optional, Dict, List
-from datetime import datetime
 import pandas as pd
 
 from ..models import FiveTuple
+
+# Import unified conversion logic
+tools_path = os.path.join(os.path.dirname(__file__), '../../tools')
+sys.path.insert(0, tools_path)
+from convert_socket_log_to_csv import parse_socket_log_to_records
 
 
 class ConnectionMismatchError(Exception):
@@ -156,8 +161,7 @@ class SocketDataParser:
         """
         Parse raw socket log file into DataFrame
 
-        Implements the same logic as convert_socket_log_to_csv.py
-        but returns DataFrame directly instead of writing to file.
+        Uses unified conversion logic from convert_socket_log_to_csv.py
 
         Args:
             file_path: Path to raw socket log file
@@ -165,55 +169,9 @@ class SocketDataParser:
         Returns:
             DataFrame with parsed data, or None if parsing fails
         """
-        records = []
-        current_record = {}
-        in_metrics_section = False
-
         try:
-            with open(file_path, 'r') as f:
-                for line in f:
-                    line = line.strip()
-
-                    # Detect new record
-                    if line.startswith('TCP Connection Analysis'):
-                        # Save previous record
-                        if current_record and 'timestamp' in current_record:
-                            records.append(current_record)
-
-                        # Start new record
-                        current_record = {}
-                        timestamp = self._parse_timestamp_from_line(line)
-                        if timestamp:
-                            current_record['timestamp'] = timestamp
-                        in_metrics_section = False
-                        continue
-
-                    # Parse connection
-                    if line.startswith('Connection:'):
-                        conn = self._parse_connection_from_line(line)
-                        if conn:
-                            current_record['connection'] = conn
-                        continue
-
-                    # Parse state
-                    if line.startswith('State:'):
-                        state = self._parse_state_from_line(line)
-                        if state:
-                            current_record['state'] = state
-                        continue
-
-                    # Enter metrics section
-                    if line.startswith('Metrics:'):
-                        in_metrics_section = True
-                        continue
-
-                    # Parse metrics
-                    if in_metrics_section and line:
-                        self._parse_metric_line(line, current_record)
-
-            # Save last record
-            if current_record and 'timestamp' in current_record:
-                records.append(current_record)
+            # Use unified conversion logic
+            records = parse_socket_log_to_records(file_path)
 
             if not records:
                 return None
@@ -243,146 +201,6 @@ class SocketDataParser:
         except Exception as e:
             print(f"Error parsing raw log file {file_path}: {e}")
             return None
-
-    def _parse_timestamp_from_line(self, line: str) -> Optional[float]:
-        """Extract timestamp from header line"""
-        match = re.search(r'(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d+)', line)
-        if match:
-            dt = datetime.strptime(match.group(1), '%Y-%m-%d %H:%M:%S.%f')
-            return dt.timestamp()
-        return None
-
-    def _parse_connection_from_line(self, line: str) -> Optional[str]:
-        """Extract connection string from Connection line"""
-        match = re.search(r'Connection: (.+)', line)
-        if match:
-            conn_str = match.group(1).strip()
-            conn_str = conn_str.replace(' -> ', '->')
-            conn_str = conn_str.replace(' ', '')
-            conn_str = conn_str.replace('::ffff:', '')
-            return conn_str
-        return None
-
-    def _parse_state_from_line(self, line: str) -> Optional[str]:
-        """Extract state from State line"""
-        match = re.search(r'State: (\w+)', line)
-        if match:
-            return match.group(1)
-        return None
-
-    def _parse_metric_line(self, line: str, record: Dict) -> None:
-        """Parse metric line and add to record"""
-        if ':' not in line:
-            return
-
-        parts = line.split(':', 1)
-        if len(parts) != 2:
-            return
-
-        key = parts[0].strip()
-        value = parts[1].strip()
-
-        # Map to expected column names
-        key_mapping = {
-            'rtt': 'rtt', 'rttvar': 'rttvar', 'minrtt': 'minrtt', 'rto': 'rto',
-            'cwnd': 'cwnd', 'ssthresh': 'ssthresh',
-            'rcv_space': 'rwnd', 'rcv_ssthresh': 'rcv_ssthresh', 'snd_wnd': 'snd_wnd',
-            'mss': 'mss', 'pmtu': 'pmtu', 'advmss': 'advmss', 'rcvmss': 'rcvmss',
-            'send_rate': 'send_rate', 'pacing_rate': 'pacing_rate', 'delivery_rate': 'delivery_rate',
-            'send_q': 'send_q', 'recv_q': 'recv_q',
-            'socket_tx_queue': 'socket_tx_queue', 'socket_tx_buffer': 'socket_tx_buffer',
-            'socket_rx_queue': 'socket_rx_queue', 'socket_rx_buffer': 'socket_rx_buffer',
-            'socket_forward_alloc': 'socket_forward_alloc', 'socket_write_queue': 'socket_write_queue',
-            'unacked': 'packets_out', 'inflight_data': 'inflight_data',
-            'retrans': 'retrans', 'retrans_ratio': 'retrans_rate',
-            'lost': 'lost', 'sacked': 'sacked',
-            'segs_out': 'segs_out', 'segs_in': 'segs_in',
-            'data_segs_out': 'data_segs_out', 'data_segs_in': 'data_segs_in',
-            'bytes_sent': 'bytes_sent', 'bytes_acked': 'bytes_acked', 'bytes_received': 'bytes_received',
-            'lastsnd': 'lastsnd', 'lastrcv': 'lastrcv', 'lastack': 'lastack',
-            'app_limited': 'app_limited', 'rcv_rtt': 'rcv_rtt', 'ato': 'ato',
-            'congestion_algorithm': 'congestion_algorithm', 'ca_state': 'ca_state',
-            'reordering': 'reordering', 'rcv_ooopack': 'rcv_ooopack',
-            'busy_time': 'busy_time',
-            'rwnd_limited_time': 'rwnd_limited_time', 'rwnd_limited_ratio': 'rwnd_limited_ratio',
-            'sndbuf_limited_time': 'sndbuf_limited_time', 'sndbuf_limited_ratio': 'sndbuf_limited_ratio',
-            'cwnd_limited_time': 'cwnd_limited_time', 'cwnd_limited_ratio': 'cwnd_limited_ratio'
-        }
-
-        mapped_key = key_mapping.get(key)
-        if mapped_key:
-            # Handle string values specially
-            if key in ['congestion_algorithm', 'ca_state', 'app_limited']:
-                record[mapped_key] = value.strip()
-            else:
-                numeric_value = self._extract_numeric_value(value)
-                if isinstance(numeric_value, tuple):
-                    # Handle retrans format "current/total"
-                    record['retrans'] = numeric_value[0]
-                    record['retrans_total'] = numeric_value[1]
-                elif numeric_value is not None:
-                    record[mapped_key] = numeric_value
-
-    def _extract_numeric_value(self, value_str: str) -> Optional[float]:
-        """Extract numeric value from string like '10.5 Gbps' or '123 bytes'"""
-        if not value_str:
-            return None
-
-        value_str = value_str.replace(',', '')
-
-        # Handle bandwidth units
-        if 'Gbps' in value_str:
-            match = re.search(r'([\d.]+)', value_str)
-            if match:
-                return float(match.group(1)) * 1e9
-        elif 'Mbps' in value_str:
-            match = re.search(r'([\d.]+)', value_str)
-            if match:
-                return float(match.group(1)) * 1e6
-        elif 'Kbps' in value_str:
-            match = re.search(r'([\d.]+)', value_str)
-            if match:
-                return float(match.group(1)) * 1e3
-
-        # Handle size units
-        elif 'bytes' in value_str or 'KB' in value_str or 'MB' in value_str or 'GB' in value_str:
-            match = re.search(r'([\d.]+)', value_str)
-            if match:
-                value = float(match.group(1))
-                if 'KB' in value_str:
-                    value *= 1024
-                elif 'MB' in value_str:
-                    value *= 1024 * 1024
-                elif 'GB' in value_str:
-                    value *= 1024 * 1024 * 1024
-                return value
-
-        # Handle time units
-        elif 'ms' in value_str:
-            match = re.search(r'([\d.]+)', value_str)
-            if match:
-                return float(match.group(1))
-
-        # Handle percentages
-        elif '%' in value_str:
-            match = re.search(r'([\d.]+)%', value_str)
-            if match:
-                return float(match.group(1)) / 100.0
-
-        # Handle fractions like "0/590"
-        elif '/' in value_str:
-            match = re.search(r'(\d+)/(\d+)', value_str)
-            if match:
-                current = int(match.group(1))
-                total = int(match.group(2))
-                return (current, total)
-
-        # Try to extract plain number
-        match = re.search(r'([\d.]+)', value_str)
-        if match:
-            return float(match.group(1))
-
-        return None
 
     def _validate_connection_match(
         self,

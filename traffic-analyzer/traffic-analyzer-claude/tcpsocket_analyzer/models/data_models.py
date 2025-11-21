@@ -134,10 +134,34 @@ class BufferAnalysisResult:
     write_queue_stats: BasicStats
     backlog_stats: BasicStats
     dropped_stats: BasicStats
+    write_queue_stats_server: BasicStats
+    backlog_stats_server: BasicStats
+    dropped_stats_server: BasicStats
 
     # Analysis
     send_buffer_limited_ratio: float
     recv_buffer_limited_ratio: float
+
+
+@dataclass
+class LimitAnalysisResult:
+    """Busy/limited time statistics derived directly from socket fields"""
+    busy_time_stats_client: BasicStats
+    busy_time_stats_server: BasicStats
+
+    cwnd_limited_ratio_client: float
+    cwnd_limited_ratio_server: float
+    rwnd_limited_ratio_client: float
+    rwnd_limited_ratio_server: float
+    sndbuf_limited_ratio_client: float
+    sndbuf_limited_ratio_server: float
+
+    cwnd_limited_time_stats_client: BasicStats
+    cwnd_limited_time_stats_server: BasicStats
+    rwnd_limited_time_stats_client: BasicStats
+    rwnd_limited_time_stats_server: BasicStats
+    sndbuf_limited_time_stats_client: BasicStats
+    sndbuf_limited_time_stats_server: BasicStats
 
 
 @dataclass
@@ -153,12 +177,14 @@ class RetransAnalysisResult:
     retrans_bytes_rate_server: float
     spurious_retrans_count_client: int
     spurious_retrans_count_server: int
-    fast_retrans_ratio_client: float
-    timeout_retrans_ratio_client: float
     spurious_retrans_ratio_client: float
-    fast_retrans_ratio_server: float
-    timeout_retrans_ratio_server: float
     spurious_retrans_ratio_server: float
+    sacked_packets_client: int
+    sacked_packets_server: int
+    dsack_dups_client: int
+    dsack_dups_server: int
+    spurious_retrans_rate_stats_client: BasicStats
+    spurious_retrans_rate_stats_server: BasicStats
 
 
 @dataclass
@@ -177,6 +203,7 @@ class SummaryResult:
     rate_analysis: RateAnalysisResult
     rtt_analysis: RTTAnalysisResult
     buffer_analysis: BufferAnalysisResult
+    limit_analysis: LimitAnalysisResult
     retrans_analysis: RetransAnalysisResult
     bottleneck: BottleneckIdentification
     recommendations: List['Recommendation']
@@ -246,6 +273,14 @@ class RetransBurstEvent:
 @dataclass
 class RetransDetailedResult:
     """Detailed retransmission analysis"""
+    total_retrans: int
+    retrans_rate_pct: float
+    bytes_retrans_rate_pct: float
+    spurious_retrans_count: int
+    spurious_retrans_ratio: float
+    sacked_packets: int
+    dsack_dups: int
+    spurious_retrans_rate_stats: BasicStats
     burst_events: List[RetransBurstEvent]
     spurious_retrans_distribution: Dict[str, int]
     retrans_time_correlation: float
@@ -256,6 +291,18 @@ class BufferDetailedResult:
     """Detailed buffer analysis"""
     send_buffer_pressure_series: List[float]
     recv_buffer_pressure_series: List[float]
+    send_buffer_pressure_stats: BasicStats
+    recv_buffer_pressure_stats: BasicStats
+    socket_tx_queue_stats: BasicStats
+    socket_rx_queue_stats: BasicStats
+    send_q_stats: BasicStats
+    recv_q_stats: BasicStats
+    socket_write_queue_stats_client: BasicStats
+    socket_write_queue_stats_server: BasicStats
+    socket_backlog_stats_client: BasicStats
+    socket_backlog_stats_server: BasicStats
+    socket_dropped_stats_client: BasicStats
+    socket_dropped_stats_server: BasicStats
     high_pressure_ratio: float
     buffer_exhaustion_events: int
 

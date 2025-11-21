@@ -3128,108 +3128,54 @@ class DetailedAnalyzer:
 
 ---
 
-### 2.4.20 DetailedAnalyzer - Buffer压力时序分析
+### 2.4.20 DetailedAnalyzer - Buffer压力时序分析（离散采样版）
 
-**实现需求**: FR-SOCKET-DET-007
+**实现需求**: FR-SOCKET-DET-007  
+**采样约束**: 输入为固定间隔离散采样，所有比例/持续时间均为“样本占比”近似。
 
+**指标定义（发送视角 = client）：**
+- `socket_tx_queue/socket_tx_buffer` 压力：每个样本的 `socket_tx_queue / socket_tx_buffer`，统计 basic stats + 序列，表示发送缓冲占用比例。
+- `send_q`：`ss` 输出的 send_q 原始队列长度统计。
+- `socket_write_queue`：写队列长度统计。
+- `socket_backlog`：当前 backlog 占用统计。
+- `socket_dropped`：socket 层丢弃计数（仅样本统计）。
+
+**指标定义（接收视角 = server）：**
+- `socket_rx_queue/socket_rx_buffer` 压力：`socket_rx_queue / socket_rx_buffer` 比例统计 + 序列，表示接收缓冲占用。
+- `recv_q`：recv_q 原始队列长度统计。
+- `socket_write_queue` / `socket_backlog` / `socket_dropped`：同上，来源于 server 侧。
+
+**综合指标：**
+- `high_pressure_ratio`：发送侧样本中压力 > 90% 的占比。
+- `buffer_exhaustion_events`：发送侧压力 ≥ 99% 的样本计数（粒度受采样周期限制，为上界估计）。
+
+**数据结构（实现对齐）：**
 ```python
 @dataclass
 class BufferDetailedResult:
-    """Buffer深度分析结果"""
-    # 发送侧时序分析
-    send_q_timeseries: pd.DataFrame
-    socket_tx_pressure_timeseries: pd.DataFrame
-
-    # 接收侧时序分析
-    recv_q_timeseries: pd.DataFrame
-    socket_rx_pressure_timeseries: pd.DataFrame
-
-    # 压力分级统计
-    pressure_distribution: Dict[str, float]  # HIGH/MEDIUM/LOW占比
-
-class DetailedAnalyzer:
-    def analyze_buffer_detailed(self,
-                                client_df: pd.DataFrame,
-                                server_df: pd.DataFrame) -> BufferDetailedResult:
-        """
-        Buffer压力时序分析
-
-        实现需求: FR-SOCKET-DET-007
-
-        分析内容:
-        1. 发送侧压力时序
-        2. 接收侧压力时序
-        3. 压力分级统计
-        """
-        # 发送侧时序
-        send_q_ts = self._extract_timeseries(client_df, 'send_q')
-        socket_tx_pressure = self._compute_buffer_pressure(
-            client_df, 'socket_tx_queue', 'socket_tx_buffer'
-        )
-
-        # 接收侧时序
-        recv_q_ts = self._extract_timeseries(server_df, 'recv_q')
-        socket_rx_pressure = self._compute_buffer_pressure(
-            server_df, 'socket_rx_queue', 'socket_rx_buffer'
-        )
-
-        # 压力分级
-        pressure_dist = self._compute_pressure_distribution(socket_tx_pressure)
-
-        return BufferDetailedResult(
-            send_q_timeseries=send_q_ts,
-            socket_tx_pressure_timeseries=socket_tx_pressure,
-            recv_q_timeseries=recv_q_ts,
-            socket_rx_pressure_timeseries=socket_rx_pressure,
-            pressure_distribution=pressure_dist
-        )
-
-    def _compute_buffer_pressure(self,
-                                 df: pd.DataFrame,
-                                 queue_field: str,
-                                 buffer_field: str) -> pd.DataFrame:
-        """
-        计算Buffer压力时序
-
-        返回DataFrame包含:
-        - timestamp
-        - utilization (利用率)
-        - pressure_level (HIGH/MEDIUM/LOW)
-        """
-        if queue_field not in df.columns or buffer_field not in df.columns:
-            return pd.DataFrame()
-
-        pressure_df = pd.DataFrame()
-        pressure_df['timestamp'] = df.index
-        pressure_df['utilization'] = df[queue_field] / df[buffer_field]
-
-        # 压力分级
-        def classify_pressure(util):
-            if util > 0.9:
-                return 'HIGH'
-            elif util > 0.7:
-                return 'MEDIUM'
-            else:
-                return 'LOW'
-
-        pressure_df['pressure_level'] = pressure_df['utilization'].apply(classify_pressure)
-
-        return pressure_df
-
-    def _compute_pressure_distribution(self, pressure_df: pd.DataFrame) -> Dict[str, float]:
-        """计算压力分级分布"""
-        if pressure_df.empty:
-            return {}
-
-        total = len(pressure_df)
-        counts = pressure_df['pressure_level'].value_counts()
-
-        return {
-            'HIGH': counts.get('HIGH', 0) / total,
-            'MEDIUM': counts.get('MEDIUM', 0) / total,
-            'LOW': counts.get('LOW', 0) / total
-        }
+    send_buffer_pressure_series: List[float]
+    recv_buffer_pressure_series: List[float]
+    send_buffer_pressure_stats: BasicStats
+    recv_buffer_pressure_stats: BasicStats
+    socket_tx_queue_stats: BasicStats
+    socket_rx_queue_stats: BasicStats
+    send_q_stats: BasicStats
+    recv_q_stats: BasicStats
+    socket_write_queue_stats_client: BasicStats
+    socket_write_queue_stats_server: BasicStats
+    socket_backlog_stats_client: BasicStats
+    socket_backlog_stats_server: BasicStats
+    socket_dropped_stats_client: BasicStats
+    socket_dropped_stats_server: BasicStats
+    high_pressure_ratio: float
+    buffer_exhaustion_events: int
 ```
+
+**算法要点：**
+1. 压力序列：直接按样本比值计算；缺字段时返回 0。
+2. 统计：统一用 `TimeSeriesStats.compute_basic_stats`。
+3. high_pressure / exhaustion：基于 send 压力序列阈值 0.9 / 0.99 计数。
+4. 所有“时间/占比”均在输出文案中注明“样本占比，误差≈采样周期”。
 
 ---
 

@@ -22,6 +22,7 @@ from ..models import (
 from .summary_analyzer import SummaryAnalyzer
 from .window_analyzer import WindowAnalyzer, CWNDPatterns, WindowLimits
 from .rate_analyzer import RateAnalyzer, RateTrends, RateLimits, Correlations
+from ..statistics.timeseries_stats import TimeSeriesStats
 
 
 @dataclass
@@ -50,6 +51,7 @@ class DetailedAnalyzer:
         self.summary_analyzer = SummaryAnalyzer()
         self.window_analyzer = WindowAnalyzer()
         self.rate_analyzer = RateAnalyzer()
+        self.stats_engine = TimeSeriesStats()
 
     def analyze(
         self,
@@ -340,6 +342,42 @@ class DetailedAnalyzer:
         Returns:
             RetransDetailedResult
         """
+        # Basic aggregates (client-side)
+        if 'retrans_total' in df.columns and df['retrans_total'].notna().any():
+            base = df['retrans_total'].dropna()
+            total_retrans = int(base.max() - base.min()) if len(base) else 0
+            incr_series = base.diff().fillna(0).clip(lower=0)
+        else:
+            series = df['retrans'] if 'retrans' in df.columns else pd.Series([0])
+            total_retrans = int(series.max()) if len(series) else 0
+            incr_series = series.diff().fillna(series).clip(lower=0)
+
+        # Rate pct over packets
+        if 'data_segs_out' in df.columns and df['data_segs_out'].notna().any():
+            packets_total = df['data_segs_out'].max() - df['data_segs_out'].min()
+        elif 'segs_out' in df.columns and df['segs_out'].notna().any():
+            packets_total = df['segs_out'].max() - df['segs_out'].min()
+        else:
+            packets_total = 0
+        retrans_rate_pct = (total_retrans / packets_total * 100) if packets_total > 0 else 0.0
+
+        # Bytes retrans rate
+        if 'bytes_retrans' in df.columns and 'bytes_sent' in df.columns and df['bytes_sent'].max() > 0:
+            bytes_retrans_rate_pct = (df['bytes_retrans'].max() - df['bytes_retrans'].min()) / df['bytes_sent'].max() * 100
+        else:
+            bytes_retrans_rate_pct = 0.0
+
+        # Spurious
+        spurious_count = int(df['spurious_retrans_rate'].sum()) if 'spurious_retrans_rate' in df.columns else 0
+        spurious_ratio = min(1.0, spurious_count / total_retrans) if total_retrans > 0 else 0.0
+        spurious_rate_stats = self.stats_engine.compute_basic_stats(
+            df['spurious_retrans_rate']
+        ) if 'spurious_retrans_rate' in df.columns else self.stats_engine.compute_basic_stats(pd.Series([0]))
+
+        # SACK / DSACK
+        sacked_packets = int(df['sacked'].max() - df['sacked'].min()) if 'sacked' in df.columns and df['sacked'].notna().any() else 0
+        dsack_dups = int(df['dsack_dups'].max() - df['dsack_dups'].min()) if 'dsack_dups' in df.columns and df['dsack_dups'].notna().any() else 0
+
         # Detect burst events
         burst_events = self._detect_retrans_bursts(df)
 
@@ -350,6 +388,14 @@ class DetailedAnalyzer:
         time_correlation = 0.0
 
         return RetransDetailedResult(
+            total_retrans=total_retrans,
+            retrans_rate_pct=retrans_rate_pct,
+            bytes_retrans_rate_pct=bytes_retrans_rate_pct,
+            spurious_retrans_count=spurious_count,
+            spurious_retrans_ratio=spurious_ratio,
+            sacked_packets=sacked_packets,
+            dsack_dups=dsack_dups,
+            spurious_retrans_rate_stats=spurious_rate_stats,
             burst_events=burst_events,
             spurious_retrans_distribution=spurious_distribution,
             retrans_time_correlation=time_correlation
@@ -418,17 +464,37 @@ class DetailedAnalyzer:
         Returns:
             BufferDetailedResult
         """
-        # Send buffer pressure series
-        send_pressure_series = []
+        # Send buffer pressure series + stats
+        send_pressure_series: List[float] = []
         if 'socket_tx_queue' in client_df.columns and 'socket_tx_buffer' in client_df.columns:
             send_pressure = client_df['socket_tx_queue'] / client_df['socket_tx_buffer']
             send_pressure_series = send_pressure.fillna(0).tolist()
+            send_pressure_stats = self.stats_engine.compute_basic_stats(send_pressure.fillna(0))
+            socket_tx_queue_stats = self.stats_engine.compute_basic_stats(client_df['socket_tx_queue'])
+        else:
+            send_pressure = pd.Series([0])
+            send_pressure_stats = self.stats_engine.compute_basic_stats(send_pressure)
+            socket_tx_queue_stats = self.stats_engine.compute_basic_stats(send_pressure)
 
-        # Recv buffer pressure series
-        recv_pressure_series = []
+        send_q_stats = self.stats_engine.compute_basic_stats(
+            client_df['send_q']
+        ) if 'send_q' in client_df.columns else self.stats_engine.compute_basic_stats(pd.Series([0]))
+
+        # Recv buffer pressure series + stats (server perspective)
+        recv_pressure_series: List[float] = []
         if 'socket_rx_queue' in server_df.columns and 'socket_rx_buffer' in server_df.columns:
             recv_pressure = server_df['socket_rx_queue'] / server_df['socket_rx_buffer']
             recv_pressure_series = recv_pressure.fillna(0).tolist()
+            recv_pressure_stats = self.stats_engine.compute_basic_stats(recv_pressure.fillna(0))
+            socket_rx_queue_stats = self.stats_engine.compute_basic_stats(server_df['socket_rx_queue'])
+        else:
+            recv_pressure = pd.Series([0])
+            recv_pressure_stats = self.stats_engine.compute_basic_stats(recv_pressure)
+            socket_rx_queue_stats = self.stats_engine.compute_basic_stats(recv_pressure)
+
+        recv_q_stats = self.stats_engine.compute_basic_stats(
+            server_df['recv_q']
+        ) if 'recv_q' in server_df.columns else self.stats_engine.compute_basic_stats(pd.Series([0]))
 
         # High pressure ratio
         high_pressure_ratio = 0.0
@@ -439,9 +505,43 @@ class DetailedAnalyzer:
         # Buffer exhaustion events
         exhaustion_events = sum(1 for p in send_pressure_series if p >= 0.99)
 
+        # Additional queues/backlog/dropped (both sides)
+        socket_write_queue_client = self.stats_engine.compute_basic_stats(
+            client_df['socket_write_queue']
+        ) if 'socket_write_queue' in client_df.columns else self.stats_engine.compute_basic_stats(pd.Series([0]))
+        socket_write_queue_server = self.stats_engine.compute_basic_stats(
+            server_df['socket_write_queue']
+        ) if 'socket_write_queue' in server_df.columns else self.stats_engine.compute_basic_stats(pd.Series([0]))
+
+        socket_backlog_client = self.stats_engine.compute_basic_stats(
+            client_df['socket_backlog']
+        ) if 'socket_backlog' in client_df.columns else self.stats_engine.compute_basic_stats(pd.Series([0]))
+        socket_backlog_server = self.stats_engine.compute_basic_stats(
+            server_df['socket_backlog']
+        ) if 'socket_backlog' in server_df.columns else self.stats_engine.compute_basic_stats(pd.Series([0]))
+
+        socket_dropped_client = self.stats_engine.compute_basic_stats(
+            client_df['socket_dropped']
+        ) if 'socket_dropped' in client_df.columns else self.stats_engine.compute_basic_stats(pd.Series([0]))
+        socket_dropped_server = self.stats_engine.compute_basic_stats(
+            server_df['socket_dropped']
+        ) if 'socket_dropped' in server_df.columns else self.stats_engine.compute_basic_stats(pd.Series([0]))
+
         return BufferDetailedResult(
             send_buffer_pressure_series=send_pressure_series,
             recv_buffer_pressure_series=recv_pressure_series,
+            send_buffer_pressure_stats=send_pressure_stats,
+            recv_buffer_pressure_stats=recv_pressure_stats,
+            socket_tx_queue_stats=socket_tx_queue_stats,
+            socket_rx_queue_stats=socket_rx_queue_stats,
+            send_q_stats=send_q_stats,
+            recv_q_stats=recv_q_stats,
+            socket_write_queue_stats_client=socket_write_queue_client,
+            socket_write_queue_stats_server=socket_write_queue_server,
+            socket_backlog_stats_client=socket_backlog_client,
+            socket_backlog_stats_server=socket_backlog_server,
+            socket_dropped_stats_client=socket_dropped_client,
+            socket_dropped_stats_server=socket_dropped_server,
             high_pressure_ratio=high_pressure_ratio,
             buffer_exhaustion_events=exhaustion_events
         )

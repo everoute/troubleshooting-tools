@@ -205,7 +205,6 @@ class RateAnalyzer:
         Types:
         1. Pacing limited: pacing_rate < delivery_rate
         2. Network limited: delivery_rate approaches bandwidth
-        3. App limited: delivery_rate << bandwidth and no congestion
 
         Args:
             df: DataFrame with rate metrics
@@ -237,12 +236,8 @@ class RateAnalyzer:
         else:
             network_limited_ratio = 0.0
 
-        # App limited (heuristic)
-        if 'delivery_rate' in df.columns:
-            app_limited = (df['delivery_rate'] < bandwidth * 0.5)
-            app_limited_ratio = app_limited.sum() / len(df)
-        else:
-            app_limited_ratio = 0.0
+        # App limited: disabled (ack-driven delivery_rate causes false positives)
+        app_limited_ratio = 0.0
 
         return RateLimits(
             pacing_limited_ratio=pacing_limited_ratio,

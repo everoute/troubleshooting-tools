@@ -10,10 +10,12 @@ from typing import List, Optional
 import pandas as pd
 
 from ..models import (
+    BasicStats,
     WindowAnalysisResult,
     RateAnalysisResult,
     RTTAnalysisResult,
     BufferAnalysisResult,
+    LimitAnalysisResult,
     RetransAnalysisResult,
     BottleneckIdentification,
     SummaryResult,
@@ -55,6 +57,7 @@ class SummaryAnalyzer:
         rate_analysis = self.analyze_rate(client_df, server_df, bandwidth)
         rtt_analysis = self.analyze_rtt(client_df, server_df)
         buffer_analysis = self.analyze_buffer(client_df, server_df)
+        limit_analysis = self.analyze_limits(client_df, server_df)
         retrans_analysis = self.analyze_retrans(client_df, server_df)
 
         # Identify bottlenecks
@@ -70,6 +73,7 @@ class SummaryAnalyzer:
             rate_analysis=rate_analysis,
             rtt_analysis=rtt_analysis,
             buffer_analysis=buffer_analysis,
+            limit_analysis=limit_analysis,
             retrans_analysis=retrans_analysis,
             bottleneck=bottleneck,
             recommendations=[]  # Will be filled by RecommendationEngine
@@ -334,6 +338,17 @@ class SummaryAnalyzer:
             client_df['socket_dropped']
         ) if 'socket_dropped' in client_df.columns else self.stats_engine.compute_basic_stats(pd.Series([0]))
 
+        # Server side additional queue/backlog/drop stats
+        server_write_queue_stats = self.stats_engine.compute_basic_stats(
+            server_df['socket_write_queue']
+        ) if 'socket_write_queue' in server_df.columns else self.stats_engine.compute_basic_stats(pd.Series([0]))
+        server_backlog_stats = self.stats_engine.compute_basic_stats(
+            server_df['socket_backlog']
+        ) if 'socket_backlog' in server_df.columns else self.stats_engine.compute_basic_stats(pd.Series([0]))
+        server_dropped_stats = self.stats_engine.compute_basic_stats(
+            server_df['socket_dropped']
+        ) if 'socket_dropped' in server_df.columns else self.stats_engine.compute_basic_stats(pd.Series([0]))
+
         return BufferAnalysisResult(
             send_buffer_size=send_buffer_size,
             send_queue_stats=send_queue_stats,
@@ -346,8 +361,43 @@ class SummaryAnalyzer:
             write_queue_stats=write_queue_stats,
             backlog_stats=backlog_stats,
             dropped_stats=dropped_stats,
+            write_queue_stats_server=server_write_queue_stats,
+            backlog_stats_server=server_backlog_stats,
+            dropped_stats_server=server_dropped_stats,
             send_buffer_limited_ratio=send_limited_ratio,
             recv_buffer_limited_ratio=recv_limited_ratio
+        )
+
+    def analyze_limits(
+        self,
+        client_df: pd.DataFrame,
+        server_df: pd.DataFrame
+    ) -> LimitAnalysisResult:
+        """Analyze busy time and limited ratios directly from raw fields."""
+
+        def _stats(df: pd.DataFrame, column: str) -> BasicStats:
+            if column in df.columns:
+                return self.stats_engine.compute_basic_stats(df[column])
+            return self.stats_engine.compute_basic_stats(pd.Series([0]))
+
+        def _ratio(df: pd.DataFrame, column: str) -> float:
+            return float(df[column].mean()) if column in df.columns else 0.0
+
+        return LimitAnalysisResult(
+            busy_time_stats_client=_stats(client_df, 'busy_time'),
+            busy_time_stats_server=_stats(server_df, 'busy_time'),
+            cwnd_limited_ratio_client=_ratio(client_df, 'cwnd_limited_ratio'),
+            cwnd_limited_ratio_server=_ratio(server_df, 'cwnd_limited_ratio'),
+            rwnd_limited_ratio_client=_ratio(client_df, 'rwnd_limited_ratio'),
+            rwnd_limited_ratio_server=_ratio(server_df, 'rwnd_limited_ratio'),
+            sndbuf_limited_ratio_client=_ratio(client_df, 'sndbuf_limited_ratio'),
+            sndbuf_limited_ratio_server=_ratio(server_df, 'sndbuf_limited_ratio'),
+            cwnd_limited_time_stats_client=_stats(client_df, 'cwnd_limited_time'),
+            cwnd_limited_time_stats_server=_stats(server_df, 'cwnd_limited_time'),
+            rwnd_limited_time_stats_client=_stats(client_df, 'rwnd_limited_time'),
+            rwnd_limited_time_stats_server=_stats(server_df, 'rwnd_limited_time'),
+            sndbuf_limited_time_stats_client=_stats(client_df, 'sndbuf_limited_time'),
+            sndbuf_limited_time_stats_server=_stats(server_df, 'sndbuf_limited_time')
         )
 
     def analyze_retrans(
@@ -388,18 +438,58 @@ class SummaryAnalyzer:
                 bytes_rate = 0.0
 
             spurious_count = int(df['spurious_retrans_rate'].sum()) if 'spurious_retrans_rate' in df.columns else 0
+            spurious_rate_stats = self.stats_engine.compute_basic_stats(
+                df['spurious_retrans_rate']
+            ) if 'spurious_retrans_rate' in df.columns else self.stats_engine.compute_basic_stats(pd.Series([0]))
 
-            if total > 0:
-                fast_ratio = min(1.0, df.get('cwnd_limited_ratio', pd.Series([0])).mean()) if 'cwnd_limited_ratio' in df.columns else 0.5
-                timeout_ratio = 0.3 if fast_ratio < 0.7 else 0.2
-                spurious_ratio = min(1.0, spurious_count / total)
+            spurious_ratio = min(1.0, spurious_count / total) if total > 0 else 0.0
+
+            # SACK/DSACK counts (compute deltas to avoid cumulative start)
+            if 'sacked' in df.columns and df['sacked'].notna().any():
+                sacked_packets = int(df['sacked'].max() - df['sacked'].min())
             else:
-                fast_ratio = timeout_ratio = spurious_ratio = 0.0
+                sacked_packets = 0
 
-            return rate_stats, total, rate_pct, bytes_rate, spurious_count, fast_ratio, timeout_ratio, spurious_ratio
+            if 'dsack_dups' in df.columns and df['dsack_dups'].notna().any():
+                dsack_dups = int(df['dsack_dups'].max() - df['dsack_dups'].min())
+            else:
+                dsack_dups = 0
 
-        c_stats, c_total, c_rate_pct, c_bytes_rate, c_spurious, c_fast, c_timeout, c_spurious_ratio = _compute_side(client_df)
-        s_stats, s_total, s_rate_pct, s_bytes_rate, s_spurious, s_fast, s_timeout, s_spurious_ratio = _compute_side(server_df)
+            return (
+                rate_stats,
+                total,
+                rate_pct,
+                bytes_rate,
+                spurious_count,
+                spurious_ratio,
+                sacked_packets,
+                dsack_dups,
+                spurious_rate_stats
+            )
+
+        (
+            c_stats,
+            c_total,
+            c_rate_pct,
+            c_bytes_rate,
+            c_spurious,
+            c_spurious_ratio,
+            c_sacked,
+            c_dsack,
+            c_spurious_rate_stats
+        ) = _compute_side(client_df)
+
+        (
+            s_stats,
+            s_total,
+            s_rate_pct,
+            s_bytes_rate,
+            s_spurious,
+            s_spurious_ratio,
+            s_sacked,
+            s_dsack,
+            s_spurious_rate_stats
+        ) = _compute_side(server_df)
 
         return RetransAnalysisResult(
             client_retrans_rate_stats=c_stats,
@@ -412,12 +502,14 @@ class SummaryAnalyzer:
             retrans_bytes_rate_server=s_bytes_rate,
             spurious_retrans_count_client=c_spurious,
             spurious_retrans_count_server=s_spurious,
-            fast_retrans_ratio_client=c_fast,
-            timeout_retrans_ratio_client=c_timeout,
             spurious_retrans_ratio_client=c_spurious_ratio,
-            fast_retrans_ratio_server=s_fast,
-            timeout_retrans_ratio_server=s_timeout,
-            spurious_retrans_ratio_server=s_spurious_ratio
+            spurious_retrans_ratio_server=s_spurious_ratio,
+            sacked_packets_client=c_sacked,
+            sacked_packets_server=s_sacked,
+            dsack_dups_client=c_dsack,
+            dsack_dups_server=s_dsack,
+            spurious_retrans_rate_stats_client=c_spurious_rate_stats,
+            spurious_retrans_rate_stats_server=s_spurious_rate_stats
         )
 
     def identify_bottlenecks(

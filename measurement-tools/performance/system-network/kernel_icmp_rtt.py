@@ -17,14 +17,14 @@
 #     sudo ./kernel_icmp_rtt.py --src-ip 192.168.1.10 --dst-ip 192.168.1.20 \
 #                               --interface eth0 --latency-ms 10
 #
-# Trace stages:
+# Trace stages (minimal host-only, no ip_send_skb dependency):
 # TX mode (local -> remote):
-#   Path 1 (Request): ip_send_skb -> ip_local_out -> dev_queue_xmit
+#   Path 1 (Request): ip_local_out -> dev_queue_xmit
 #   Path 2 (Reply):   __netif_receive_skb -> ip_rcv -> icmp_rcv
 #
 # RX mode (remote -> local):
 #   Path 1 (Request): __netif_receive_skb -> ip_rcv -> icmp_rcv
-#   Path 2 (Reply):   ip_send_skb -> ip_local_out -> dev_queue_xmit
+#   Path 2 (Reply):   ip_local_out -> dev_queue_xmit
 
 # BCC module import with fallback
 try:
@@ -53,6 +53,8 @@ import fcntl
 
 # --- BPF Program ---
 bpf_text = """
+#define DEBUG_ENABLE %d
+
 #include <uapi/linux/ptrace.h>
 #include <net/sock.h>
 #include <bcc/proto.h>
@@ -71,11 +73,11 @@ bpf_text = """
 #define TRACE_DIRECTION %d  // 0 for TX, 1 for RX
 
 // Stage definitions
-// Path 1 stages: 0, 1, 2
+// Path 1 stages: 0, 1 (TX path start/end without ip_send_skb dependency)
 // Path 2 stages: 3, 4, 5
 #define PATH1_STAGE_0    0
 #define PATH1_STAGE_1    1
-#define PATH1_STAGE_2    2
+#define PATH1_STAGE_2    2  // reserved/unused
 #define PATH2_STAGE_0    3
 #define PATH2_STAGE_1    4
 #define PATH2_STAGE_2    5
@@ -83,6 +85,33 @@ bpf_text = """
 #define MAX_STAGES       6
 #define IFNAMSIZ         16
 #define TASK_COMM_LEN    16
+
+// Debug code points (bcc-debug-framework)
+#define CODE_PROBE_ENTRY         1
+#define CODE_INTERFACE_FILTER    2
+#define CODE_HANDLE_ENTRY        5
+#define CODE_PARSE_ENTRY         6
+#define CODE_PARSE_SUCCESS       7
+#define CODE_PARSE_IP_FILTER     8
+#define CODE_FLOW_CREATE        14
+#define CODE_FLOW_LOOKUP        15
+#define CODE_FLOW_FOUND         16
+#define CODE_FLOW_NOT_FOUND     17
+#define CODE_PERF_SUBMIT        19
+#define CODE_PARSE_HDR_FAIL     20
+#define CODE_PARSE_NOT_ICMP     21
+#define CODE_PARSE_IP_MISMATCH  22
+#define CODE_PARSE_ICMP_MISMATCH 23
+
+// Debug helpers
+BPF_HISTOGRAM(debug_stage_stats, u32);
+
+static __always_inline void debug_inc(u8 stage_id, u8 code_point) {
+    if (!DEBUG_ENABLE)
+        return;
+    u32 key = ((u32)stage_id << 8) | code_point;
+    debug_stage_stats.increment(key);
+}
 
 // Packet key structure
 struct packet_key_t {
@@ -149,8 +178,14 @@ static __always_inline bool is_target_ifindex(const struct sk_buff *skb) {
 }
 
 // Parse packet key
+// expect_echo_reply: 0 -> expect ICMP_ECHO, 1 -> ICMP_ECHOREPLY
+// reverse_ips:       0 -> sip=SRC_IP_FILTER, dip=DST_IP_FILTER
+//                    1 -> sip=DST_IP_FILTER, dip=SRC_IP_FILTER
 static __always_inline int parse_packet_key(struct sk_buff *skb, struct packet_key_t *key,
-                                           u8 *icmp_type_out, int path_is_primary) {
+                                           u8 *icmp_type_out, int expect_echo_reply,
+                                           int reverse_ips, u8 stage_id) {
+    debug_inc(stage_id, CODE_PARSE_ENTRY);
+
     if (skb == NULL) {
         return 0;
     }
@@ -162,40 +197,40 @@ static __always_inline int parse_packet_key(struct sk_buff *skb, struct packet_k
     if (bpf_probe_read_kernel(&head, sizeof(head), &skb->head) < 0 ||
         bpf_probe_read_kernel(&network_header_offset, sizeof(network_header_offset), &skb->network_header) < 0 ||
         bpf_probe_read_kernel(&transport_header_offset, sizeof(transport_header_offset), &skb->transport_header) < 0) {
+        debug_inc(stage_id, CODE_PARSE_HDR_FAIL);
         return 0;
     }
 
-    if (network_header_offset == (u16)~0U || network_header_offset > 2048) {
+    if (network_header_offset == (u16)~0U || network_header_offset > 4096) {
+        debug_inc(stage_id, CODE_PARSE_HDR_FAIL);
         return 0;
     }
 
     struct iphdr ip;
     if (bpf_probe_read_kernel(&ip, sizeof(ip), head + network_header_offset) < 0) {
+        debug_inc(stage_id, CODE_PARSE_HDR_FAIL);
         return 0;
     }
 
     if (ip.protocol != IPPROTO_ICMP) {
+        debug_inc(stage_id, CODE_PARSE_NOT_ICMP);
         return 0;
     }
 
+    __be32 expected_sip = reverse_ips ? DST_IP_FILTER : SRC_IP_FILTER;
+    __be32 expected_dip = reverse_ips ? SRC_IP_FILTER : DST_IP_FILTER;
     __be32 actual_sip = ip.saddr;
     __be32 actual_dip = ip.daddr;
-    u8 expected_icmp_type_val;
-
-    if (path_is_primary) {
-        if (!(actual_sip == SRC_IP_FILTER && actual_dip == DST_IP_FILTER)) {
-            return 0;
-        }
-        expected_icmp_type_val = ICMP_ECHO;
-    } else {
-        if (!(actual_sip == DST_IP_FILTER && actual_dip == SRC_IP_FILTER)) {
-            return 0;
-        }
-        expected_icmp_type_val = ICMP_ECHOREPLY;
+    if (!(actual_sip == expected_sip && actual_dip == expected_dip)) {
+        debug_inc(stage_id, CODE_PARSE_IP_MISMATCH);
+        return 0;
     }
+
+    u8 expected_icmp_type_val = expect_echo_reply ? ICMP_ECHOREPLY : ICMP_ECHO;
 
     u8 ip_ihl = ip.ihl & 0x0F;
     if (ip_ihl < 5) {
+        debug_inc(stage_id, CODE_PARSE_HDR_FAIL);
         return 0;
     }
 
@@ -206,10 +241,12 @@ static __always_inline int parse_packet_key(struct sk_buff *skb, struct packet_k
 
     struct icmphdr icmph;
     if (bpf_probe_read_kernel(&icmph, sizeof(icmph), head + transport_header_offset) < 0) {
+        debug_inc(stage_id, CODE_PARSE_HDR_FAIL);
         return 0;
     }
 
     if (icmph.type != expected_icmp_type_val) {
+        debug_inc(stage_id, CODE_PARSE_ICMP_MISMATCH);
         return 0;
     }
 
@@ -220,6 +257,8 @@ static __always_inline int parse_packet_key(struct sk_buff *skb, struct packet_k
     key->id = icmph.un.echo.id;
     key->seq = icmph.un.echo.sequence;
 
+    debug_inc(stage_id, CODE_PARSE_SUCCESS);
+
     return 1;
 }
 
@@ -229,6 +268,7 @@ static __always_inline void handle_event(void *ctx, struct sk_buff *skb,
                                          u64 current_stage_global_id,
                                          struct packet_key_t *parsed_packet_key,
                                          u8 actual_icmp_type) {
+    debug_inc(current_stage_global_id, CODE_HANDLE_ENTRY);
     if (skb == NULL) {
         return;
     }
@@ -236,6 +276,7 @@ static __always_inline void handle_event(void *ctx, struct sk_buff *skb,
     // Check interface for first stage of each path
     if (current_stage_global_id == PATH2_STAGE_0 && TRACE_DIRECTION == 0) {  // TX mode reply
         if (!is_target_ifindex(skb)) {
+            debug_inc(current_stage_global_id, CODE_INTERFACE_FILTER);
             return;
         }
     }
@@ -244,7 +285,7 @@ static __always_inline void handle_event(void *ctx, struct sk_buff *skb,
             return;
         }
     }
-    if (current_stage_global_id == PATH1_STAGE_2 && TRACE_DIRECTION == 0) {  // TX mode request final
+    if (current_stage_global_id == PATH1_STAGE_1 && TRACE_DIRECTION == 0) {  // TX mode request final
         if (!is_target_ifindex(skb)) {
             return;
         }
@@ -262,15 +303,18 @@ static __always_inline void handle_event(void *ctx, struct sk_buff *skb,
 
     if (current_stage_global_id == PATH1_STAGE_0) {
         struct flow_data_t zero = {};
-        flow_sessions.delete(parsed_packet_key);
+        debug_inc(current_stage_global_id, CODE_FLOW_CREATE);
         flow_ptr = flow_sessions.lookup_or_try_init(parsed_packet_key, &zero);
     } else {
+        debug_inc(current_stage_global_id, CODE_FLOW_LOOKUP);
         flow_ptr = flow_sessions.lookup(parsed_packet_key);
     }
 
     if (!flow_ptr) {
+        debug_inc(current_stage_global_id, CODE_FLOW_NOT_FOUND);
         return;
     }
+    debug_inc(current_stage_global_id, CODE_FLOW_FOUND);
 
     if (flow_ptr->ts[current_stage_global_id] == 0) {
         flow_ptr->ts[current_stage_global_id] = current_ts;
@@ -296,11 +340,12 @@ static __always_inline void handle_event(void *ctx, struct sk_buff *skb,
             flow_ptr->saw_path1_start = 1;
         }
 
-        if (current_stage_global_id == PATH1_STAGE_2) {
+        if ((TRACE_DIRECTION == 0 && current_stage_global_id == PATH1_STAGE_1) ||
+            (TRACE_DIRECTION == 1 && current_stage_global_id == PATH1_STAGE_2)) {
             flow_ptr->saw_path1_end = 1;
         }
 
-        if (current_stage_global_id == PATH2_STAGE_0) {
+        if (current_stage_global_id == PATH2_STAGE_0 || current_stage_global_id == PATH2_STAGE_1) {
             flow_ptr->p2_pid = bpf_get_current_pid_tgid() >> 32;
             bpf_get_current_comm(&flow_ptr->p2_comm, sizeof(flow_ptr->p2_comm));
             bpf_probe_read_kernel_str(flow_ptr->p2_ifname, IFNAMSIZ, if_name_buffer);
@@ -343,30 +388,10 @@ static __always_inline void handle_event(void *ctx, struct sk_buff *skb,
             return;
         }
 
+        debug_inc(current_stage_global_id, CODE_PERF_SUBMIT);
         events.perf_submit(ctx, event_data_ptr, sizeof(*event_data_ptr));
         flow_sessions.delete(parsed_packet_key);
     }
-}
-
-// Probe: ip_send_skb
-int kprobe__ip_send_skb(struct pt_regs *ctx, struct net *net, struct sk_buff *skb) {
-    bpf_trace_printk("DEBUG: ip_send_skb kprobe triggered\\n");
-
-    struct packet_key_t key = {};
-    u8 icmp_type = 0;
-
-    if (TRACE_DIRECTION == 0) {  // TX: request path
-        if (parse_packet_key(skb, &key, &icmp_type, 1)) {
-            bpf_trace_printk("DEBUG: TX request matched in ip_send_skb\\n");
-            handle_event(ctx, skb, PATH1_STAGE_0, &key, icmp_type);
-        }
-    } else {  // RX: reply path
-        if (parse_packet_key(skb, &key, &icmp_type, 0)) {
-            bpf_trace_printk("DEBUG: RX reply matched in ip_send_skb\\n");
-            handle_event(ctx, skb, PATH2_STAGE_0, &key, icmp_type);
-        }
-    }
-    return 0;
 }
 
 // Probe: ip_local_out
@@ -374,12 +399,14 @@ int kprobe__ip_local_out(struct pt_regs *ctx, struct net *net, struct sock *sk, 
     struct packet_key_t key = {};
     u8 icmp_type = 0;
 
-    if (TRACE_DIRECTION == 0) {  // TX: request path
-        if (parse_packet_key(skb, &key, &icmp_type, 1)) {
-            handle_event(ctx, skb, PATH1_STAGE_1, &key, icmp_type);
+    debug_inc(TRACE_DIRECTION == 0 ? PATH1_STAGE_0 : PATH2_STAGE_1, CODE_PROBE_ENTRY);
+
+    if (TRACE_DIRECTION == 0) {  // TX: request path (local -> remote ECHO)
+        if (parse_packet_key(skb, &key, &icmp_type, 0, 0, PATH1_STAGE_0)) {
+            handle_event(ctx, skb, PATH1_STAGE_0, &key, icmp_type);
         }
     } else {  // RX: reply path
-        if (parse_packet_key(skb, &key, &icmp_type, 0)) {
+        if (parse_packet_key(skb, &key, &icmp_type, 1, 0, PATH2_STAGE_1)) {
             handle_event(ctx, skb, PATH2_STAGE_1, &key, icmp_type);
         }
     }
@@ -391,12 +418,14 @@ int kprobe__dev_queue_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
     struct packet_key_t key = {};
     u8 icmp_type = 0;
 
+    debug_inc(TRACE_DIRECTION == 0 ? PATH1_STAGE_1 : PATH2_STAGE_2, CODE_PROBE_ENTRY);
+
     if (TRACE_DIRECTION == 0) {  // TX: request path
-        if (parse_packet_key(skb, &key, &icmp_type, 1)) {
-            handle_event(ctx, skb, PATH1_STAGE_2, &key, icmp_type);
+        if (parse_packet_key(skb, &key, &icmp_type, 0, 0, PATH1_STAGE_1)) {
+            handle_event(ctx, skb, PATH1_STAGE_1, &key, icmp_type);
         }
     } else {  // RX: reply path
-        if (parse_packet_key(skb, &key, &icmp_type, 0)) {
+        if (parse_packet_key(skb, &key, &icmp_type, 1, 0, PATH2_STAGE_2)) {
             handle_event(ctx, skb, PATH2_STAGE_2, &key, icmp_type);
         }
     }
@@ -412,7 +441,7 @@ int kprobe__dev_queue_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
 // Replace with: int kprobe____netif_receive_skb_core(struct pt_regs *ctx, struct sk_buff *skb) {
 //
 TRACEPOINT_PROBE(net, netif_receive_skb) {
-    bpf_trace_printk("DEBUG: netif_receive_skb tracepoint triggered\\n");
+    debug_inc(TRACE_DIRECTION == 0 ? PATH2_STAGE_0 : PATH1_STAGE_0, CODE_PROBE_ENTRY);
 
     // Get skb from tracepoint arguments
     struct sk_buff *skb = (struct sk_buff *)args->skbaddr;
@@ -421,15 +450,57 @@ TRACEPOINT_PROBE(net, netif_receive_skb) {
     struct packet_key_t key = {};
     u8 icmp_type = 0;
 
-    if (TRACE_DIRECTION == 0) {  // TX: reply path
-        if (parse_packet_key(skb, &key, &icmp_type, 0)) {
-            bpf_trace_printk("DEBUG: TX reply matched, calling handle_event\\n");
+    if (TRACE_DIRECTION == 0) {  // TX: reply path (incoming echo-reply)
+        if (parse_packet_key(skb, &key, &icmp_type, 1, 1, PATH2_STAGE_0)) {
+            handle_event(args, skb, PATH2_STAGE_0, &key, icmp_type);
+        }
+    } else {  // RX: request path (source is remote, dest is local)
+        if (parse_packet_key(skb, &key, &icmp_type, 0, 1, PATH1_STAGE_0)) {
+            handle_event(args, skb, PATH1_STAGE_0, &key, icmp_type);
+        }
+    }
+    return 0;
+}
+
+// Some kernels use netif_receive_skb_entry tracepoint; attach as fallback
+TRACEPOINT_PROBE(net, netif_receive_skb_entry) {
+    debug_inc(TRACE_DIRECTION == 0 ? PATH2_STAGE_0 : PATH1_STAGE_0, CODE_PROBE_ENTRY);
+
+    struct sk_buff *skb = (struct sk_buff *)args->skbaddr;
+    if (!skb) return 0;
+
+    struct packet_key_t key = {};
+    u8 icmp_type = 0;
+
+    if (TRACE_DIRECTION == 0) {  // TX: reply path (incoming echo-reply)
+        if (parse_packet_key(skb, &key, &icmp_type, 1, 1, PATH2_STAGE_0)) {
             handle_event(args, skb, PATH2_STAGE_0, &key, icmp_type);
         }
     } else {  // RX: request path
-        if (parse_packet_key(skb, &key, &icmp_type, 1)) {
-            bpf_trace_printk("DEBUG: RX request matched, calling handle_event\\n");
+        // RX request (incoming echo)
+        if (parse_packet_key(skb, &key, &icmp_type, 0, 1, PATH1_STAGE_0)) {
             handle_event(args, skb, PATH1_STAGE_0, &key, icmp_type);
+        }
+    }
+    return 0;
+}
+
+// Older kernels may miss the tracepoint; fallback kprobe
+int kprobe____netif_receive_skb_core(struct pt_regs *ctx, struct sk_buff *skb) {
+    debug_inc(TRACE_DIRECTION == 0 ? PATH2_STAGE_0 : PATH1_STAGE_0, CODE_PROBE_ENTRY);
+
+    if (!skb) return 0;
+
+    struct packet_key_t key = {};
+    u8 icmp_type = 0;
+
+    if (TRACE_DIRECTION == 0) {  // TX: reply path (incoming echo-reply)
+        if (parse_packet_key(skb, &key, &icmp_type, 1, 1, PATH2_STAGE_0)) {
+            handle_event(ctx, skb, PATH2_STAGE_0, &key, icmp_type);
+        }
+    } else {  // RX: request path
+        if (parse_packet_key(skb, &key, &icmp_type, 0, 1, PATH1_STAGE_0)) {
+            handle_event(ctx, skb, PATH1_STAGE_0, &key, icmp_type);
         }
     }
     return 0;
@@ -444,12 +515,14 @@ int kprobe__ip_rcv(struct pt_regs *ctx, struct sk_buff *skb,
     struct packet_key_t key = {};
     u8 icmp_type = 0;
 
-    if (TRACE_DIRECTION == 0) {  // TX: reply path
-        if (parse_packet_key(skb, &key, &icmp_type, 0)) {
+    debug_inc(TRACE_DIRECTION == 0 ? PATH2_STAGE_1 : PATH1_STAGE_1, CODE_PROBE_ENTRY);
+
+    if (TRACE_DIRECTION == 0) {  // TX: reply path (incoming echo-reply)
+        if (parse_packet_key(skb, &key, &icmp_type, 1, 1, PATH2_STAGE_1)) {
             handle_event(ctx, skb, PATH2_STAGE_1, &key, icmp_type);
         }
     } else {  // RX: request path
-        if (parse_packet_key(skb, &key, &icmp_type, 1)) {
+        if (parse_packet_key(skb, &key, &icmp_type, 0, 1, PATH1_STAGE_1)) {
             handle_event(ctx, skb, PATH1_STAGE_1, &key, icmp_type);
         }
     }
@@ -461,12 +534,14 @@ int kprobe__icmp_rcv(struct pt_regs *ctx, struct sk_buff *skb) {
     struct packet_key_t key = {};
     u8 icmp_type = 0;
 
-    if (TRACE_DIRECTION == 0) {  // TX: reply path
-        if (parse_packet_key(skb, &key, &icmp_type, 0)) {
+    debug_inc(TRACE_DIRECTION == 0 ? PATH2_STAGE_2 : PATH1_STAGE_2, CODE_PROBE_ENTRY);
+
+    if (TRACE_DIRECTION == 0) {  // TX: reply path (incoming echo-reply)
+        if (parse_packet_key(skb, &key, &icmp_type, 1, 1, PATH2_STAGE_2)) {
             handle_event(ctx, skb, PATH2_STAGE_2, &key, icmp_type);
         }
     } else {  // RX: request path
-        if (parse_packet_key(skb, &key, &icmp_type, 1)) {
+        if (parse_packet_key(skb, &key, &icmp_type, 0, 1, PATH1_STAGE_2)) {
             handle_event(ctx, skb, PATH1_STAGE_2, &key, icmp_type);
         }
     }
@@ -513,6 +588,34 @@ class EventData(ctypes.Structure):
         ("data", FlowData)
     ]
 
+# Debug decoding helpers
+DEBUG_STAGE_NAMES = {
+    0: "P1:S0",
+    1: "P1:S1",
+    2: "P1:S2",
+    3: "P2:S0",
+    4: "P2:S1",
+    5: "P2:S2",
+}
+
+DEBUG_CODE_NAMES = {
+    1: "PROBE_ENTRY",
+    2: "INTERFACE_FILTER",
+    5: "HANDLE_ENTRY",
+    6: "PARSE_ENTRY",
+    7: "PARSE_SUCCESS",
+    8: "IP_FILTER",
+    14: "FLOW_CREATE",
+    15: "FLOW_LOOKUP",
+    16: "FLOW_FOUND",
+    17: "FLOW_NOT_FOUND",
+    19: "PERF_SUBMIT",
+    20: "PARSE_HDR_FAIL",
+    21: "PARSE_NOT_ICMP",
+    22: "PARSE_IP_MISMATCH",
+    23: "PARSE_ICMP_MISMATCH",
+}
+
 # Helper functions
 def get_if_index(devname):
     """Get the interface index for a device name"""
@@ -558,9 +661,9 @@ def get_stage_name(stage_id, direction):
     """Get stage name based on direction"""
     if direction == "tx":
         stage_names = {
-            0: "P1:S0 (ip_send_skb)",
-            1: "P1:S1 (ip_local_out)",
-            2: "P1:S2 (dev_queue_xmit)",
+            0: "P1:S0 (ip_local_out)",
+            1: "P1:S1 (dev_queue_xmit)",
+            2: "P1:S2 (unused)",
             3: "P2:S0 (__netif_receive_skb)",
             4: "P2:S1 (ip_rcv)",
             5: "P2:S2 (icmp_rcv)"
@@ -570,7 +673,7 @@ def get_stage_name(stage_id, direction):
             0: "P1:S0 (__netif_receive_skb)",
             1: "P1:S1 (ip_rcv)",
             2: "P1:S2 (icmp_rcv)",
-            3: "P2:S0 (ip_send_skb)",
+            3: "P2:S0 (unused)",
             4: "P2:S1 (ip_local_out)",
             5: "P2:S2 (dev_queue_xmit)"
         }
@@ -608,6 +711,35 @@ def print_kernel_stack(stage_idx, stack_id, direction):
             print("    <No symbols for stack id %d>" % stack_id)
     except Exception as e:
         print("    <Error: %s>" % e)
+
+def print_debug_statistics(bpf_obj):
+    """Print debug histogram statistics (bcc-debug-framework)"""
+    try:
+        debug_map = bpf_obj.get_table("debug_stage_stats")
+    except Exception:
+        print("No debug statistics available")
+        return
+
+    entries = []
+    for k, v in debug_map.items():
+        count = v.value if hasattr(v, 'value') else int(v)
+        if count == 0:
+            continue
+        stage_id = k.value >> 8
+        code_point = k.value & 0xFF
+        stage_name = DEBUG_STAGE_NAMES.get(stage_id, "STAGE_%d" % stage_id)
+        code_name = DEBUG_CODE_NAMES.get(code_point, "CODE_%d" % code_point)
+        entries.append((stage_id, code_point, stage_name, code_name, count))
+
+    if not entries:
+        print("No debug counters recorded")
+        return
+
+    print("\n" + "=" * 80)
+    print("Debug Counters (stage_id.code_point -> count)")
+    print("=" * 80)
+    for _, _, stage_name, code_name, count in sorted(entries):
+        print("  %-10s %-15s : %d" % (stage_name, code_name, count))
 
 def print_event(cpu, data, size):
     global args, b
@@ -660,24 +792,38 @@ def print_event(cpu, data, size):
 
     print("\nPath 1 Latencies (us):")
     print_latency_segment(0, 1, flow, args.direction)
-    print_latency_segment(1, 2, flow, args.direction)
-    if flow.ts[0] > 0 and flow.ts[2] > 0:
-        path1_total = format_latency(flow.ts[0], flow.ts[2])
-        print("  Total Path 1: %s us" % path1_total)
+    if args.direction == "rx":
+        print_latency_segment(1, 2, flow, args.direction)
+        if flow.ts[0] > 0 and flow.ts[2] > 0:
+            path1_total = format_latency(flow.ts[0], flow.ts[2])
+            print("  Total Path 1: %s us" % path1_total)
+    else:
+        if flow.ts[0] > 0 and flow.ts[1] > 0:
+            path1_total = format_latency(flow.ts[0], flow.ts[1])
+            print("  Total Path 1: %s us" % path1_total)
 
     print("\nPath 2 Latencies (us):")
-    print_latency_segment(3, 4, flow, args.direction)
-    print_latency_segment(4, 5, flow, args.direction)
-    if flow.ts[3] > 0 and flow.ts[5] > 0:
-        path2_total = format_latency(flow.ts[3], flow.ts[5])
-        print("  Total Path 2: %s us" % path2_total)
+    if args.direction == "tx":
+        print_latency_segment(3, 4, flow, args.direction)
+        print_latency_segment(4, 5, flow, args.direction)
+        if flow.ts[3] > 0 and flow.ts[5] > 0:
+            path2_total = format_latency(flow.ts[3], flow.ts[5])
+            print("  Total Path 2: %s us" % path2_total)
+    else:
+        print_latency_segment(4, 5, flow, args.direction)
+        if flow.ts[4] > 0 and flow.ts[5] > 0:
+            path2_total = format_latency(flow.ts[4], flow.ts[5])
+            print("  Total Path 2: %s us" % path2_total)
 
     if flow.ts[0] > 0 and flow.ts[5] > 0:
         rtt = format_latency(flow.ts[0], flow.ts[5])
         print("\nTotal RTT (Path1 Start to Path2 End): %s us" % rtt)
 
-        if flow.ts[2] > 0 and flow.ts[3] > 0:
-            inter_path_latency = format_latency(flow.ts[2], flow.ts[3])
+        if args.direction == "tx" and flow.ts[1] > 0 and flow.ts[3] > 0:
+            inter_path_latency = format_latency(flow.ts[1], flow.ts[3])
+            print("Inter-Path Latency (P1 end -> P2 start): %s us" % inter_path_latency)
+        if args.direction == "rx" and flow.ts[2] > 0 and flow.ts[4] > 0:
+            inter_path_latency = format_latency(flow.ts[2], flow.ts[4])
             print("Inter-Path Latency (P1 end -> P2 start): %s us" % inter_path_latency)
 
     if not args.disable_kernel_stacks:
@@ -724,10 +870,13 @@ Examples:
                       help='Direction: "tx" (local pings remote) or "rx" (remote pings local)')
     parser.add_argument('--disable-kernel-stacks', action='store_true', default=False,
                       help='Disable kernel stack trace output')
+    parser.add_argument('--debug', action='store_true', default=False,
+                      help='Enable verbose BPF debug trace output (trace_pipe)')
 
     args = parser.parse_args()
 
     direction_val = 0 if args.direction == "tx" else 1
+    debug_enable_val = 1 if args.debug else 0
 
     ifindex = 0
     if args.interface:
@@ -754,8 +903,12 @@ Examples:
     if latency_threshold_ns_val > 0:
         print("Reporting only RTT >= %.3f ms" % args.latency_ms)
 
+    if args.debug:
+        print("Debug counters enabled (bcc-debug-framework); will print on exit")
+
     try:
         b = BPF(text=bpf_text % (
+            debug_enable_val,
             src_ip_hex_val,
             dst_ip_hex_val,
             latency_threshold_ns_val,
@@ -772,7 +925,6 @@ Examples:
     # Verify probe attachment
     print("\nVerifying probe attachments:")
     probe_functions = [
-        "ip_send_skb",
         "ip_local_out",
         "dev_queue_xmit",
         "ip_rcv",
@@ -813,4 +965,6 @@ Examples:
     except KeyboardInterrupt:
         print("\nDetaching...")
     finally:
+        if args.debug:
+            print_debug_statistics(b)
         print("Exiting.")

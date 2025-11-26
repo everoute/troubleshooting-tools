@@ -12,3 +12,4 @@ test/workflow/result/*
 *.log
 *.pcap
 docs/publish/pptx/node_modules/
+packaging/rpm/output

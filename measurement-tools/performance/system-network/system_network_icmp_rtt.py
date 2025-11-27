@@ -316,14 +316,14 @@ static __always_inline int parse_packet_key(struct sk_buff *skb, struct packet_k
     if (stage_id == PATH1_STAGE_4 || stage_id == PATH2_STAGE_4) {
          return parse_packet_key_userspace(skb, key, icmp_type_out, path_is_primary);
     }
-    
+
     if (skb == NULL) {
         return 0;
     }
 
     unsigned char *head;
-    u16 network_header_offset; 
-    u16 transport_header_offset; 
+    u16 network_header_offset;
+    u16 transport_header_offset;
 
     if (bpf_probe_read_kernel(&head, sizeof(head), &skb->head) < 0 ||
         bpf_probe_read_kernel(&network_header_offset, sizeof(network_header_offset), &skb->network_header) < 0 ||
@@ -331,8 +331,8 @@ static __always_inline int parse_packet_key(struct sk_buff *skb, struct packet_k
         return 0;
     }
 
-    if (network_header_offset == (u16)~0U || network_header_offset > 2048 ) { 
-        return 0; 
+    if (network_header_offset == (u16)~0U || network_header_offset > 2048 ) {
+        return 0;
     }
 
     struct iphdr ip;
@@ -348,29 +348,27 @@ static __always_inline int parse_packet_key(struct sk_buff *skb, struct packet_k
         return 0;
     }
 
-    if (path_is_primary) { 
+    if (path_is_primary) {
         if (!(actual_sip == SRC_IP_FILTER && actual_dip == DST_IP_FILTER)) {
-        return 0;
-    }
+            return 0;
+        }
         expected_icmp_type_val = ICMP_ECHO;
-    } else { 
+    } else {
         if (!(actual_sip == DST_IP_FILTER && actual_dip == SRC_IP_FILTER)) {
-        return 0;
-    }
+            return 0;
+        }
         expected_icmp_type_val = ICMP_ECHOREPLY;
     }
 
-    u8 ip_ihl = ip.ihl & 0x0F;  
-    if (ip_ihl < 5) {  
+    u8 ip_ihl = ip.ihl & 0x0F;
+    if (ip_ihl < 5) {
         return 0;
     }
 
-    //bpf_trace_printk("ParsePktKey: Stg=%%d, actual_sip=%%x, actual_dip=%%x", stage_id, actual_sip, actual_dip);
-    //bpf_trace_printk("ParsePktKey: Stg=%%d, net_hdr_off=%%d, trans_hdr_off=%%d", stage_id, network_header_offset, transport_header_offset);
     if (transport_header_offset == 0 || transport_header_offset == (u16)~0U || transport_header_offset == network_header_offset) {
         transport_header_offset = network_header_offset + (ip_ihl * 4);
     }
-    
+
     struct icmphdr icmph;
     if (bpf_probe_read_kernel(&icmph, sizeof(icmph), head + transport_header_offset) < 0) {
         return 0;
@@ -379,13 +377,11 @@ static __always_inline int parse_packet_key(struct sk_buff *skb, struct packet_k
     if (icmph.type != expected_icmp_type_val) {
         return 0;
     }
-    //bpf_trace_printk("ParsePktKey: Stg=%%d, icmp_type=%%d", stage_id, icmph.type);
-    //bpf_trace_printk("ParsePktKey: Stg=%%d, icmp_seq=%%d, icmp_id=%%d", stage_id, icmph.un.echo.sequence, icmph.un.echo.id);
 
     *icmp_type_out = icmph.type;
-    key->sip = SRC_IP_FILTER; 
+    key->sip = SRC_IP_FILTER;
     key->dip = DST_IP_FILTER;
-    key->proto = ip.protocol; 
+    key->proto = ip.protocol;
     key->id = icmph.un.echo.id;
     key->seq = icmph.un.echo.sequence;
 
@@ -395,56 +391,41 @@ static __always_inline int parse_packet_key(struct sk_buff *skb, struct packet_k
 static __always_inline void handle_event(struct pt_regs *ctx, struct sk_buff *skb,
                                          u64 current_stage_global_id, struct packet_key_t *parsed_packet_key, u8 actual_icmp_type) {
     if (skb == NULL) {
-        //bpf_trace_printk("HdlEvt: SKB NULL. Stg=%%d", current_stage_global_id);
         return;
     }
 
     if (TRACE_DIRECTION == 0 && current_stage_global_id == PATH2_STAGE_0) {
         if (!is_target_ifindex(skb)){
-            //bpf_trace_printk("HdlEvt: Out P2S0 !target_if. Stg=%%d", current_stage_global_id);
             return;
         }
     }
     if (TRACE_DIRECTION == 1 && current_stage_global_id == PATH1_STAGE_0) {
          if (!is_target_ifindex(skb)){
-            //bpf_trace_printk("HdlEvt: In P1S0 !target_if. Stg=%%d", current_stage_global_id);
             return;
         }
     }
 
     u64 current_ts = bpf_ktime_get_ns();
-    int stack_id = stack_traces.get_stackid(ctx, BPF_F_REUSE_STACKID); // Attempt kernel stacks only
-    
+    int stack_id = stack_traces.get_stackid(ctx, BPF_F_REUSE_STACKID);
+
     struct flow_data_t *flow_ptr;
 
     if (current_stage_global_id == PATH1_STAGE_0) {
         struct flow_data_t zero = {};
         flow_sessions.delete(parsed_packet_key);
         flow_ptr = flow_sessions.lookup_or_try_init(parsed_packet_key, &zero);
-        if (flow_ptr) {
-            //bpf_trace_printk("HdlEvt: Flow init/lookup OK. Stg=%%d", current_stage_global_id);
-        } else {
-            //bpf_trace_printk("HdlEvt: Flow init/lookup FAILED. Stg=%%d", current_stage_global_id);
-        }
     } else {
         flow_ptr = flow_sessions.lookup(parsed_packet_key);
-        if (flow_ptr) {
-            //bpf_trace_printk("HdlEvt: Flow lookup OK. Stg=%%d", current_stage_global_id);
-        } else {
-            //bpf_trace_printk("HdlEvt: Flow lookup FAILED. Stg=%%d", current_stage_global_id);
-        }
     }
 
     if (!flow_ptr) {
-        //bpf_trace_printk("HdlEvt: flow_ptr NULL after lookup. Stg=%%d", current_stage_global_id);
-        return; 
+        return;
     }
 
-    if (flow_ptr->ts[current_stage_global_id] == 0) { 
+    if (flow_ptr->ts[current_stage_global_id] == 0) {
         flow_ptr->ts[current_stage_global_id] = current_ts;
         flow_ptr->skb_ptr[current_stage_global_id] = (u64)skb;
         flow_ptr->kstack_id[current_stage_global_id] = stack_id;
-        //bpf_trace_printk("HdlEvt: Updating TS for Stg=%%d, stack_id=%%d", current_stage_global_id, stack_id);
 
         struct net_device *dev;
         char if_name_buffer[IFNAMSIZ];
@@ -500,28 +481,26 @@ static __always_inline void handle_event(struct pt_regs *ctx, struct sk_buff *sk
             }
         }
         
-        //bpf_trace_printk("HdlEvt: PerfSubmit. Stg=%%d RTT=%%lld", current_stage_global_id, (rtt_end_ts - rtt_start_ts));
-        
-        u32 map_key_zero = 0; 
+        u32 map_key_zero = 0;
         struct event_data_t *event_data_ptr = event_scratch_map.lookup(&map_key_zero);
         if (!event_data_ptr) {
-            return; 
-        }
-        
-        event_data_ptr->key = *parsed_packet_key; 
-        
-        if (bpf_probe_read_kernel(&event_data_ptr->data, sizeof(event_data_ptr->data), flow_ptr) != 0) {
-            flow_sessions.delete(parsed_packet_key); 
             return;
         }
-        
+
+        event_data_ptr->key = *parsed_packet_key;
+
+        if (bpf_probe_read_kernel(&event_data_ptr->data, sizeof(event_data_ptr->data), flow_ptr) != 0) {
+            flow_sessions.delete(parsed_packet_key);
+            return;
+        }
+
         events.perf_submit(ctx, event_data_ptr, sizeof(*event_data_ptr));
-        
-        flow_sessions.delete(parsed_packet_key); 
+
+        flow_sessions.delete(parsed_packet_key);
     }
 }
 
-int kprobe__ip_send_skb(struct pt_regs *ctx, struct net *net, struct sk_buff *skb) {
+int kprobe__ip_output(struct pt_regs *ctx, struct net *net, struct sock *sk, struct sk_buff *skb) {
     struct packet_key_t key = {};
     u8 icmp_type = 0;
 
@@ -540,12 +519,12 @@ int kprobe__ip_send_skb(struct pt_regs *ctx, struct net *net, struct sk_buff *sk
 int kprobe__internal_dev_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
     struct packet_key_t key = {};
     u8 icmp_type = 0;
-    
-    if (TRACE_DIRECTION == 0) { 
+
+    if (TRACE_DIRECTION == 0) {
         if (parse_packet_key(skb, &key, &icmp_type, 1, PATH1_STAGE_1)) {
             handle_event(ctx, skb, PATH1_STAGE_1, &key, icmp_type);
         }
-    } else { 
+    } else {
         if (parse_packet_key(skb, &key, &icmp_type, 0, PATH2_STAGE_1)) {
             handle_event(ctx, skb, PATH2_STAGE_1, &key, icmp_type);
         }
@@ -573,19 +552,19 @@ TRACEPOINT_PROBE(net, netif_receive_skb) {
 }
 
 int kprobe__netdev_frame_hook(struct pt_regs *ctx, struct sk_buff **pskb) {
-    struct sk_buff *skb = NULL; 
+    struct sk_buff *skb = NULL;
     if (bpf_probe_read_kernel(&skb, sizeof(skb), pskb) < 0 || skb == NULL) {
         return 0;
     }
-    
-    struct packet_key_t key_parsed = {}; 
-    u8 icmp_type_parsed = 0; 
-    
-    if (TRACE_DIRECTION == 0) { 
+
+    struct packet_key_t key_parsed = {};
+    u8 icmp_type_parsed = 0;
+
+    if (TRACE_DIRECTION == 0) {
         if (parse_packet_key(skb, &key_parsed, &icmp_type_parsed, 0, PATH2_STAGE_1)) {
             handle_event(ctx, skb, PATH2_STAGE_1, &key_parsed, icmp_type_parsed);
         }
-    } else { 
+    } else {
         if (parse_packet_key(skb, &key_parsed, &icmp_type_parsed, 1, PATH1_STAGE_1)) {
             handle_event(ctx, skb, PATH1_STAGE_1, &key_parsed, icmp_type_parsed);
         }
@@ -595,14 +574,14 @@ int kprobe__netdev_frame_hook(struct pt_regs *ctx, struct sk_buff **pskb) {
 
 int kprobe__ovs_dp_process_packet(struct pt_regs *ctx, const struct sk_buff *skb_const) {
     struct sk_buff *skb = (struct sk_buff *)skb_const;
-    struct packet_key_t key = {}; 
+    struct packet_key_t key = {};
     u8 icmp_type = 0;
 
-    if (parse_packet_key(skb, &key, &icmp_type, 1, PATH1_STAGE_2)) { 
+    if (parse_packet_key(skb, &key, &icmp_type, 1, PATH1_STAGE_2)) {
         handle_event(ctx, skb, PATH1_STAGE_2, &key, icmp_type);
     }
-    key = (struct packet_key_t){}; icmp_type = 0; 
-    if (parse_packet_key(skb, &key, &icmp_type, 0, PATH2_STAGE_2)) { 
+    key = (struct packet_key_t){}; icmp_type = 0;
+    if (parse_packet_key(skb, &key, &icmp_type, 0, PATH2_STAGE_2)) {
         handle_event(ctx, skb, PATH2_STAGE_2, &key, icmp_type);
     }
 
@@ -617,7 +596,7 @@ int kprobe__ovs_dp_upcall(struct pt_regs *ctx, void *dp, const struct sk_buff *s
     if (parse_packet_key(skb, &key, &icmp_type, 1, PATH1_STAGE_3)) {
         handle_event(ctx, skb, PATH1_STAGE_3, &key, icmp_type);
     }
-    
+
     key = (struct packet_key_t){}; icmp_type = 0;
     if (parse_packet_key(skb, &key, &icmp_type, 0, PATH2_STAGE_3)) {
         handle_event(ctx, skb, PATH2_STAGE_3, &key, icmp_type);
@@ -632,12 +611,12 @@ int kprobe__ovs_flow_key_extract_userspace(struct pt_regs *ctx, struct net *net,
     struct packet_key_t key = {};
     u8 icmp_type = 0;
 
-    if (parse_packet_key(skb, &key, &icmp_type, 1, PATH1_STAGE_4)) { 
+    if (parse_packet_key(skb, &key, &icmp_type, 1, PATH1_STAGE_4)) {
         handle_event(ctx, skb, PATH1_STAGE_4, &key, icmp_type);
     }
 
     key = (struct packet_key_t){}; icmp_type = 0;
-    if (parse_packet_key(skb, &key, &icmp_type, 0, PATH2_STAGE_4)) { 
+    if (parse_packet_key(skb, &key, &icmp_type, 0, PATH2_STAGE_4)) {
         handle_event(ctx, skb, PATH2_STAGE_4, &key, icmp_type);
     }
     return 0;
@@ -662,15 +641,15 @@ int kprobe__dev_queue_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
     if (!is_target_ifindex(skb)) {
         return 0;
     }
-        
+
     struct packet_key_t key = {};
     u8 icmp_type = 0;
-    
-    if (TRACE_DIRECTION == 0) { 
+
+    if (TRACE_DIRECTION == 0) {
         if (parse_packet_key(skb, &key, &icmp_type, 1, PATH1_STAGE_6)) {
             handle_event(ctx, skb, PATH1_STAGE_6, &key, icmp_type);
         }
-    } else { 
+    } else {
         if (parse_packet_key(skb, &key, &icmp_type, 0, PATH2_STAGE_6)) {
             handle_event(ctx, skb, PATH2_STAGE_6, &key, icmp_type);
         }
@@ -681,12 +660,12 @@ int kprobe__dev_queue_xmit(struct pt_regs *ctx, struct sk_buff *skb) {
 int kprobe__icmp_rcv(struct pt_regs *ctx, struct sk_buff *skb) {
     struct packet_key_t key = {};
     u8 icmp_type = 0;
-    
-    if (TRACE_DIRECTION == 0) { 
+
+    if (TRACE_DIRECTION == 0) {
         if (parse_packet_key(skb, &key, &icmp_type, 0, PATH2_STAGE_6)) {
             handle_event(ctx, skb, PATH2_STAGE_6, &key, icmp_type);
         }
-    } else { 
+    } else {
         if (parse_packet_key(skb, &key, &icmp_type, 1, PATH1_STAGE_6)) {
             handle_event(ctx, skb, PATH1_STAGE_6, &key, icmp_type);
         }
@@ -792,7 +771,7 @@ def get_detailed_stage_name(stage_id, direction):
     }
     
     probe_map_tx = {
-        0: "ip_send_skb",       1: "internal_dev_xmit",  2: "ovs_dp_process_packet",
+        0: "ip_output",       1: "internal_dev_xmit",  2: "ovs_dp_process_packet",
         3: "ovs_dp_upcall",     4: "ovs_flow_key_extract_userspace", 5: "ovs_vport_send",
         6: "dev_queue_xmit",
         7: "__netif_receive_skb", 8: "netdev_frame_hook",  9: "ovs_dp_process_packet",
@@ -804,7 +783,7 @@ def get_detailed_stage_name(stage_id, direction):
         0: "__netif_receive_skb", 1: "netdev_frame_hook",  2: "ovs_dp_process_packet",
         3: "ovs_dp_upcall",     4: "ovs_flow_key_extract_userspace", 5: "ovs_vport_send",
         6: "icmp_rcv",
-        7: "ip_send_skb",       8: "internal_dev_xmit",  9: "ovs_dp_process_packet",
+        7: "ip_output",       8: "internal_dev_xmit",  9: "ovs_dp_process_packet",
         10: "ovs_dp_upcall",    11: "ovs_flow_key_extract_userspace",12: "ovs_vport_send",
         13: "dev_queue_xmit"
     }
@@ -1011,6 +990,7 @@ def print_event(cpu, data, size):
     
     print("\n" + "="*50 + "\n")
 
+
 if __name__ == "__main__":
     if os.geteuid() != 0:
         print("This program must be run as root")
@@ -1095,7 +1075,7 @@ Examples:
         sys.exit(1)
         
     probe_functions = [
-        ("ip_send_skb", "kprobe__ip_send_skb"),
+        ("ip_output", "kprobe__ip_output"),
         ("internal_dev_xmit", "kprobe__internal_dev_xmit"),
         ("netdev_frame_hook", "kprobe__netdev_frame_hook"),
         ("ovs_dp_process_packet", "kprobe__ovs_dp_process_packet"),
@@ -1112,8 +1092,7 @@ Examples:
     
     try:
         while True:
-            b.perf_buffer_poll() 
+            b.perf_buffer_poll()
     except KeyboardInterrupt:
         print("\nDetaching...")
-    finally:
         print("Exiting.") 

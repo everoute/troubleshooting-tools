@@ -14,9 +14,8 @@ Version:        %{?version}%{!?version:1.0.0}
 Release:        1%{?dist}
 Summary:        eBPF-based network troubleshooting and performance analysis tools
 
-License:        SMARTX
+License:        Commercial
 Group:          Applications/System
-URL:            https://www.smartx.com
 BuildArch:      noarch
 
 Source0:        %{name}-%{version}.tar.gz
@@ -67,7 +66,7 @@ rm -rf %{buildroot}
 /usr/share/measurement-tools
 
 %changelog
-* Mon Nov 25 2024 SmartX <support@smartx.com> - 1.0.0-1
+* Mon Nov 27 2025 1.0.0-1
 - Initial release
 - Include BCC Python tools and bpftrace scripts
 - Support for packet drop monitoring, latency analysis

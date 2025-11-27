@@ -64,7 +64,9 @@ class SummaryAnalyzer:
         bottleneck = self.identify_bottlenecks(
             window_analysis,
             rate_analysis,
-            buffer_analysis
+            buffer_analysis,
+            limit_analysis,
+            client_df
         )
 
         return SummaryResult(
@@ -92,6 +94,7 @@ class SummaryAnalyzer:
         1. BDP calculation: BDP = Bandwidth × RTT
         2. Optimal CWND: Optimal_CWND = BDP / MSS
         3. CWND utilization: actual_cwnd / optimal_cwnd
+        4. CWND/RWND adequacy distribution across all samples
 
         Args:
             client_df: Client-side DataFrame
@@ -107,24 +110,83 @@ class SummaryAnalyzer:
         client_cwnd_stats = self.stats_engine.compute_basic_stats(client_df['cwnd'])
         server_cwnd_stats = self.stats_engine.compute_basic_stats(server_df['cwnd'])
 
-        # Calculate BDP using dual-side RTT average
-        avg_rtt_ms = (
-            client_df['rtt'].mean() + server_df['rtt'].mean()
-        ) / 2.0
-        avg_rtt = avg_rtt_ms / 1000.0  # Convert ms to seconds
-        bdp = bandwidth * avg_rtt / 8  # bits → bytes
+        # Get MSS for calculations
+        mss = client_df['mss'].iloc[0] if 'mss' in client_df.columns and len(client_df) > 0 else 1460
 
-        # Optimal CWND
-        mss = 1460  # Standard MSS
+        # Use kernel-reported BDP if available, otherwise calculate from bandwidth * RTT
+        if 'bdp' in client_df.columns and client_df['bdp'].notna().any() and (client_df['bdp'] > 0).any():
+            # Use kernel BDP (average of non-zero values)
+            bdp = client_df[client_df['bdp'] > 0]['bdp'].mean()
+            # Per-sample optimal CWND calculation using kernel BDP
+            bdp_series = client_df['bdp'].copy()
+            bdp_series = bdp_series.replace(0, bdp)  # Replace zeros with average
+        else:
+            # Fallback: Calculate BDP using dual-side RTT average
+            avg_rtt_ms = (
+                client_df['rtt'].mean() + server_df['rtt'].mean()
+            ) / 2.0
+            avg_rtt = avg_rtt_ms / 1000.0  # Convert ms to seconds
+            bdp = bandwidth * avg_rtt / 8  # bits → bytes
+            bdp_series = pd.Series([bdp] * len(client_df))
+
+        # Optimal CWND (average)
         optimal_cwnd = bdp / mss
 
         # Actual CWND
         actual_cwnd = client_cwnd_stats.mean
 
-        # CWND utilization
+        # CWND utilization (average-based)
         cwnd_utilization = actual_cwnd / optimal_cwnd if optimal_cwnd > 0 else 0.0
 
-        # cwnd/ssthresh 比值分布（慢启动 vs 拥塞避免/快速恢复）
+        # CWND adequacy distribution (per-sample analysis)
+        # Calculate optimal CWND for each sample using per-sample BDP
+        optimal_cwnd_series = bdp_series / mss
+        cwnd_ratio_series = client_df['cwnd'] / optimal_cwnd_series.replace(0, 1)
+
+        cwnd_total_samples = len(client_df)
+        cwnd_under_count = (cwnd_ratio_series < 0.8).sum()
+        cwnd_over_count = (cwnd_ratio_series > 1.0).sum()
+
+        cwnd_adequacy_distribution = {
+            'UNDER': cwnd_under_count / cwnd_total_samples * 100 if cwnd_total_samples > 0 else 0.0,
+            'OVER': cwnd_over_count / cwnd_total_samples * 100 if cwnd_total_samples > 0 else 0.0,
+            'under_count': cwnd_under_count,
+            'over_count': cwnd_over_count
+        }
+
+        # Unacked/CWND utilization distribution (per-sample analysis)
+        # packets_out = unacked from ss, approximates in_flight
+        # Kernel logic: is_cwnd_limited |= (tcp_packets_in_flight(tp) >= tp->snd_cwnd)
+        # Ranges: <0.9 (underutilized), 0.9-1.0 (near limit), >1.0 (cwnd_limited)
+        if 'packets_out' in client_df.columns and 'cwnd' in client_df.columns:
+            unacked_cwnd_ratio = client_df['packets_out'] / client_df['cwnd'].replace(0, 1)
+            low_count = (unacked_cwnd_ratio < 0.9).sum()
+            ok_count = ((unacked_cwnd_ratio >= 0.9) & (unacked_cwnd_ratio <= 1.0)).sum()
+            limited_count = (unacked_cwnd_ratio > 1.0).sum()
+
+            unacked_cwnd_distribution = {
+                'LOW': low_count / cwnd_total_samples * 100 if cwnd_total_samples > 0 else 0.0,
+                'OK': ok_count / cwnd_total_samples * 100 if cwnd_total_samples > 0 else 0.0,
+                'LIMITED': limited_count / cwnd_total_samples * 100 if cwnd_total_samples > 0 else 0.0,
+                'low_count': low_count,
+                'ok_count': ok_count,
+                'limited_count': limited_count,
+                'mean_ratio': unacked_cwnd_ratio.mean() * 100  # as percentage
+            }
+            unacked_cwnd_limited_ratio = limited_count / cwnd_total_samples if cwnd_total_samples > 0 else 0.0
+        else:
+            unacked_cwnd_distribution = {
+                'LOW': 0.0,
+                'OK': 0.0,
+                'LIMITED': 0.0,
+                'low_count': 0,
+                'ok_count': 0,
+                'limited_count': 0,
+                'mean_ratio': 0.0
+            }
+            unacked_cwnd_limited_ratio = 0.0
+
+        # cwnd/ssthresh distribution (slow start vs congestion avoidance/fast recovery)
         if 'ssthresh' in client_df.columns and len(client_df['ssthresh']) > 0:
             ratio_series = client_df['cwnd'] / client_df['ssthresh']
             slow_start_ratio = (ratio_series < 1).mean()
@@ -143,6 +205,29 @@ class SummaryAnalyzer:
         else:
             rwnd_limited = 0.0
 
+        # RWND adequacy distribution (per-sample analysis)
+        # Compare RWND vs optimal window (BDP)
+        rwnd_total_samples = len(client_df)
+        if 'rwnd' in client_df.columns and rwnd_total_samples > 0:
+            # RWND adequacy: compare RWND to BDP (optimal window)
+            rwnd_ratio_series = client_df['rwnd'] / bdp_series.replace(0, 1)
+            rwnd_under_count = (rwnd_ratio_series < 0.8).sum()
+            rwnd_over_count = (rwnd_ratio_series > 1.0).sum()
+
+            rwnd_adequacy_distribution = {
+                'UNDER': rwnd_under_count / rwnd_total_samples * 100,
+                'OVER': rwnd_over_count / rwnd_total_samples * 100,
+                'under_count': rwnd_under_count,
+                'over_count': rwnd_over_count
+            }
+        else:
+            rwnd_adequacy_distribution = {
+                'UNDER': 0.0,
+                'OVER': 0.0,
+                'under_count': 0,
+                'over_count': 0
+            }
+
         # SSTHRESH analysis
         ssthresh_avg = client_df['ssthresh'].mean() if 'ssthresh' in client_df.columns else 0.0
         cwnd_ssthresh_ratio = actual_cwnd / ssthresh_avg if ssthresh_avg > 0 else 0.0
@@ -158,9 +243,15 @@ class SummaryAnalyzer:
                 '<1': slow_start_ratio,
                 '>=1': ca_fastrecovery_ratio
             },
+            cwnd_adequacy_distribution=cwnd_adequacy_distribution,
+            cwnd_total_samples=cwnd_total_samples,
+            unacked_cwnd_distribution=unacked_cwnd_distribution,
+            unacked_cwnd_limited_ratio=unacked_cwnd_limited_ratio,
             rwnd_min=rwnd_min,
             rwnd_avg=rwnd_avg,
             rwnd_limited_ratio=rwnd_limited,
+            rwnd_adequacy_distribution=rwnd_adequacy_distribution,
+            rwnd_total_samples=rwnd_total_samples,
             ssthresh_avg=ssthresh_avg,
             cwnd_ssthresh_ratio=cwnd_ssthresh_ratio
         )
@@ -516,21 +607,27 @@ class SummaryAnalyzer:
         self,
         window_result: WindowAnalysisResult,
         rate_result: RateAnalysisResult,
-        buffer_result: BufferAnalysisResult
+        buffer_result: BufferAnalysisResult,
+        limit_result: LimitAnalysisResult = None,
+        client_df: pd.DataFrame = None
     ) -> BottleneckIdentification:
         """
         Identify primary performance bottleneck
 
         Bottleneck types:
-        1. CWND_LIMITED: cwnd_utilization > 0.9
-        2. BUFFER_LIMITED: buffer_pressure > 0.8
-        3. NETWORK_LIMITED: bandwidth_utilization > 0.9
-        4. APP_LIMITED: other cases
+        1. CWND_LIMITED: kernel cwnd_limited_ratio > 0.1 OR cwnd < optimal (utilization < 0.9)
+        2. RWND_LIMITED: kernel rwnd_limited_ratio > 0.1
+        3. BUFFER_LIMITED: buffer_pressure > 0.8
+        4. NETWORK_LIMITED: bandwidth_utilization > 0.9
+        5. APP_LIMITED: kernel app_limited flag set
+        6. UNKNOWN: no bottleneck detected
 
         Args:
             window_result: Window analysis result
             rate_result: Rate analysis result
             buffer_result: Buffer analysis result
+            limit_result: Kernel limit analysis result (optional)
+            client_df: Client DataFrame for app_limited check (optional)
 
         Returns:
             BottleneckIdentification with primary bottleneck
@@ -540,10 +637,28 @@ class SummaryAnalyzer:
         limiting_factors = []
         scores = {}
 
-        # Check CWND limitation
-        if window_result.cwnd_utilization > 0.9:
+        # Check CWND limitation using kernel metrics first
+        cwnd_limited = False
+        if limit_result is not None:
+            # Use kernel's cwnd_limited_ratio (value is already 0-1 scale)
+            kernel_cwnd_limited = limit_result.cwnd_limited_ratio_client
+            if kernel_cwnd_limited > 0.1:  # Limited > 10% of time
+                cwnd_limited = True
+                limiting_factors.append('CWND_LIMITED')
+                scores['CWND_LIMITED'] = kernel_cwnd_limited
+
+        # Fallback: if kernel metrics not available, check if CWND < optimal
+        if not cwnd_limited and window_result.cwnd_utilization < 0.9:
+            # CWND is smaller than 90% of BDP-optimal, may be limiting
             limiting_factors.append('CWND_LIMITED')
-            scores['CWND_LIMITED'] = window_result.cwnd_utilization
+            scores['CWND_LIMITED'] = 1.0 - window_result.cwnd_utilization
+
+        # Check RWND limitation using kernel metrics
+        if limit_result is not None:
+            kernel_rwnd_limited = limit_result.rwnd_limited_ratio_client
+            if kernel_rwnd_limited > 0.1:  # Limited > 10% of time
+                limiting_factors.append('RWND_LIMITED')
+                scores['RWND_LIMITED'] = kernel_rwnd_limited
 
         # Check buffer limitation
         if buffer_result.send_buffer_pressure > 0.8 or buffer_result.recv_buffer_pressure > 0.8:
@@ -558,13 +673,24 @@ class SummaryAnalyzer:
             limiting_factors.append('NETWORK_LIMITED')
             scores['NETWORK_LIMITED'] = rate_result.avg_bandwidth_utilization
 
+        # Check APP_LIMITED using kernel's app_limited flag
+        app_limited_ratio = 0.0
+        if client_df is not None and 'app_limited' in client_df.columns:
+            # app_limited is a string column, non-empty means app limited
+            app_limited_samples = client_df['app_limited'].notna() & (client_df['app_limited'] != '')
+            app_limited_ratio = app_limited_samples.sum() / len(client_df) if len(client_df) > 0 else 0.0
+            if app_limited_ratio > 0.1:  # Limited > 10% of time
+                limiting_factors.append('APP_LIMITED')
+                scores['APP_LIMITED'] = app_limited_ratio
+
         # Determine primary bottleneck
         if scores:
             primary_bottleneck = max(scores, key=scores.get)
             confidence = min(1.0, scores[primary_bottleneck])
         else:
-            primary_bottleneck = 'APP_LIMITED'
-            confidence = 0.5
+            # No bottleneck detected from kernel metrics
+            primary_bottleneck = 'UNKNOWN'
+            confidence = 0.0
 
         return BottleneckIdentification(
             primary_bottleneck=primary_bottleneck,

@@ -76,10 +76,24 @@ class WindowAnalysisResult:
     cwnd_utilization: float
     cwnd_ssthresh_distribution: Dict[str, float]
 
+    # CWND adequacy distribution (per-sample analysis)
+    cwnd_adequacy_distribution: Dict[str, float]  # UNDER/OVER percentages
+    cwnd_total_samples: int
+
+    # Unacked/CWND utilization distribution (per-sample analysis)
+    # unacked = packets_out from ss, approximates in_flight
+    # >1.0 means cwnd_limited (inflight >= cwnd)
+    unacked_cwnd_distribution: Dict[str, float]  # LOW/OK/LIMITED percentages
+    unacked_cwnd_limited_ratio: float  # Ratio of samples where unacked/cwnd > 1.0
+
     # RWND analysis
     rwnd_min: float
     rwnd_avg: float
     rwnd_limited_ratio: float
+
+    # RWND adequacy distribution (per-sample analysis)
+    rwnd_adequacy_distribution: Dict[str, float]  # UNDER/OVER percentages
+    rwnd_total_samples: int
 
     # SSTHRESH analysis
     ssthresh_avg: float

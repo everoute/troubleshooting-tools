@@ -1,0 +1,17 @@
+# Dockerfile for building measurement-tools RPM
+# Usage:
+#   docker build -f Dockerfile.build -t measurement-tools-builder .
+#   docker run -v $(pwd)/output:/output measurement-tools-builder [VERSION] [DIST]
+
+FROM centos:7
+
+RUN yum install -y rpm-build && yum clean all
+
+WORKDIR /build
+
+COPY build-docker.sh /build/
+COPY measurement-tools.spec /build/
+
+# Mount source at /src and output at /output
+ENTRYPOINT ["/build/build-docker.sh"]
+CMD ["1.0.0", "el7"]

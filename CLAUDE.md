@@ -9,6 +9,30 @@ This is the main Claude configuration file. Additional context-specific memory f
 - `claude_local_coding.md` - BPF/BCC coding guidelines and conventions
 - `claude_local_test.md` - Testing procedures and environment setup
 
+### Agents and Workflows
+
+Custom agents are defined in `.claude/agents/`:
+
+| Agent | Trigger | Purpose |
+|-------|---------|---------|
+| `research-agent` | Auto | Research: source code analysis, web search, documentation, best practices |
+| `prd-agent` | Explicit | Create IEEE 830 requirements documents |
+| `design-agent` | Explicit | Create IEEE 1016 design documents (HLD/LLD) |
+| `development-agent` | Explicit | Implement code following project conventions |
+| `testing-agent` | Explicit | Execute tests on remote environments |
+| `debug-agent` | Explicit | Add debug instrumentation, diagnose issues |
+
+**Orchestration Workflow**: `.claude/workflows/debug-fix-workflow.md`
+
+When user requests debugging or fixing a tool, follow the debug-fix workflow:
+1. **debug-agent**: Add debug_inc() instrumentation or analyze existing debug output
+2. **testing-agent**: Run tests, collect debug statistics
+3. **Iterate**: debug-agent analyzes stats, adds more debug or returns diagnosis
+4. **Review**: Main agent reviews diagnosis, may use research-agent if needed
+5. **development-agent**: Apply fix based on diagnosis
+6. **testing-agent**: Verify fix
+7. **Iterate if needed**: Back to debug-agent if verification fails
+
 ## Project Overview
 
 This is an **eBPF-based network troubleshooting and performance analysis toolset** for virtualized environments. The repository contains two major components:

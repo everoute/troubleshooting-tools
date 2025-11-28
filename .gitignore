@@ -6,7 +6,7 @@ bpftools/__pycache__/
 *.pyc
 *.pyo
 __pycache__/
-.tmp/
+tmp/
 bcc-program/*
 test/workflow/result/*
 *.log

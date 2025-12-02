@@ -11,7 +11,7 @@
 
 Name:           measurement-tools
 Version:        %{?version}%{!?version:1.0.0}
-Release:        1%{?dist}
+Release:        %{?release_ver}%{!?release_ver:1}%{?dist}
 Summary:        eBPF-based network troubleshooting and performance analysis tools
 
 License:        Proprietary 

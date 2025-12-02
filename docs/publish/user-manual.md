@@ -1,5 +1,47 @@
 # eBPF 网络故障排查工具 - 用户手册
 
+## 目录
+
+- [1. 项目结构](#1-项目结构)
+  - [目录分类](#目录分类)
+- [2. 工具测量类型分类](#2-工具测量类型分类)
+  - [2.1 Details 版本 - 详细信息测量工具](#21-details-版本---详细信息测量工具)
+  - [2.2 Summary 版本 - 汇总统计测量工具](#22-summary-版本---汇总统计测量工具)
+  - [2.3 Simple 版本 - 简化版工具](#23-simple-版本---简化版工具)
+  - [2.4 Standalone 工具 - 独立功能工具](#24-standalone-工具---独立功能工具)
+  - [2.5 分层测量策略建议](#25-分层测量策略建议)
+- [3. 模块特定工具详情](#3-模块特定工具详情)
+  - [3.1 CPU 模块](#31-cpu-模块-cpu)
+  - [3.2 KVM 虚拟化网络模块](#32-kvm-虚拟化网络模块-kvm-virtualization-network)
+  - [3.3 Linux 网络栈模块](#33-linux-网络栈模块-linux-network-stack)
+  - [3.4 Open vSwitch 模块](#34-open-vswitch-模块-ovs)
+  - [3.5 性能模块](#35-性能模块-performance)
+  - [3.6 其他工具模块](#36-其他工具模块-other)
+- [4. 工具使用指南](#4-工具使用指南)
+  - [4.1 基本使用模式](#41-基本使用模式)
+  - [4.2 性能监控模块](#42-性能监控模块-performance)
+  - [4.3 Linux 网络栈模块](#43-linux-网络栈模块-linux-network-stack)
+  - [4.4 Open vSwitch 模块](#44-open-vswitch-模块-ovs)
+  - [4.5 KVM 虚拟化网络模块](#45-kvm-虚拟化网络模块-kvm-virt-network)
+  - [4.6 Bpftrace 脚本工具](#46-bpftrace-脚本工具)
+  - [4.7 CPU 和调度器监控脚本](#47-cpu-和调度器监控脚本)
+  - [4.8 参数模式总结](#48-参数模式总结)
+- [5. 输出数据格式详解](#5-输出数据格式详解)
+  - [5.1 性能监控工具输出格式](#51-性能监控工具输出格式)
+  - [5.2 Linux 网络栈监控输出格式](#52-linux-网络栈监控输出格式)
+  - [5.3 OVS 监控输出格式](#53-ovs-监控输出格式)
+  - [5.4 KVM 虚拟化网络输出格式](#54-kvm-虚拟化网络输出格式)
+  - [5.5 Bpftrace 脚本输出格式](#55-bpftrace-脚本输出格式)
+  - [5.6 输出格式特点总结](#56-输出格式特点总结)
+- [6. 部署和环境](#6-部署和环境)
+  - [6.1 系统要求](#61-系统要求)
+  - [6.2 目标环境](#62-目标环境)
+  - [6.3 安装部署步骤](#63-安装部署步骤)
+  - [6.4 故障排查和支持](#64-故障排查和支持)
+  - [6.5 版本兼容性](#65-版本兼容性)
+- [7. 使用最佳实践](#7-使用最佳实践)
+  - [7.1 监控最佳实践](#71-监控最佳实践)
+
 ## 1. 项目结构
 
 项目按照系统组件和问题域进行模块化目录组织。主要结构由使用 Python（BCC）编写的 eBPF 工具和 bpftrace 脚本组成。
@@ -7,7 +49,7 @@
 ### 目录分类
 
 ```
-ebpf-tools/
+measurement-tools/
 ├── cpu/                              # CPU 和调度器监控工具
 ├── kvm-virtualization-network/      # KVM/QEMU 虚拟化网络栈工具
 │   ├── kvm/                         # KVM 中断和 IRQ 监控
@@ -155,14 +197,14 @@ ebpf-tools/
 
 ```bash
 # 阶段1: 使用 summary 工具建立基线
-sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py \
+sudo python3 measurement-tools/performance/vm-network/vm_network_latency_summary.py \
   --vm-interface vnet0 --phy-interface ens4 \
   --protocol tcp --direction rx --interval 5
 
 # 发现 P99 延迟异常,且主要来自 172.21.153.113 → 172.21.153.114
 
 # 阶段2: 使用 details 工具精确分析
-sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py \
+sudo python3 measurement-tools/performance/vm-network/vm_network_latency_details.py \
   --vm-interface vnet0 --phy-interface ens4 \
   --src-ip 172.21.153.113 --dst-ip 172.21.153.114 \
   --protocol tcp --direction rx
@@ -170,7 +212,7 @@ sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py \
 # 分析 per-packet 数据,定位到 OVS_RX 阶段延迟异常
 
 # 阶段3: 修复后持续监控
-sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py \
+sudo python3 measurement-tools/performance/vm-network/vm_network_latency_summary.py \
   --vm-interface vnet0 --phy-interface ens4 \
   --src-ip 172.21.153.113 --dst-ip 172.21.153.114 \
   --protocol tcp --direction rx --interval 10
@@ -368,7 +410,7 @@ sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py \
 
 #### 虚拟机网络性能 (`vm-network/`)
 
-- **vm_network_latency_summary.py** [Summary 版本]  
+- **vm_network_latency_summary.py** [Summary 版本]
 
   - **使用场景**：长时间 VM 网络延迟监控,性能基线建立
   - **测量方式**：基于 BPF_HISTOGRAM 的相邻阶段延迟统计
@@ -424,7 +466,7 @@ sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py \
 
 #### 通用性能工具
 
-- **qdisc_lateny_details.py** [Details 版本] 新增
+- **qdisc_lateny_details.py** [Details 版本]
 
   - **使用场景**：Qdisc 数据包排序详细跟踪
   - **收集数据**：队列规则处理时间、数据包排序信息
@@ -522,12 +564,12 @@ sudo bpftrace <脚本路径> [参数]
 
 ```bash
 # 系统网络相邻阶段延迟直方图统计
-sudo python3 ebpf-tools/performance/system-network/system_network_latency_summary.py \
+sudo python3 measurement-tools/performance/system-network/system_network_latency_summary.py \
   --phy-interface ens11 --src-ip 10.132.114.11 --dst-ip 10.132.114.12 \
   --direction rx --protocol tcp --interval 5
 
 # 监控所有协议的延迟分布
-sudo python3 ebpf-tools/performance/system-network/system_network_latency_summary.py \
+sudo python3 measurement-tools/performance/system-network/system_network_latency_summary.py \
   --phy-interface eth0 --protocol all --direction tx --interval 10
 ```
 
@@ -535,12 +577,12 @@ sudo python3 ebpf-tools/performance/system-network/system_network_latency_summar
 
 ```bash
 # 详细 per-packet 延迟分析
-sudo python3 ebpf-tools/performance/system-network/system_network_latency_details.py \
+sudo python3 measurement-tools/performance/system-network/system_network_latency_details.py \
   --phy-interface ens11 --src-ip 10.132.114.12 --dst-ip 10.132.114.11 \
   --direction rx --protocol tcp
 
 # 双向延迟监控
-sudo python3 ebpf-tools/performance/system-network/system_network_latency_details.py \
+sudo python3 measurement-tools/performance/system-network/system_network_latency_details.py \
   --phy-interface eth0 --src-ip 192.168.1.100 --dst-ip 192.168.1.200 \
   --direction both --protocol udp
 ```
@@ -549,13 +591,13 @@ sudo python3 ebpf-tools/performance/system-network/system_network_latency_detail
 
 ```bash
 # 监控系统网络性能指标
-sudo python3 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py \
+sudo python3 measurement-tools/performance/system-network/system_network_perfomance_metrics.py \
   --internal-interface port-storage --phy-interface ens11 \
   --src-ip 10.132.114.11 --dst-ip 10.132.114.12 \
   --direction rx --protocol tcp
 
 # 启用连接跟踪的性能监控
-sudo python3 ebpf-tools/performance/system-network/system_network_perfomance_metrics.py \
+sudo python3 measurement-tools/performance/system-network/system_network_perfomance_metrics.py \
   --internal-interface br0 --phy-interface eth0 \
   --enable-ct --verbose
 ```
@@ -564,7 +606,7 @@ sudo python3 ebpf-tools/performance/system-network/system_network_perfomance_met
 
 ```bash
 # ICMP 往返时间测量
-sudo python3 ebpf-tools/performance/system-network/system_network_icmp_rtt.py \
+sudo python3 measurement-tools/performance/system-network/system_network_icmp_rtt.py \
   --src-ip 10.132.114.11 --dst-ip 10.132.114.12 \
   --direction tx --phy-iface1 ens11
 ```
@@ -575,13 +617,13 @@ sudo python3 ebpf-tools/performance/system-network/system_network_icmp_rtt.py \
 
 ```bash
 # VM 网络相邻阶段延迟直方图统计
-sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py \
+sudo python3 measurement-tools/performance/vm-network/vm_network_latency_summary.py \
   --vm-interface vnet0 --phy-interface ens4 \
   --src-ip 172.21.153.113 --dst-ip 172.21.153.114 \
   --direction rx --protocol tcp --interval 5
 
 # 监控所有协议的 VM 网络延迟分布
-sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py \
+sudo python3 measurement-tools/performance/vm-network/vm_network_latency_summary.py \
   --vm-interface tap0 --phy-interface eth0 \
   --protocol all --direction tx --interval 10
 ```
@@ -590,7 +632,7 @@ sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_summary.py \
 
 ```bash
 # 虚拟机延迟 per-packet 详细分解
-sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py \
+sudo python3 measurement-tools/performance/vm-network/vm_network_latency_details.py \
   --vm-interface vnet0 --phy-interface ens4 \
   --src-ip 172.21.153.114 --dst-ip 172.21.153.113 \
   --direction tx --protocol udp
@@ -600,7 +642,7 @@ sudo python3 ebpf-tools/performance/vm-network/vm_network_latency_details.py \
 
 ```bash
 # 虚拟机网络性能监控
-sudo python3 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py \
+sudo python3 measurement-tools/performance/vm-network/vm_network_performance_metrics.py \
   --vm-interface vnet0 --phy-interface ens4 \
   --src-ip 172.21.153.113 --dst-ip 172.21.153.114 \
   --direction rx --protocol tcp
@@ -612,7 +654,7 @@ sudo python3 ebpf-tools/performance/vm-network/vm_network_performance_metrics.py
 
 ```bash
 # 基本虚拟机对延迟监控
-sudo python3 ebpf-tools/performance/vm-network/vm_pair_latency/vm_pair_latency.py \
+sudo python3 measurement-tools/performance/vm-network/vm_pair_latency/vm_pair_latency.py \
   --send-dev tap0 --recv-dev tap1
 ```
 
@@ -620,7 +662,7 @@ sudo python3 ebpf-tools/performance/vm-network/vm_pair_latency/vm_pair_latency.p
 
 ```bash
 # 多虚拟机对、多端口延迟监控
-sudo python3 ebpf-tools/performance/vm-network/vm_pair_latency/multi_vm_pair_latency.py \
+sudo python3 measurement-tools/performance/vm-network/vm_pair_latency/multi_vm_pair_latency.py \
   --send-dev tap0 --recv-dev tap1 --ports 22 80 443
 ```
 
@@ -628,7 +670,7 @@ sudo python3 ebpf-tools/performance/vm-network/vm_pair_latency/multi_vm_pair_lat
 
 ```bash
 # 使用 Pair ID 标识的多 VM 对延迟监控
-sudo python3 ebpf-tools/performance/vm-network/vm_pair_latency/multi_vm_pair_latency_pairid.py \
+sudo python3 measurement-tools/performance/vm-network/vm_pair_latency/multi_vm_pair_latency_pairid.py \
   --config vm_pairs.txt
 ```
 
@@ -636,7 +678,7 @@ sudo python3 ebpf-tools/performance/vm-network/vm_pair_latency/multi_vm_pair_lat
 
 ```bash
 # 延迟间隙分析（设定阈值,微秒）
-sudo python3 ebpf-tools/performance/vm-network/vm_pair_latency/vm_pair_latency_gap/vm_pair_gap.py \
+sudo python3 measurement-tools/performance/vm-network/vm_pair_latency/vm_pair_latency_gap/vm_pair_gap.py \
   --threshold 100 --ports 22 80
 ```
 
@@ -644,7 +686,7 @@ sudo python3 ebpf-tools/performance/vm-network/vm_pair_latency/vm_pair_latency_g
 
 ```bash
 # 多端口延迟间隙分析
-sudo python3 ebpf-tools/performance/vm-network/vm_pair_latency/vm_pair_latency_gap/multi_port_gap.py \
+sudo python3 measurement-tools/performance/vm-network/vm_pair_latency/vm_pair_latency_gap/multi_port_gap.py \
   --threshold 50 --ports 22 80 443 8080
 ```
 
@@ -652,7 +694,7 @@ sudo python3 ebpf-tools/performance/vm-network/vm_pair_latency/vm_pair_latency_g
 
 ```bash
 # 复杂场景：多 VM 对、多端口延迟间隙综合分析
-sudo python3 ebpf-tools/performance/vm-network/vm_pair_latency/vm_pair_latency_gap/multi_vm_pair_multi_port_gap.py \
+sudo python3 measurement-tools/performance/vm-network/vm_pair_latency/vm_pair_latency_gap/multi_vm_pair_multi_port_gap.py \
   --config vm_pairs.txt --threshold 100 --ports 22 80 443
 ```
 
@@ -690,11 +732,11 @@ sudo python3 ebpf-tools/performance/vm-network/vm_pair_latency/vm_pair_latency_g
 
 ```bash
 # 基本以太网丢包监控
-sudo python3 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py \
+sudo python3 measurement-tools/linux-network-stack/packet-drop/eth_drop.py \
   --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --l4-protocol tcp
 
 # 指定接口和协议类型的丢包监控
-sudo python3 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py \
+sudo python3 measurement-tools/linux-network-stack/packet-drop/eth_drop.py \
   --type ipv4 --src-ip 192.168.1.100 --dst-port 80 \
   --interface eth0 --verbose
 ```
@@ -703,11 +745,11 @@ sudo python3 ebpf-tools/linux-network-stack/packet-drop/eth_drop.py \
 
 ```bash
 # 内核丢包栈统计分析
-sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py \
+sudo python3 measurement-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py \
   --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --l4-protocol tcp
 
 # 详细栈统计（指定设备和时间间隔）
-sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py \
+sudo python3 measurement-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_summary_all.py \
   --interval 5 --duration 60 --top 10 \
   --device br-int --src-ip 10.0.0.100 --l4-protocol tcp
 ```
@@ -716,7 +758,7 @@ sudo python3 ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats_
 
 ```bash
 # 队列规则丢包监控
-sudo python3 ebpf-tools/linux-network-stack/packet-drop/qdisc_drop_trace.py
+sudo python3 measurement-tools/linux-network-stack/packet-drop/qdisc_drop_trace.py
 ```
 
 #### 4.3.3 连接跟踪和分片工具
@@ -725,15 +767,15 @@ sudo python3 ebpf-tools/linux-network-stack/packet-drop/qdisc_drop_trace.py
 
 ```bash
 # 基本连接跟踪
-sudo python3 ebpf-tools/linux-network-stack/trace_conntrack.py \
+sudo python3 measurement-tools/linux-network-stack/trace_conntrack.py \
   --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --protocol tcp
 
 # 相对时间显示的连接跟踪
-sudo python3 ebpf-tools/linux-network-stack/trace_conntrack.py \
+sudo python3 measurement-tools/linux-network-stack/trace_conntrack.py \
   --src-ip 192.168.1.100 --protocol tcp --rel-time
 
 # 使用过滤器文件的多过滤器连接跟踪
-sudo python3 ebpf-tools/linux-network-stack/trace_conntrack.py \
+sudo python3 measurement-tools/linux-network-stack/trace_conntrack.py \
   --filters-file /path/to/filters.json --stack true
 ```
 
@@ -741,11 +783,11 @@ sudo python3 ebpf-tools/linux-network-stack/trace_conntrack.py \
 
 ```bash
 # IP 分片重组监控
-sudo python3 ebpf-tools/linux-network-stack/trace_ip_defrag.py \
+sudo python3 measurement-tools/linux-network-stack/trace_ip_defrag.py \
   --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --protocol udp
 
 # 带日志记录的 IP 分片监控
-sudo python3 ebpf-tools/linux-network-stack/trace_ip_defrag.py \
+sudo python3 measurement-tools/linux-network-stack/trace_ip_defrag.py \
   --src-ip 192.168.1.100 --protocol udp --log-file /tmp/defrag.log
 ```
 
@@ -780,15 +822,15 @@ sudo python3 ebpf-tools/linux-network-stack/trace_ip_defrag.py \
 
 ```bash
 # OVS upcall 延迟直方图统计 (注意: 使用 --proto 而非 --protocol)
-sudo python3 ebpf-tools/ovs/ovs_upcall_latency_summary.py \
+sudo python3 measurement-tools/ovs/ovs_upcall_latency_summary.py \
   --src-ip 172.21.153.113 --dst-ip 172.21.153.114 --proto tcp
 
 # 指定报告间隔的 upcall 延迟监控
-sudo python3 ebpf-tools/ovs/ovs_upcall_latency_summary.py \
+sudo python3 measurement-tools/ovs/ovs_upcall_latency_summary.py \
   --src-ip 192.168.76.198 --proto tcp --interval 5
 
 # 监控所有协议的 upcall 延迟
-sudo python3 ebpf-tools/ovs/ovs_upcall_latency_summary.py \
+sudo python3 measurement-tools/ovs/ovs_upcall_latency_summary.py \
   --proto all --interval 10
 ```
 
@@ -803,11 +845,11 @@ sudo python3 ebpf-tools/ovs/ovs_upcall_latency_summary.py \
 
 ```bash
 # 基本 megaflow 跟踪
-sudo python3 ebpf-tools/ovs/ovs_userspace_megaflow.py \
+sudo python3 measurement-tools/ovs/ovs_userspace_megaflow.py \
   --src-ip 172.21.153.114 --dst-ip 172.21.153.113 --protocol tcp
 
 # 综合过滤的 megaflow 跟踪
-sudo python3 ebpf-tools/ovs/ovs_userspace_megaflow.py \
+sudo python3 measurement-tools/ovs/ovs_userspace_megaflow.py \
   --eth-src 00:11:22:33:44:55 --src-ip 10.0.0.100 \
   --l4-src-port 80 --ip-proto 6
 ```
@@ -816,7 +858,7 @@ sudo python3 ebpf-tools/ovs/ovs_userspace_megaflow.py \
 
 ```bash
 # OVS 内核丢包监控
-sudo python3 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py \
+sudo python3 measurement-tools/ovs/ovs-kernel-module-drop-monitor.py \
   --src-ip 172.21.153.113 --dst-ip 172.21.153.114 --protocol udp
 ```
 
@@ -843,7 +885,7 @@ sudo python3 ebpf-tools/ovs/ovs-kernel-module-drop-monitor.py \
 
 ```bash
 # 监控 vhost eventfd 信号
-sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_eventfd_count.py \
+sudo python3 measurement-tools/kvm-virt-network/vhost-net/vhost_eventfd_count.py \
   --interval 5 --clear
 ```
 
@@ -851,7 +893,7 @@ sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_eventfd_count.py \
 
 ```bash
 # 详细 vhost 队列关联分析
-sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py \
+sudo python3 measurement-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_details.py \
   --device vhost-1 --interval 2
 ```
 
@@ -859,7 +901,7 @@ sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_queue_correlation_detai
 
 ```bash
 # vhost 缓冲区 peek 操作监控
-sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_buf_peek_stats.py \
+sudo python3 measurement-tools/kvm-virt-network/vhost-net/vhost_buf_peek_stats.py \
   --interval 1
 ```
 
@@ -869,7 +911,7 @@ sudo python3 ebpf-tools/kvm-virt-network/vhost-net/vhost_buf_peek_stats.py \
 
 ```bash
 # TUN 设备环形缓冲区监控
-sudo python3 ebpf-tools/kvm-virt-network/tun/tun_ring_monitor.py \
+sudo python3 measurement-tools/kvm-virt-network/tun/tun_ring_monitor.py \
   --device tun0 --interval 1
 ```
 
@@ -877,7 +919,7 @@ sudo python3 ebpf-tools/kvm-virt-network/tun/tun_ring_monitor.py \
 
 ```bash
 # TUN 到 vhost 队列详细统计
-sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py \
+sudo python3 measurement-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py \
   --tun-device tap0 --interval 3
 ```
 
@@ -887,7 +929,7 @@ sudo python3 ebpf-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py
 
 ```bash
 # virtio-net NAPI 轮询效率监控
-sudo python3 ebpf-tools/kvm-virt-network/virtio-net/virtnet_poll_monitor.py \
+sudo python3 measurement-tools/kvm-virt-network/virtio-net/virtnet_poll_monitor.py \
   --interval 2
 ```
 
@@ -895,7 +937,7 @@ sudo python3 ebpf-tools/kvm-virt-network/virtio-net/virtnet_poll_monitor.py \
 
 ```bash
 # virtio-net 中断合并监控
-sudo python3 ebpf-tools/kvm-virt-network/virtio-net/virtnet_irq_monitor.py \
+sudo python3 measurement-tools/kvm-virt-network/virtio-net/virtnet_irq_monitor.py \
   --interval 1 --device virtio0
 ```
 
@@ -905,11 +947,11 @@ sudo python3 ebpf-tools/kvm-virt-network/virtio-net/virtnet_irq_monitor.py \
 
 ```bash
 # KVM 中断注入性能监控 (必需参数: --qemu-pid)
-sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py \
+sudo python3 measurement-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py \
   --qemu-pid 12345 --interval 5
 
 # 监控特定 QEMU 进程的中断统计
-sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py \
+sudo python3 measurement-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py \
   --qemu-pid $(pgrep -f "qemu.*vm-name")
 ```
 
@@ -925,62 +967,62 @@ sudo python3 ebpf-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py \
 
 ```bash
 # 跟踪异常 ARP 数据包
-sudo bpftrace ebpf-tools/other/trace-abnormal-arp.bt
+sudo bpftrace measurement-tools/other/trace-abnormal-arp.bt
 
 # 监控 OVS 连接跟踪无效状态
-sudo bpftrace ebpf-tools/other/trace-ovs-ct-invalid.bt
+sudo bpftrace measurement-tools/other/trace-ovs-ct-invalid.bt
 
 # 跟踪卸载分段问题
-sudo bpftrace ebpf-tools/other/trace_offloading_segment.bt
+sudo bpftrace measurement-tools/other/trace_offloading_segment.bt
 ```
 
 #### 4.6.2 virtio-net 路径监控脚本
 
 ```bash
 # virtio-net RX 路径详细监控
-sudo bpftrace ebpf-tools/kvm-virt-network/virtio-net/virtionet-rx-path-monitor.bt
+sudo bpftrace measurement-tools/kvm-virt-network/virtio-net/virtionet-rx-path-monitor.bt
 
 # virtio-net RX 路径汇总统计
-sudo bpftrace ebpf-tools/kvm-virt-network/virtio-net/virtionet-rx-path-summary.bt
+sudo bpftrace measurement-tools/kvm-virt-network/virtio-net/virtionet-rx-path-summary.bt
 
 # 跟踪 virtio-net 接收缓冲区
-sudo bpftrace ebpf-tools/kvm-virt-network/virtio-net/trace_virtio_net_rcvbuf.bt
+sudo bpftrace measurement-tools/kvm-virt-network/virtio-net/trace_virtio_net_rcvbuf.bt
 ```
 
 #### 4.6.3 TUN/TAP 监控脚本
 
 ```bash
 # TUN 异常 GSO 类型检测
-sudo bpftrace ebpf-tools/kvm-virt-network/tun/tun-abnormal-gso-type.bt
+sudo bpftrace measurement-tools/kvm-virt-network/tun/tun-abnormal-gso-type.bt
 
 # TUN TX 环形缓冲区统计
-sudo bpftrace ebpf-tools/kvm-virt-network/tun/tun-tx-ring-stas.bt
+sudo bpftrace measurement-tools/kvm-virt-network/tun/tun-tx-ring-stas.bt
 ```
 
 #### 4.6.4 内核丢包分析脚本
 
 ```bash
 # 实时内核丢包栈跟踪
-sudo bpftrace ebpf-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats.bt
+sudo bpftrace measurement-tools/linux-network-stack/packet-drop/kernel_drop_stack_stats.bt
 
 # 队列规则出队操作跟踪
-sudo bpftrace ebpf-tools/other/trace-qdisc-dequeue.bt
+sudo bpftrace measurement-tools/other/trace-qdisc-dequeue.bt
 
 # 设备队列传输跟踪
-sudo bpftrace ebpf-tools/other/trace_dev_queue_xmit.bt
+sudo bpftrace measurement-tools/other/trace_dev_queue_xmit.bt
 ```
 
 ### 4.7 CPU 和调度器监控脚本
 
 ```bash
 # 综合 CPU 监控
-sudo ./ebpf-tools/cpu/cpu_monitor.sh
+sudo ./measurement-tools/cpu/cpu_monitor.sh
 
 # 调度器延迟分析
-sudo ./ebpf-tools/cpu/sched_latency_monitor.sh --interval 1 --duration 60
+sudo ./measurement-tools/cpu/sched_latency_monitor.sh --interval 1 --duration 60
 
 # off-CPU 时间分析
-sudo python3 ebpf-tools/cpu/offcputime-ts.py
+sudo python3 measurement-tools/cpu/offcputime-ts.py
 ```
 
 ### 4.8 参数模式总结
@@ -1810,7 +1852,7 @@ sudo bpftrace -e 'BEGIN { printf("bpftrace is working\\n"); exit(); }'
 
 # 测试项目工具
 cd troubleshooting-tools
-sudo python3 ebpf-tools/performance/system-network/system_network_icmp_rtt.py --help
+sudo python3 measurement-tools/performance/system-network/system_network_icmp_rtt.py --help
 ```
 
 ### 6.4 故障排查和支持

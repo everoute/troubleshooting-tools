@@ -9,3 +9,4 @@ __pycache__/
 .tmp/
 bcc-program/*
 test/workflow/result/*
+*output

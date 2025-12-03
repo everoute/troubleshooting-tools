@@ -87,14 +87,12 @@ TRACEPOINT_PROBE(net, net_dev_xmit)
     u16 proto = 0;
     bpf_probe_read(&proto, sizeof(proto), &skb->protocol);
     if (proto != __constant_htons(ETH_P_IP)) {
-        bpf_trace_printk("LATENCY_DBG xmit: non-IP protocol %x\\n", proto);
         return 0;
     }
 
     struct iphdr iph;
     bpf_probe_read_kernel(&iph, sizeof(iph), skb->head + skb->network_header);
     if (iph.protocol != IPPROTO_UDP) {
-        bpf_trace_printk("LATENCY_DBG xmit: non-UDP protocol %x\\n", iph.protocol);
         return 0;
     }
 
@@ -118,8 +116,6 @@ TRACEPOINT_PROBE(net, net_dev_xmit)
 
     u64 *ts = send_ts.lookup(&key);
     if (ts) {
-        u64 delta = bpf_ktime_get_ns() - *ts;
-        bpf_trace_printk("LATENCY_DBG latency=%d us\\n", delta / 1000);
         send_ts.delete(&key);
     }
 
@@ -144,14 +140,12 @@ TRACEPOINT_PROBE(net, netif_receive_skb)
     u16 proto = 0;
     bpf_probe_read(&proto, sizeof(proto), &skb->protocol);
     if (proto != __constant_htons(ETH_P_IP)) {
-        bpf_trace_printk("LATENCY_DBG recv: non-IP protocol %x\\n", proto);
         return 0;
     }
 
     struct iphdr iph;
     bpf_probe_read_kernel(&iph, sizeof(iph), skb->head + skb->network_header);
     if (iph.protocol != IPPROTO_UDP) {
-        bpf_trace_printk("LATENCY_DBG recv: non-UDP protocol %x\\n", iph.protocol);
         return 0;
     }
 

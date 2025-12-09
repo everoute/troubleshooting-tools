@@ -12,7 +12,7 @@
   - [2.5 分层测量策略建议](#25-分层测量策略建议)
 - [3. 模块特定工具详情](#3-模块特定工具详情)
   - [3.1 CPU 模块](#31-cpu-模块-cpu)
-  - [3.2 KVM 虚拟化网络模块](#32-kvm-虚拟化网络模块-kvm-virtualization-network)
+  - [3.2 KVM 虚拟化网络模块](#32-kvm-虚拟化网络模块-kvm-virt-network)
   - [3.3 Linux 网络栈模块](#33-linux-网络栈模块-linux-network-stack)
   - [3.4 Open vSwitch 模块](#34-open-vswitch-模块-ovs)
   - [3.5 性能模块](#35-性能模块-performance)
@@ -51,7 +51,7 @@
 ```
 measurement-tools/
 ├── cpu/                              # CPU 和调度器监控工具
-├── kvm-virtualization-network/      # KVM/QEMU 虚拟化网络栈工具
+├── kvm-virt-network/                 # KVM/QEMU 虚拟化网络栈工具
 │   ├── kvm/                         # KVM 中断和 IRQ 监控
 │   ├── tun/                         # TUN/TAP 设备监控
 │   ├── vhost-net/                   # vhost-net 后端监控
@@ -97,8 +97,7 @@ measurement-tools/
 - `system_network_latency_details.py` - 系统网络延迟详细分析
 - `vm_network_latency_details.py` - VM 网络延迟详细分析
 - `vhost_queue_correlation_details.py` - vhost 队列关联详细统计
-- `tun_to_vhost_queue_stats_details.py` - TUN 到 vhost 队列详细统计
-- `qdisc_latency_details.py` - Qdisc 数据包排序详细跟踪
+- `qdisc_lateny_details.py` - Qdisc 数据包排序详细跟踪
 
 ### 2.2 Summary 版本 - 汇总统计测量工具
 
@@ -130,7 +129,9 @@ measurement-tools/
 - `vm_network_latency_summary.py` - VM 网络相邻阶段延迟直方图
 - `ovs_upcall_latency_summary.py` - OVS upcall 延迟分布统计
 - `kvm_irqfd_stats_summary.py` - KVM 中断注入统计(直方图)
-- `kernel_drop_stack_stats_summary.py` - 内核丢包栈统计(直方图)
+- `kernel_drop_stack_stats_summary_all.py` - 内核丢包栈统计(直方图)
+- `tun_to_vhost_queue_stats_full_summary.py` - TUN 到 vhost 队列完整统计(直方图)
+- `tun_to_vhost_queue_status_simple_summary.py` - TUN 到 vhost 队列状态简化统计(直方图)
 
 ### 2.3 Simple 版本 - 简化版工具
 
@@ -150,8 +151,7 @@ measurement-tools/
 **典型工具:**
 
 - `vhost_queue_correlation_simple.py` - vhost 队列关联简化监控
-- `tun_to_vhost_queue_status_simple.py` - TUN 到 vhost 队列状态简化跟踪
-- `eth_drop.py` - 以太网层简化丢包监控
+- `eth_drop.py` - 全内核范围丢包监控（支持多协议、IP、端口、VLAN 过滤）
 
 ### 2.4 Standalone 工具 - 独立功能工具
 
@@ -247,269 +247,242 @@ sudo python3 measurement-tools/performance/vm-network/vm_network_latency_summary
   - **使用场景**：检测调度延迟
   - **收集数据**：调度延迟直方图
 
-### 3.2 KVM 虚拟化网络模块 (`kvm-virtualization-network/`)
+### 3.2 KVM 虚拟化网络模块 (`kvm-virt-network/`)
+
+**模块概述**：该模块包含针对 KVM/QEMU 虚拟化网络栈各层的监控工具，覆盖从 KVM 虚拟机中断注入、TUN/TAP 设备、vhost-net 后端到 virtio-net 客户机驱动的完整虚拟化网络路径。用于诊断虚拟机网络性能问题、中断延迟、队列关联和缓冲区管理等问题。
 
 #### 3.2.1 KVM 子系统 (`kvm/`)
 
-- **kvm_irqfd_stats_summary.py**：KVM 中断注入统计
+- **kvm_irqfd_stats_summary.py**：基于 histogram 的 KVM 中断注入统计工具
 
-  - **使用场景**：监控虚拟中断传递性能
-  - **收集数据**：IRQ 注入次数、延迟、每虚拟机统计
-- **kvm_irqfd_stats_summary_arm.py**：ARM 特定 KVM 中断监控
+  - **使用场景**：监控特定虚拟机的中断注入性能，分析 vhost 数据平面和 QEMU 控制平面的中断分布，定位中断注入瓶颈
+  - **收集数据**：IRQ 注入次数按 GSI 分组统计、中断类别（数据/控制）分布、每 CPU/每线程中断统计、kvm_arch_set_irq_inatomic 和 kvm_vcpu_kick 调用链分析
+- **kvm_irqfd_stats_summary_arm.py**：ARM 架构特定的 KVM 中断监控
 
-  - **使用场景**：ARM 虚拟化中断分析
-  - **收集数据**：ARM 特定 IRQ 统计
+  - **使用场景**：ARM64 服务器虚拟化环境的中断分析，针对 ARM GIC 中断控制器特性优化
+  - **收集数据**：ARM 特定 IRQ 统计、vGIC 中断注入数据
 
 #### 3.2.2 TUN/TAP 子系统 (`tun/`)
 
-- **tun_ring_monitor.py**：TUN 设备环形缓冲区监控
+- **tun_ring_monitor.py**：TUN 设备环形缓冲区实时监控工具
 
-  - **使用场景**：检测 TUN 设备缓冲区问题
-  - **收集数据**：环形缓冲区利用率、溢出事件
-- **tun-abnormal-gso-type.bt**：异常 GSO 类型检测
+  - **使用场景**：监控 TUN 设备 tx_ring 和 rx 路径状态，检测缓冲区满导致的丢包，分析 vhost-net 与 TUN 之间的数据流瓶颈
+  - **收集数据**：环形缓冲区利用率、ptr_ring 状态、队列满事件、每数据包流转详情
+- **tun_to_vhost_queue_stats_full_summary.py**：TUN 到 vhost 队列完整统计（histogram 版本）
 
-  - **使用场景**：识别 GSO 卸载问题
-  - **收集数据**：无效 GSO 类型、数据包详情
-- **tun-tx-ring-stas.bt**：TUN 发送环统计
+  - **使用场景**：全面分析 TUN 设备与 vhost-net 之间的队列关联和数据流，统计各队列的数据包处理量和延迟分布
+  - **收集数据**：每队列数据包统计、TUN-vhost 队列映射、sock 指针关联、延迟直方图
+- **tun_to_vhost_queue_status_simple_summary.py**：TUN 到 vhost 队列简化统计（histogram 版本）
 
-  - **使用场景**：TX 环性能分析
-  - **收集数据**：TX 环占用率、吞吐量
+  - **使用场景**：轻量级监控 TUN-vhost 队列状态，快速获取队列活跃度和基本统计
+  - **收集数据**：简化的队列状态统计、基本计数器
+- **tun-abnormal-gso-type.bt**：异常 GSO 类型检测脚本
+
+  - **使用场景**：识别 GSO/TSO 卸载配置问题导致的网络异常，检测不支持的 GSO 类型
+  - **收集数据**：无效 GSO 类型事件、SKB 信息、栈跟踪
+- **tun-tx-ring-stas.bt**：TUN 发送环统计脚本
+
+  - **使用场景**：TX 环性能分析，监控发送路径的吞吐量
+  - **收集数据**：TX 环占用率、发送数据包计数、吞吐量统计
 
 #### 3.2.3 vhost-net 后端 (`vhost-net/`)
 
-- **vhost_eventfd_count.py/bt**：vhost eventfd 信号监控
+- **vhost_eventfd_count.py/bt**：vhost eventfd 信号计数工具
 
-  - **使用场景**：分析客户机-主机通知效率
-  - **收集数据**：Eventfd 信号次数、频率
-- **vhost_queue_correlation_simple.py**：简单队列关联分析
+  - **使用场景**：分析虚拟机与主机之间的通知效率，检测过高的 eventfd 信号频率导致的 CPU 开销
+  - **收集数据**：Eventfd 信号次数、频率、按队列分组统计
+- **vhost_queue_correlation_simple.py**：简化版 vhost 队列关联分析
 
-  - **使用场景**：理解队列利用模式
-  - **收集数据**：队列对映射、利用率指标
-- **vhost_queue_correlation_details.py**：详细队列关联
+  - **使用场景**：快速理解 vhost 队列利用模式，监控队列之间的数据流关系
+  - **收集数据**：队列对映射、基本利用率指标、简化的事件跟踪
+- **vhost_queue_correlation_details.py**：详细 vhost 队列关联分析（details 版本）
 
-  - **使用场景**：深度队列性能分析
-  - **收集数据**：每队列统计、关联指标
-- **vhost_buf_peek_stats.py**：vhost 缓冲区 peek 操作
+  - **使用场景**：深度分析 vhost 队列性能，追踪每个数据包在 vhost 队列中的处理过程，定位队列瓶颈
+  - **收集数据**：每队列详细统计、sock 指针关联、virtqueue 索引、完整事件元数据
+- **vhost_buf_peek_stats.py**：vhost 缓冲区 peek 操作统计
 
-  - **使用场景**：缓冲区管理效率
-  - **收集数据**：缓冲区 peek 次数、延迟
+  - **使用场景**：分析 vhost 缓冲区管理效率，检测缓冲区 peek 操作频率异常
+  - **收集数据**：缓冲区 peek 次数、延迟统计
+- **sort_vhost_queue_correlation_monitor_signals.py**：vhost 队列关联信号排序工具
+
+  - **使用场景**：对 vhost 队列监控输出进行排序和分析，辅助关联分析结果的后处理
+  - **收集数据**：排序后的队列关联信号、统计摘要
 
 #### 3.2.4 virtio-net 客户机驱动 (`virtio-net/`)
 
 - **virtnet_poll_monitor.py**：virtio-net NAPI 轮询监控
 
-  - **使用场景**：NAPI 轮询效率分析
-  - **收集数据**：轮询次数、数据包批量大小
+  - **使用场景**：分析 NAPI 轮询效率，检测轮询过于频繁或不足导致的性能问题
+  - **收集数据**：轮询次数、每次轮询处理的数据包数量、批量大小分布
 - **virtnet_irq_monitor.py**：virtio-net 中断监控
 
-  - **使用场景**：中断合并有效性
-  - **收集数据**：IRQ 速率、CPU 亲和性
-- **virtionet-rx-path-monitor.bt**：RX 路径详细监控
+  - **使用场景**：评估中断合并（interrupt coalescing）的有效性，分析中断与 CPU 的亲和性配置
+  - **收集数据**：IRQ 触发速率、CPU 亲和性分布、中断延迟
+- **virtionet-rx-path-monitor.bt**：RX 路径详细监控脚本
 
-  - **使用场景**：RX 处理瓶颈识别
-  - **收集数据**：函数延迟、数据包流
-- **virtionet-rx-path-summary.bt**：RX 路径汇总统计
+  - **使用场景**：识别 virtio-net 接收路径中的处理瓶颈，追踪关键函数的执行延迟
+  - **收集数据**：各阶段函数延迟、数据包流转详情、栈跟踪
+- **virtionet-rx-path-summary.bt**：RX 路径汇总统计脚本
 
-  - **使用场景**：整体 RX 性能评估
-  - **收集数据**：聚合 RX 指标
-- **trace_virtio_net_rcvbuf.bt**：接收缓冲区跟踪
+  - **使用场景**：整体评估 virtio-net 接收性能，获取聚合统计数据
+  - **收集数据**：聚合 RX 指标、延迟分布直方图
+- **trace_virtio_net_rcvbuf.bt**：接收缓冲区跟踪脚本
 
-  - **使用场景**：缓冲区分配问题
-  - **收集数据**：缓冲区大小、分配失败
-
-#### 3.2.5 跨层工具
-
-- **tun_to_vhost_queue_status_simple.py**：TUN 到 vhost 队列映射
-
-  - **使用场景**：理解层间数据流
-  - **收集数据**：队列映射、流统计
-- **tun_to_vhost_queue_stats_details.py**：详细队列统计
-
-  - **使用场景**：性能关联分析
-  - **收集数据**：详细每队列指标
-- **tun_tx_to_kvm_irq.py**：TX 到 IRQ 注入关联
-
-  - **使用场景**：端到端延迟分析
-  - **收集数据**：TX 到 IRQ 延迟、注入速率
+  - **使用场景**：诊断缓冲区分配相关问题，检测 OOM 或分配失败事件
+  - **收集数据**：缓冲区大小分布、分配成功/失败计数
 
 ### 3.3 Linux 网络栈模块 (`linux-network-stack/`)
 
+**模块概述**：该模块提供针对 Linux 内核网络栈的监控和诊断工具，包括连接跟踪（conntrack）、IP 分片重组、以及全面的丢包检测功能。用于诊断防火墙/NAT 问题、分片丢包、以及定位内核网络栈中的丢包位置和原因。
+
 #### 核心网络栈工具
 
-- **trace_conntrack.py**：连接跟踪监控
+- **trace_conntrack.py**：连接跟踪（conntrack）监控工具
 
-  - **使用场景**：NAT/防火墙连接问题
-  - **收集数据**：连接状态、超时
-- **trace_ip_defrag.py**：IP 分片/重组
+  - **使用场景**：诊断 NAT、防火墙相关的连接问题，追踪 conntrack 表项的状态变化，检测连接跟踪溢出
+  - **收集数据**：连接状态（NEW/ESTABLISHED/RELATED/INVALID）、nfct 指针值、超时信息、支持多规则过滤
+- **trace_ip_defrag.py**：IP 分片和重组跟踪工具
 
-  - **使用场景**：分片相关丢包
-  - **收集数据**：分片计数、重组失败
+  - **使用场景**：诊断因 IP 分片导致的丢包问题，分析 MTU 配置不当造成的网络故障
+  - **收集数据**：分片计数、重组成功/失败统计、分片超时
 
 #### 丢包子系统 (`packet-drop/`)
 
-- **drop_monitor_controller.py**：集中式丢包监控
+- **eth_drop.py**：全内核范围数据包丢包监控工具
 
-  - **使用场景**：系统范围丢包检测
-  - **收集数据**：丢包位置、原因、计数
-- **eth_drop.py**：以太网层丢包监控
+  - **使用场景**：监控全内核范围内的所有 kfree_skb 丢包事件，覆盖多种协议类型（ARP、RARP、IPv4、IPv6、LLDP、流控等），支持按协议类型、L4 协议、IP 地址、端口、VLAN ID、接口过滤，可选过滤正常的 kfree_skb 模式（如 tcp_recvmsg 正常释放）
+  - **收集数据**：丢包位置（kfree_skb 完整调用栈）、数据包二层/三层/四层信息、VLAN 标签、接口名称
+- **kernel_drop_stack_stats_summary_all.py**：内核丢包栈统计分析（histogram 版本）
 
-  - **使用场景**：网卡驱动丢包检测
-  - **收集数据**：驱动丢包统计
-- **kernel_drop_stack_stats_summary.py**：内核丢包栈分析
+  - **使用场景**：按调用栈聚合统计内核中所有丢包事件，识别丢包热点位置，支持长时间监控
+  - **收集数据**：丢包栈跟踪频率直方图、丢包计数按栈分组统计
+- **kernel_drop_stack_stats.bt**：实时内核丢包栈跟踪脚本
 
-  - **使用场景**：识别内核中的丢包位置
-  - **收集数据**：栈跟踪、丢包频率
-- **kernel_drop_stack_stats.bt**：实时丢包栈跟踪
+  - **使用场景**：实时调试丢包问题，获取每次丢包事件的详细栈跟踪
+  - **收集数据**：实时丢包事件、完整内核调用栈
+- **qdisc_drop_trace.py**：Qdisc 队列规则丢包监控
 
-  - **使用场景**：实时丢包调试
-  - **收集数据**：实时栈跟踪
-- **qdisc_drop_trace.py**：队列规则丢包监控
-
-  - **使用场景**：流量控制丢包分析
-  - **收集数据**：Qdisc 丢包原因、队列深度
+  - **使用场景**：分析流量控制（TC）层面的丢包，诊断队列满导致的丢包
+  - **收集数据**：Qdisc 丢包原因、队列深度、数据包信息
 
 ### 3.4 Open vSwitch 模块 (`ovs/`)
 
+**模块概述**：该模块提供针对 Open vSwitch 数据路径的监控工具，包括内核模块丢包检测、用户空间 upcall 延迟分析、以及 megaflow 缓存效率监控。用于诊断 OVS 相关的网络性能问题和丢包问题。
+
 - **ovs-kernel-module-drop-monitor.py**：OVS 数据路径丢包监控
 
-  - **使用场景**：OVS 内核模块丢包
-  - **收集数据**：丢包原因、流信息
-- **ovs_userspace_megaflow.py**：Megaflow 缓存监控
+  - **使用场景**：检测 OVS 内核模块中的丢包事件，定位 OVS 数据路径中的丢包位置
+  - **收集数据**：丢包原因、流信息、丢包位置栈跟踪
+- **ovs_upcall_latency_summary.py**：OVS upcall 延迟统计（histogram 版本）
 
-  - **使用场景**：流缓存效率分析
-  - **收集数据**：缓存命中/未命中率、流计数
+  - **使用场景**：监控 OVS upcall 到用户空间的延迟分布，识别 upcall 处理瓶颈，评估 flow cache miss 的性能影响
+  - **收集数据**：upcall 延迟直方图（ovs_dp_upcall 到 ovs_flow_key_extract_userspace）、完成率统计
+- **ovs_userspace_megaflow.py**：OVS Megaflow 生成跟踪工具
+
+  - **使用场景**：监控符合特定过滤条件的数据流触发的 upcall 事件以及 megaflow 的生成/添加过程，灵活统计特定流量的 megaflow 生成情况
+  - **收集数据**：upcall 事件详情（五元组、时间戳、进程）、flow_cmd_new 事件（megaflow 添加）、Netlink 消息解析
 
 ### 3.5 性能模块 (`performance/`)
+
+**模块概述**：该模块提供系统级和虚拟机级的网络性能监控工具，包括延迟测量（summary 和 details 版本）、RTT 测量、以及虚拟机间通信延迟分析。工具按照测量粒度分为 histogram 聚合（summary）和 per-packet 跟踪（details）两类，适用于不同的诊断阶段。
 
 #### 系统网络性能 (`system-network/`)
 
 - **system_network_latency_summary.py** [Summary 版本]
 
-  - **使用场景**：长时间系统网络延迟监控,建立性能基线
+  - **使用场景**：长时间监控系统网络栈各阶段的延迟分布，建立性能基线，识别异常延迟时段
   - **测量方式**：基于 BPF_HISTOGRAM 的相邻阶段延迟统计
-  - **收集数据**：延迟分布直方图(对数刻度 buckets),按时间间隔聚合
-  - **性能开销**：低(内核态聚合)
-  - **输出特点**：每个相邻阶段对的延迟直方图分布
+  - **收集数据**：延迟分布直方图（对数刻度 buckets）、端到端总延迟、各阶段对延迟
+  - **性能开销**：低（内核态聚合）
+  - **监控阶段**：netif_receive_skb → ovs_vport_receive → nf_conntrack → qdisc → dev_hard_start_xmit
 - **system_network_latency_details.py** [Details 版本]
 
-  - **使用场景**：精确问题定位,详细数据包路径分析
+  - **使用场景**：精确问题定位，详细数据包路径分析，追踪特定流量的每包延迟
   - **测量方式**：Per-packet 实时跟踪
-  - **收集数据**：每个数据包的完整元数据、时间戳、阶段延迟
-  - **性能开销**：较高(需使用过滤器控制)
-  - **输出特点**：每包详细信息,五元组、SKB 指针、设备信息
+  - **收集数据**：每个数据包的完整元数据、精确时间戳、各阶段延迟、五元组信息
+  - **性能开销**：较高（需使用过滤器控制监控范围）
 - **system_network_icmp_rtt.py** [Standalone 工具]
 
-  - **使用场景**：ICMP 网络延迟基准测试
-  - **收集数据**：ICMP 往返时间统计、丢包率
-  - **特殊参数**：支持 `--direction` (tx/rx) 指定跟踪方向
-- **system_network_performance_metrics.py** [Standalone 工具]
+  - **使用场景**：ICMP 网络延迟基准测试，测量端到端 RTT，验证网络连通性和延迟
+  - **收集数据**：ICMP echo request/reply 往返时间、丢包率统计
+- **system_network_perfomance_metrics.py** [Standalone 工具]
 
-  - **使用场景**：整体系统网络性能评估
-  - **收集数据**：完整数据流跟踪、吞吐量、延迟、CPU 使用率
-  - **特点**：支持连接跟踪 (`--enable-ct`)
+  - **使用场景**：整体系统网络性能评估，综合监控吞吐量和延迟
+  - **收集数据**：完整数据流跟踪、吞吐量、延迟统计
+  - **特点**：支持连接跟踪（`--enable-ct`）
 
 #### 虚拟机网络性能 (`vm-network/`)
 
 - **vm_network_latency_summary.py** [Summary 版本]
 
-  - **使用场景**：长时间 VM 网络延迟监控,性能基线建立
+  - **使用场景**：长时间监控虚拟机网络栈各阶段延迟，建立 VM 网络性能基线，识别瓶颈阶段
   - **测量方式**：基于 BPF_HISTOGRAM 的相邻阶段延迟统计
-  - **收集数据**：VM 网络栈各阶段延迟分布直方图
-  - **性能开销**：低(内核态聚合)
-  - **监控阶段**：VNET_RX → OVS_RX → FLOW_EXTRACT → QDISC_ENQ → TX_QUEUE → TX_XMIT
+  - **收集数据**：VM 网络栈各阶段延迟分布直方图、端到端总延迟
+  - **性能开销**：低（内核态聚合）
+  - **监控阶段**：VNET_RX → OVS_RX → FLOW_EXTRACT → CT → QDISC → TX_QUEUE → TX_XMIT（TX 方向）；PHY_RX → OVS_TX → VNET_TX（RX 方向）
 - **vm_network_latency_details.py** [Details 版本]
 
-  - **使用场景**：虚拟机网络精确延迟分析
+  - **使用场景**：虚拟机网络精确延迟分析，追踪特定 VM 流量的每包处理延迟
   - **测量方式**：Per-packet 级别跟踪
-  - **收集数据**：主机-虚拟机-主机完整路径的详细延迟组件
-  - **性能开销**：较高(建议使用过滤器)
+  - **收集数据**：主机-虚拟机-主机完整路径的详细延迟组件、五元组、SKB 指针
+  - **性能开销**：较高（建议使用五元组过滤器限制范围）
 - **vm_network_performance_metrics.py** [Standalone 工具]
 
-  - **使用场景**：虚拟机网络性能全面监控
+  - **使用场景**：虚拟机网络性能全面监控，综合评估 VM 网络吞吐和延迟
   - **收集数据**：虚拟机特定吞吐量、PPS、完整流跟踪
 
 ##### 虚拟机对延迟分析 (`vm_pair_latency/`)
 
 - **vm_pair_latency.py** [Standalone 工具]
 
-  - **使用场景**：同节点虚拟机间通信延迟测量
-  - **收集数据**：点对点延迟、基本统计
-  - **参数**：`--send-dev`, `--recv-dev`
-- **multi_vm_pair_latency.py** [Standalone 工具]
-
-  - **使用场景**：多虚拟机对延迟监控
-  - **收集数据**：多个 VM 对的延迟统计
-  - **参数**：`--send-dev`, `--recv-dev`, `--ports`
-- **multi_vm_pair_latency_pairid.py** [Standalone 工具]
-
-  - **使用场景**：带 Pair ID 标识的多 VM 对延迟监控
-  - **收集数据**：多个 VM 对的延迟,带 pair 标识符
-  - **特点**：支持从配置文件读取 VM 对配置
-
-##### 虚拟机对延迟间隙分析 (`vm_pair_latency/vm_pair_latency_gap/`)
-
-- **vm_pair_gap.py** [Standalone 工具]
-
-  - **使用场景**：检测超过阈值的延迟间隙
-  - **收集数据**：延迟异常事件、间隙统计
-  - **参数**：`--threshold` (延迟阈值,微秒), `--ports`
-- **multi_port_gap.py** [Standalone 工具]
-
-  - **使用场景**：多端口延迟间隙分析
-  - **收集数据**：多个端口的延迟异常统计
-  - **参数**：`--threshold`, `--ports` (多个端口列表)
-- **multi_vm_pair_multi_port_gap.py** [Standalone 工具]
-
-  - **使用场景**：多 VM 对、多端口延迟间隙综合分析
-  - **收集数据**：复杂场景下的延迟异常检测
-  - **特点**：支持复杂的 VM 对和端口组合
+  - **使用场景**：测量同节点两个虚拟机之间的通信延迟，评估 VM-to-VM 网络性能
+  - **收集数据**：点对点延迟、基本统计信息
+  - **配置**：支持从 vm_pairs.txt 配置文件读取 VM 对信息
 
 #### 通用性能工具
 
-- **qdisc_latency_details.py** [Details 版本]
+- **qdisc_lateny_details.py** [Details 版本]
 
-  - **使用场景**：Qdisc 数据包排序详细跟踪
-  - **收集数据**：队列规则处理时间、数据包排序信息
-  - **性能开销**：较高(per-packet 跟踪)
-- **iface_netstat.py** [Standalone 工具]
-
-  - **使用场景**：网络接口统计实时监控
-  - **收集数据**：RX/TX 计数器、错误、丢包统计
+  - **使用场景**：Qdisc 层数据包排序详细跟踪，分析队列调度延迟
+  - **收集数据**：队列规则处理时间、数据包入队出队延迟
+  - **性能开销**：较高（per-packet 跟踪）
 
 ### 3.6 其他工具模块 (`other/`)
 
+**模块概述**：该模块包含各类专用 bpftrace 脚本，用于特定场景的网络问题诊断，包括 ARP 异常检测、连接跟踪调试、卸载功能分析、以及流量控制监控。
+
 - **trace-abnormal-arp.bt**：异常 ARP 检测
 
-  - **使用场景**：ARP 欺骗/问题检测
-  - **收集数据**：可疑 ARP 数据包
-- **trace-ovs-ct-invalid.bt**：OVS 连接跟踪无效状态
+  - **使用场景**：检测 ARP 欺骗攻击、ARP 泛洪、或 ARP 配置问题
+  - **收集数据**：可疑 ARP 数据包、源/目标 MAC 和 IP 地址
+- **trace-ovs-ct-invalid.bt**：OVS 连接跟踪无效状态检测
 
-  - **使用场景**：连接跟踪问题
-  - **收集数据**：无效 CT 条目
+  - **使用场景**：诊断 OVS 环境下连接跟踪相关问题，检测无效 CT 状态导致的丢包
+  - **收集数据**：无效 CT 条目、关联流信息
 - **trace_offloading_segment.bt**：分段卸载跟踪
 
-  - **使用场景**：TSO/GSO 问题调试
-  - **收集数据**：卸载参数
+  - **使用场景**：调试 TSO/GSO/UFO 卸载相关问题，验证卸载配置正确性
+  - **收集数据**：卸载参数、段大小、SKB 信息
 - **trace_vlanvm_udp_workload.bt**：VLAN 虚拟机 UDP 跟踪
 
-  - **使用场景**：VLAN 特定 UDP 问题
-  - **收集数据**：VLAN 标签、UDP 流
+  - **使用场景**：诊断 VLAN 环境下 UDP 流量问题，分析 VLAN 标签处理
+  - **收集数据**：VLAN 标签、UDP 流信息、数据包路径
 - **vpc-vm-udp-datapath.bt**：VPC 虚拟机 UDP 数据路径
 
-  - **使用场景**：云网络 UDP 分析
-  - **收集数据**：VPC 流路径
-- **trace-qdisc-dequeue.bt**：Qdisc 出队操作
+  - **使用场景**：云环境下 UDP 数据路径分析，追踪 VPC 网络中的 UDP 流转
+  - **收集数据**：VPC 流路径、延迟点
+- **trace-qdisc-dequeue.bt**：Qdisc 出队操作跟踪
 
-  - **使用场景**：队列调度分析
-  - **收集数据**：出队模式
-- **trace_dev_queue_xmit.bt**：设备队列传输
+  - **使用场景**：分析队列调度器的出队行为，诊断调度延迟
+  - **收集数据**：出队时间、队列深度、调度模式
+- **trace_dev_queue_xmit.bt**：设备队列传输跟踪
 
-  - **使用场景**：TX 队列行为
-  - **收集数据**：队列深度、丢包
+  - **使用场景**：监控 TX 队列行为，检测队列满导致的丢包
+  - **收集数据**：队列深度、传输延迟、丢包事件
 - **trace_tc_qdisc.bt**：流量控制 qdisc 跟踪
 
-  - **使用场景**：TC 配置调试
-  - **收集数据**：TC 动作、分类
+  - **使用场景**：调试 TC（流量控制）配置，分析流量分类和整形行为
+  - **收集数据**：TC 动作、分类结果、队列统计
 
 ## 4. 工具使用指南
 
@@ -587,17 +560,17 @@ sudo python3 measurement-tools/performance/system-network/system_network_latency
   --direction both --protocol udp
 ```
 
-**system_network_performance_metrics.py** - 系统网络性能指标
+**system_network_perfomance_metrics.py** - 系统网络性能指标
 
 ```bash
 # 监控系统网络性能指标
-sudo python3 measurement-tools/performance/system-network/system_network_performance_metrics.py \
+sudo python3 measurement-tools/performance/system-network/system_network_perfomance_metrics.py \
   --internal-interface port-storage --phy-interface ens11 \
   --src-ip 10.132.114.11 --dst-ip 10.132.114.12 \
   --direction rx --protocol tcp
 
 # 启用连接跟踪的性能监控
-sudo python3 measurement-tools/performance/system-network/system_network_performance_metrics.py \
+sudo python3 measurement-tools/performance/system-network/system_network_perfomance_metrics.py \
   --internal-interface br0 --phy-interface eth0 \
   --enable-ct --verbose
 ```
@@ -650,52 +623,18 @@ sudo python3 measurement-tools/performance/vm-network/vm_network_performance_met
 
 #### 4.2.4 虚拟机对延迟分析工具
 
-**vm_pair_latency.py** - 基本虚拟机间延迟分析
+**vm_pair_latency.py** - 虚拟机间延迟分析
 
 ```bash
-# 基本虚拟机对延迟监控
-sudo python3 measurement-tools/performance/vm-network/vm_pair_latency/vm_pair_latency.py \
-  --send-dev tap0 --recv-dev tap1
+# 虚拟机对延迟监控（需配合 vm_pairs.txt 配置文件）
+sudo python3 measurement-tools/performance/vm-network/vm_pair_latency/vm_pair_latency.py
 ```
 
-**multi_vm_pair_latency.py** - 多虚拟机对延迟监控
-
-```bash
-# 多虚拟机对、多端口延迟监控
-sudo python3 measurement-tools/performance/vm-network/vm_pair_latency/multi_vm_pair_latency.py \
-  --send-dev tap0 --recv-dev tap1 --ports 22 80 443
+配置文件 `vm_pairs.txt` 示例格式：
 ```
-
-**multi_vm_pair_latency_pairid.py** - 带 Pair ID 的多 VM 对延迟
-
-```bash
-# 使用 Pair ID 标识的多 VM 对延迟监控
-sudo python3 measurement-tools/performance/vm-network/vm_pair_latency/multi_vm_pair_latency_pairid.py \
-  --config vm_pairs.txt
-```
-
-**vm_pair_gap.py** - 延迟间隙分析
-
-```bash
-# 延迟间隙分析（设定阈值,微秒）
-sudo python3 measurement-tools/performance/vm-network/vm_pair_latency/vm_pair_latency_gap/vm_pair_gap.py \
-  --threshold 100 --ports 22 80
-```
-
-**multi_port_gap.py** - 多端口延迟间隙分析
-
-```bash
-# 多端口延迟间隙分析
-sudo python3 measurement-tools/performance/vm-network/vm_pair_latency/vm_pair_latency_gap/multi_port_gap.py \
-  --threshold 50 --ports 22 80 443 8080
-```
-
-**multi_vm_pair_multi_port_gap.py** - 多 VM 对多端口延迟间隙
-
-```bash
-# 复杂场景：多 VM 对、多端口延迟间隙综合分析
-sudo python3 measurement-tools/performance/vm-network/vm_pair_latency/vm_pair_latency_gap/multi_vm_pair_multi_port_gap.py \
-  --config vm_pairs.txt --threshold 100 --ports 22 80 443
+# 格式: send_dev recv_dev [描述]
+vnet0 vnet1 VM1-to-VM2
+tap0 tap1 Pair-A
 ```
 
 ### 4.3 Linux 网络栈模块 (Linux Network Stack)
@@ -915,12 +854,20 @@ sudo python3 measurement-tools/kvm-virt-network/tun/tun_ring_monitor.py \
   --device tun0 --interval 1
 ```
 
-**tun_to_vhost_queue_stats_details.py** - TUN 到 vhost 队列统计
+**tun_to_vhost_queue_stats_full_summary.py** - TUN 到 vhost 队列完整统计 [Summary 版本]
 
 ```bash
-# TUN 到 vhost 队列详细统计
-sudo python3 measurement-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_details.py \
-  --tun-device tap0 --interval 3
+# TUN 到 vhost 队列完整统计（基于 histogram 聚合）
+sudo python3 measurement-tools/kvm-virt-network/tun/tun_to_vhost_queue_stats_full_summary.py \
+  --device tap0 --interval 3
+```
+
+**tun_to_vhost_queue_status_simple_summary.py** - TUN 到 vhost 队列简化统计 [Summary 版本]
+
+```bash
+# TUN 到 vhost 队列简化统计
+sudo python3 measurement-tools/kvm-virt-network/tun/tun_to_vhost_queue_status_simple_summary.py \
+  --device tap0 --interval 5
 ```
 
 #### 4.5.4 virtio-net 工具
@@ -946,20 +893,30 @@ sudo python3 measurement-tools/kvm-virt-network/virtio-net/virtnet_irq_monitor.p
 **kvm_irqfd_stats_summary.py** - KVM 中断注入统计 [Summary 版本]
 
 ```bash
-# KVM 中断注入性能监控 (必需参数: --qemu-pid)
+# KVM 中断注入性能监控 (qemu_pid 是位置参数，必须提供)
 sudo python3 measurement-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py \
-  --qemu-pid 12345 --interval 5
+  12345 --interval 5
 
 # 监控特定 QEMU 进程的中断统计
 sudo python3 measurement-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py \
-  --qemu-pid $(pgrep -f "qemu.*vm-name")
+  $(pgrep -f "qemu.*vm-name") --interval 5
+
+# 仅监控数据平面中断 (vhost 线程)
+sudo python3 measurement-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py \
+  12345 --category data --interval 3
+
+# 监控特定 vhost 线程的中断
+sudo python3 measurement-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py \
+  12345 --category data --vhost-pid 12400 --interval 5
 ```
 
-**重要参数说明:**
+**参数说明:**
 
-- `--qemu-pid PID`: QEMU 进程 PID (必需参数!)
-- `--interval SECONDS`: 报告间隔 (默认 1)
-- 支持分类过滤和线程过滤等高级参数
+- `qemu_pid`: QEMU 进程 PID（位置参数，必需）
+- `--interval SECONDS`: 统计输出间隔（默认 5 秒）
+- `--vhost-pid PID`: 过滤特定 vhost 线程（仅当 --category=data 时有效）
+- `--category {data,control}`: 中断类别过滤（data=vhost 线程，control=QEMU 进程）
+- `--subcategory {rx,tx}`: 子类别过滤（仅当 --category=data 时有效）
 
 ### 4.6 Bpftrace 脚本工具
 
@@ -1047,7 +1004,7 @@ sudo python3 measurement-tools/cpu/offcputime-ts.py
 | **Performance** | `--vm-interface`, `--phy-interface`, `--internal-interface`, `--direction`, `--enable-ct`, `--vm-ip`, `--threshold`, `--interval` |
 | **Linux Stack** | `--type`, `--l4-protocol`, `--vlan-id`, `--rel-time`, `--filters-file`, `--stack`, `--log-file`, `--device`, `--top`            |
 | **OVS**         | `--eth-src`, `--eth-dst`, `--eth-type`, `--ip-proto`, `--proto` (注意不是 --protocol), `--interval`                                   |
-| **KVM Virt**    | `--device`, `--queue-id`, `--clear`, `--tun-device`, `--ring-size`, `--qemu-pid` (KVM IRQ 必需)                                       |
+| **KVM Virt**    | `--device`, `--queue-id`, `--clear`, `--tun-device`, `--ring-size`, `qemu_pid` (KVM IRQ 位置参数,必需), `--category`, `--vhost-pid`  |
 
 #### 4.8.3 输出控制参数
 

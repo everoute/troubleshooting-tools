@@ -7,6 +7,8 @@ import socket
 import struct
 import sys
 import datetime
+import re
+import platform
 # BCC module import with fallback
 try:
     from bcc import BPF
@@ -26,6 +28,117 @@ from time import sleep, strftime
 # Devname structure for device filtering
 class Devname(ct.Structure):
     _fields_=[("name", ct.c_char*16)]
+
+def find_kernel_function(base_name, verbose=False):
+    """
+    Find actual kernel function name, handling GCC clone suffixes.
+    GCC may generate optimized clones with suffixes like:
+      .isra.N     - Inter-procedural Scalar Replacement of Aggregates
+      .constprop.N - Constant Propagation
+      .part.N     - Partial inlining
+      .cold/.hot  - Code path optimization
+    Returns the actual symbol name or None if not found.
+    """
+    # Pattern handles both vmlinux and module symbols:
+    #   vmlinux: "ffffffff81234567 t func_name"
+    #   module:  "ffffffffc1234567 t func_name\t[module_name]"
+    pattern = re.compile(
+        r'^[0-9a-f]+\s+[tT]\s+(' + re.escape(base_name) +
+        r'(?:\.(?:isra|constprop|part|cold|hot)\.\d+)*)(?:\s+\[\w+\])?$'
+    )
+
+    candidates = []
+    try:
+        with open('/proc/kallsyms', 'r') as f:
+            for line in f:
+                match = pattern.match(line.strip())
+                if match:
+                    candidates.append(match.group(1))
+    except Exception as e:
+        if verbose:
+            print("Warning: Failed to read /proc/kallsyms: {}".format(e))
+        return None
+
+    if not candidates:
+        if verbose:
+            print("Warning: Function {} not found in /proc/kallsyms".format(base_name))
+        return None
+
+    # Prefer exact match, then shortest name (fewer suffixes)
+    if base_name in candidates:
+        return base_name
+    return min(candidates, key=len)
+
+def get_kernel_version():
+    """
+    Get kernel major.minor version tuple.
+    Returns (major, minor) or (0, 0) on error.
+    """
+    try:
+        version_str = platform.release()
+        # Extract version numbers (e.g., "5.10.0-247.0.0.el7.v72.x86_64" -> (5, 10))
+        parts = version_str.split('-')[0].split('.')
+        return (int(parts[0]), int(parts[1]))
+    except Exception:
+        return (0, 0)
+
+def get_distro_id():
+    """
+    Get distribution ID from /etc/os-release.
+    Returns lowercase distro ID (e.g., 'openeuler', 'centos', 'anolis') or 'unknown'.
+    """
+    try:
+        with open('/etc/os-release', 'r') as f:
+            for line in f:
+                if line.startswith('ID='):
+                    # Remove quotes and newline, convert to lowercase
+                    distro_id = line.split('=')[1].strip().strip('"').lower()
+                    return distro_id
+    except Exception:
+        pass
+    return 'unknown'
+
+def has_irqbypass_module():
+    """
+    Check if irqbypass kernel module is loaded/available.
+    This indicates the kernel has IRQ bypass support for vhost.
+    """
+    import os
+    return os.path.exists('/sys/module/irqbypass')
+
+def needs_5x_vhost_layout():
+    """
+    Check if kernel needs 5.x vhost structure layout.
+
+    The vhost_virtqueue structure changed in kernels with IRQ bypass support:
+    - Old (4.x): call_ctx is struct eventfd_ctx* (8 bytes pointer)
+    - New (5.x with irqbypass): call_ctx is struct vhost_vring_call (72 bytes)
+      containing eventfd_ctx* + irq_bypass_producer (64 bytes)
+
+    This 64-byte difference affects private_data offset calculation.
+
+    Detection method: Check if irqbypass module exists in /sys/module/
+    This is more reliable than distro detection as it directly reflects
+    the actual kernel configuration.
+
+    Returns True if 5.x layout (with vhost_vring_call) is needed.
+    """
+    major, minor = get_kernel_version()
+    if major < 5:
+        return False
+
+    # Primary detection: check if irqbypass module is loaded
+    # This directly indicates whether kernel has IRQ bypass support
+    if has_irqbypass_module():
+        return True
+
+    # Fallback: openEuler 5.x without irqbypass uses 4.x layout
+    distro = get_distro_id()
+    if distro == 'openeuler':
+        return False
+
+    # Other 5.x kernels typically use 5.x layout
+    return True
 
 # Simple BPF program for queue statistics - only tun_net_xmit and vhost_signal
 bpf_text = """
@@ -153,6 +266,12 @@ struct vhost_poll {
     struct vhost_dev *dev;
 };
 
+// KERNEL_VERSION_5X controls which structure layout to use
+// Set via Python based on kernel version detection
+#ifndef KERNEL_VERSION_5X
+#define KERNEL_VERSION_5X 0
+#endif
+
 struct vhost_dev {
     struct mm_struct *mm;
     struct mutex mutex;
@@ -170,23 +289,45 @@ struct vhost_dev {
     int iov_limit;
     int weight;
     int byte_weight;
+#if KERNEL_VERSION_5X
+    // Kernel 5.x added fields - padding to match actual structure size
+    // Required for correct vqs[0].vq offset: 0xc8 (200 bytes) vs 4.x: 0xb0 (176 bytes)
+    bool use_worker;                        // 1 byte + 7 padding = 8 bytes
+    void *msg_handler;                      // 8 bytes (function pointer)
+    char __padding_dev[16];                 // Additional padding: 16 bytes
+#endif
 };
+
+// Kernel 5.x introduced vhost_vring_call structure for IRQ bypass
+// Total size: 72 bytes on x86_64
+struct vhost_vring_call {
+    struct eventfd_ctx *ctx;                // 8 bytes (0x00-0x07)
+    char irq_bypass_producer[64];           // 64 bytes (0x08-0x47) - struct irq_bypass_producer
+};  // Total: 72 bytes
 
 struct vhost_virtqueue {
     struct vhost_dev *dev;
-    
+
     // The actual ring of buffers
     struct mutex mutex;
     unsigned int num;
     struct vring_desc *desc;       // __user pointer
-    struct vring_avail *avail;     // __user pointer 
+    struct vring_avail *avail;     // __user pointer
     struct vring_used *used;       // __user pointer
     void *meta_iotlb[3];           // VHOST_NUM_ADDRS = 3
     struct file *kick;
+
+#if KERNEL_VERSION_5X
+    // Kernel 5.x+: call_ctx is a struct containing irq_bypass_producer
+    struct vhost_vring_call call_ctx;
+#else
+    // Kernel 4.x: call_ctx is just a pointer
     struct eventfd_ctx *call_ctx;
+#endif
+
     struct eventfd_ctx *error_ctx;
     struct eventfd_ctx *log_ctx;
-    
+
     struct vhost_poll poll;
     
     // The routine to call when the Guest pings us, or timeout
@@ -600,15 +741,48 @@ Examples:
     
     args = parser.parse_args()
     countdown = args.outputs
-    
-    # Load BPF program
+
+    # Detect kernel version, distro and find functions dynamically
+    kernel_5x = needs_5x_vhost_layout()
+    major, minor = get_kernel_version()
+    distro = get_distro_id()
+    print("Kernel version: {}.{}, Distro: {} (5.x vhost layout: {})".format(major, minor, distro, kernel_5x))
+
+    # Find vhost_add_used_and_signal_n function (handles module symbols and GCC suffixes)
+    vhost_signal_func = find_kernel_function("vhost_add_used_and_signal_n", verbose=True)
+    if vhost_signal_func:
+        print("Found vhost signal function: {}".format(vhost_signal_func))
+    else:
+        print("Warning: vhost_add_used_and_signal_n not found, signal stats will be unavailable")
+
+    # Load BPF program with kernel version defines
     try:
-        b = BPF(text=bpf_text)
-        
+        bpf_program = bpf_text
+        defines = []
+        if kernel_5x:
+            defines.append("#define KERNEL_VERSION_5X 1")
+
+        if defines:
+            bpf_program = "\n".join(defines) + "\n" + bpf_program
+
+        b = BPF(text=bpf_program)
+
         # Attach kprobes - only tun_net_xmit and vhost_signal
         b.attach_kprobe(event="tun_net_xmit", fn_name="trace_tun_net_xmit")
-        b.attach_kprobe(event="vhost_add_used_and_signal_n", fn_name="trace_vhost_signal")
-        
+
+        # Attach vhost_add_used_and_signal_n with dynamic function name
+        vhost_signal_attached = False
+        if vhost_signal_func:
+            try:
+                b.attach_kprobe(event=vhost_signal_func, fn_name="trace_vhost_signal")
+                vhost_signal_attached = True
+                print("Attached to {}".format(vhost_signal_func))
+            except Exception as e:
+                print("Warning: Failed to attach to {}: {}".format(vhost_signal_func, e))
+
+        if not vhost_signal_attached:
+            print("Warning: vhost_signal probe not attached, signal stats will be unavailable")
+
     except Exception as e:
         print("Failed to load BPF program: {}".format(e))
         return

@@ -110,8 +110,7 @@ if [ "$USE_DOCKER" = true ]; then
             DOCKER_IMAGE="openeuler/openeuler:20.03"
             ;;
         tl3)
-            # TencentOS 3 is based on CentOS 8, use rockylinux as compatible base
-            DOCKER_IMAGE="rockylinux:8"
+            DOCKER_IMAGE="registry.smtx.io/kernel/smtxos:tencentos_server31-x86_64"
             ;;
     esac
 
@@ -121,12 +120,23 @@ if [ "$USE_DOCKER" = true ]; then
     log "Docker image: ${DOCKER_IMAGE}"
     log "Output directory: ${OUTPUT_DIR_ABS}"
 
-    docker run --rm \
+    # Use named container and docker cp to avoid bind mount permission issues on macOS
+    CONTAINER_NAME="rpm-build-$$"
+
+    docker run --name "${CONTAINER_NAME}" \
         -v "${REPO_ROOT}:/src:ro" \
         -v "${SCRIPT_DIR}:/build:ro" \
-        -v "${OUTPUT_DIR_ABS}:/output" \
         "${DOCKER_IMAGE}" \
         /bin/bash /build/build-docker.sh "${VERSION}" "${DIST}" "${RELEASE}"
+
+    # Copy RPMs from container
+    log "Copying RPMs from container..."
+    log "Container: ${CONTAINER_NAME}"
+    docker cp "${CONTAINER_NAME}:/root/rpmbuild/RPMS/noarch/." "${OUTPUT_DIR_ABS}/" || log "Copy RPMS failed"
+    docker cp "${CONTAINER_NAME}:/root/rpmbuild/SRPMS/." "${OUTPUT_DIR_ABS}/" || log "Copy SRPMS failed"
+
+    # Cleanup container
+    docker rm "${CONTAINER_NAME}" >/dev/null 2>&1 || true
 
     log "Build complete. Output files:"
     ls -la "${OUTPUT_DIR_ABS}"/*.rpm 2>/dev/null || true

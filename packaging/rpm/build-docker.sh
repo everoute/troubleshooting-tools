@@ -55,10 +55,7 @@ rpmbuild \
     --define "release_ver ${RELEASE}" \
     -ba ~/rpmbuild/SPECS/measurement-tools.spec
 
-# Copy output to /output
-echo "Copying RPMs to /output..."
-cp ~/rpmbuild/RPMS/noarch/*.rpm /output/ 2>/dev/null || true
-cp ~/rpmbuild/SRPMS/*.rpm /output/ 2>/dev/null || true
-
-echo "Build complete!"
-ls -la /output/*.rpm 2>/dev/null || echo "No RPMs found"
+# Show built RPMs (will be copied via docker cp from host)
+echo "Build complete! RPMs created:"
+ls -la ~/rpmbuild/RPMS/noarch/*.rpm 2>/dev/null || echo "No RPM files"
+ls -la ~/rpmbuild/SRPMS/*.rpm 2>/dev/null || echo "No SRPM files"

@@ -9,5 +9,6 @@ __pycache__/
 .tmp/
 bcc-program/*
 test/workflow/result/*
+*.DS_Store
 *output
 *.DS_Store

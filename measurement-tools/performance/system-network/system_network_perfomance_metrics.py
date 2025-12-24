@@ -74,8 +74,10 @@ bpf_text = """
 #define DST_PORT_FILTER %d
 #define PROTOCOL_FILTER %d  // 0=all, 6=TCP, 17=UDP, 1=ICMP
 #define INTERNAL_IFINDEX %d
-#define PHY_IFINDEX %d
+#define PHY_IFINDEX1 %d
+#define PHY_IFINDEX2 %d
 #define DIRECTION_FILTER %d  // 0=both, 1=system_tx, 2=system_rx
+#define LATENCY_THRESHOLD_NS %d  // Minimum total latency threshold in nanoseconds
 
 // Stage definitions - internal port perspective
 // TX direction probes (EXTENDED: socket -> network)
@@ -237,19 +239,19 @@ static __always_inline bool is_target_internal_interface(const struct sk_buff *s
 }
 
 static __always_inline bool is_target_phy_interface(const struct sk_buff *skb) {
-    if (PHY_IFINDEX == 0) return false;
-    
+    if (PHY_IFINDEX1 == 0) return false;
+
     struct net_device *dev = NULL;
     int ifindex = 0;
-    
+
     if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) < 0 || dev == NULL) {
         return false;
     }
-    
+
     if (bpf_probe_read_kernel(&ifindex, sizeof(ifindex), &dev->ifindex) < 0) {
         return false;
     }
-    return (ifindex == PHY_IFINDEX);
+    return (ifindex == PHY_IFINDEX1 || ifindex == PHY_IFINDEX2);
 }
 
 // Packet parsing functions - reusing vm_network_latency.py logic
@@ -602,31 +604,50 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
     
     // Only submit event at the last stage
     if (is_last_stage) {
+        // Check latency threshold before submitting
+        if (LATENCY_THRESHOLD_NS > 0) {
+            // Find first stage timestamp
+            u64 first_ts = 0;
+            #pragma unroll
+            for (int i = 0; i < MAX_STAGES; i++) {
+                if (flow_ptr->stages[i].valid && flow_ptr->stages[i].timestamp > 0) {
+                    first_ts = flow_ptr->stages[i].timestamp;
+                    break;
+                }
+            }
+
+            // Check if total latency exceeds threshold
+            if (first_ts == 0 || current_ts == 0 || (current_ts - first_ts) < LATENCY_THRESHOLD_NS) {
+                flow_sessions.delete(&key);
+                return;
+            }
+        }
+
         u32 map_key_zero = 0;
         struct pkt_event *event_ptr = event_scratch_map.lookup(&map_key_zero);
         if (!event_ptr) {
             return;
         }
-        
+
         event_ptr->pkt_id = (u64)skb;
         event_ptr->key = key;
         event_ptr->timestamp = current_ts;
         event_ptr->cpu = bpf_get_smp_processor_id();
         event_ptr->stage = stage_id;
         event_ptr->event_type = 1;  // complete flow event
-        
+
         // Get current device info
         struct net_device *dev = NULL;
         if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) == 0 && dev != NULL) {
             bpf_probe_read_kernel(&event_ptr->ifindex, sizeof(event_ptr->ifindex), &dev->ifindex);
             bpf_probe_read_kernel_str(event_ptr->devname, IFNAMSIZ, dev->name);
         }
-        
+
         // Copy flow data and submit complete flow event
         if (bpf_probe_read_kernel(&event_ptr->flow, sizeof(event_ptr->flow), flow_ptr) == 0) {
             events.perf_submit(ctx, event_ptr, sizeof(*event_ptr));
         }
-        
+
         // Clean up flow tracking
         flow_sessions.delete(&key);
     }
@@ -939,15 +960,15 @@ RAW_TRACEPOINT_PROBE(netif_receive_skb) {
     }
     
     // Route to appropriate stage based on interface type and direction
-    if (ifindex == PHY_IFINDEX) {
+    if (ifindex == PHY_IFINDEX1 || ifindex == PHY_IFINDEX2) {
         // Physical interface
-        
+
         if (DIRECTION_FILTER == 1) {
             return 0;  // Skip if system_tx only
         }
-        
+
         handle_stage_event(ctx, skb, STG_PHY_RX, 2);  // Physical RX stage for system_rx
-        
+
     } else if (ifindex == INTERNAL_IFINDEX) {
         // Internal port - this is the softirq processing stage (after internal_dev_recv)
         
@@ -1204,7 +1225,11 @@ def get_protocol_identifier(key, protocol):
         # ICMP: id(2) + seq(2) + type(1) + code(1)
         icmp_id = struct.unpack("!H", data[0:2])[0]
         seq = struct.unpack("!H", data[2:4])[0]
-        icmp_type = ord(data[4]) if len(data) > 4 else 0
+        # Python 2/3 compatibility: data[4] returns int in Py3, str in Py2
+        if len(data) > 4:
+            icmp_type = data[4] if isinstance(data[4], int) else ord(data[4])
+        else:
+            icmp_type = 0
         return "ICMP id=%u seq=%u type=%u" % (icmp_id, seq, icmp_type)
     else:
         return "Proto%d" % protocol
@@ -1248,7 +1273,11 @@ def print_event(cpu, data, size):
         icmp_data = ctypes.string_at(ctypes.addressof(event.key.data), 8)
         icmp_id = struct.unpack("!H", icmp_data[0:2])[0]
         seq = struct.unpack("!H", icmp_data[2:4])[0]
-        icmp_type = ord(icmp_data[4]) if len(icmp_data) > 4 else 0
+        # Python 2/3 compatibility: icmp_data[4] returns int in Py3, str in Py2
+        if len(icmp_data) > 4:
+            icmp_type = icmp_data[4] if isinstance(icmp_data[4], int) else ord(icmp_data[4])
+        else:
+            icmp_type = 0
         print("5-TUPLE: %s -> %s ICMP (id=%u seq=%u type=%u) DIR=%s" % (src_ip, dst_ip, icmp_id, seq, icmp_type, direction_str))
     else:
         print("5-TUPLE: %s -> %s Proto%d DIR=%s" % (src_ip, dst_ip, event.key.proto, direction_str))
@@ -1342,16 +1371,19 @@ Examples:
 
   Monitor only system TX traffic (Local→Uplink):
     sudo %(prog)s --internal-interface port-mgt --phy-interface enp94s0f0np0 --direction tx --src-ip 192.168.70.33
-    
+
   Monitor TCP SSH traffic:
     sudo %(prog)s --internal-interface port-mgt --phy-interface enp94s0f0np0 --protocol tcp --dst-port 22
+
+  Monitor flows with latency > 100us:
+    sudo %(prog)s --internal-interface port-mgt --phy-interface enp94s0f0np0 --src-ip 192.168.70.33 --latency-us 100
 """
     )
     
     parser.add_argument('--internal-interface', type=str, required=True,
                         help='Internal port interface to monitor (e.g., port-mgt)')
     parser.add_argument('--phy-interface', type=str, required=True,
-                        help='Physical interface to monitor (e.g., enp94s0f0np0)')
+                        help='Physical interface(s) to monitor. Supports comma-separated list for bond members (e.g., enp94s0f0np0 or eth0,eth1)')
     parser.add_argument('--src-ip', type=str, required=False,
                         help='Source IP address filter')
     parser.add_argument('--dst-ip', type=str, required=False,
@@ -1362,8 +1394,10 @@ Examples:
                         help='Destination port filter (TCP/UDP)')
     parser.add_argument('--protocol', type=str, choices=['tcp', 'udp', 'icmp', 'all'], 
                         default='all', help='Protocol filter (default: all)')
-    parser.add_argument('--direction', type=str, choices=['tx', 'rx', 'both'], 
+    parser.add_argument('--direction', type=str, choices=['tx', 'rx', 'both'],
                         default='both', help='Direction filter: tx=SYSTEM_TX(Local→Uplink), rx=SYSTEM_RX(Uplink→Local) (default: both)')
+    parser.add_argument('--latency-us', type=float, default=0,
+                        help='Minimum total latency threshold in microseconds to report (default: 0, report all)')
     parser.add_argument('--enable-ct', action='store_true',
                         help='Enable conntrack measurement')
     parser.add_argument('--verbose', action='store_true',
@@ -1374,23 +1408,29 @@ Examples:
     # Convert parameters
     src_ip_hex = ip_to_hex(args.src_ip) if args.src_ip else 0
     dst_ip_hex = ip_to_hex(args.dst_ip) if args.dst_ip else 0
-    
+
     src_port = args.src_port if args.src_port else 0
     dst_port = args.dst_port if args.dst_port else 0
-    
+
     protocol_map = {'tcp': 6, 'udp': 17, 'icmp': 1, 'all': 0}
     protocol_filter = protocol_map[args.protocol]
-    
+
     direction_map = {'tx': 1, 'rx': 2, 'both': 0}
     direction_filter = direction_map[args.direction]
+
+    # Convert latency threshold from microseconds to nanoseconds
+    latency_threshold_ns = int(args.latency_us * 1000)
     
+    # Support multiple interfaces (split by comma)
+    phy_interfaces = args.phy_interface.split(',')
     try:
         internal_ifindex = get_if_index(args.internal_interface)
-        phy_ifindex = get_if_index(args.phy_interface)
+        phy_ifindex1 = get_if_index(phy_interfaces[0].strip())
+        phy_ifindex2 = get_if_index(phy_interfaces[1].strip()) if len(phy_interfaces) > 1 else phy_ifindex1
     except OSError as e:
         print("Error getting interface index: %s" % e)
         sys.exit(1)
-    
+
     print("=== System Network Performance Tracer ===")
     print("Protocol filter: %s" % args.protocol.upper())
     print("Direction filter: %s (1=SYSTEM_TX/Local→Uplink, 2=SYSTEM_RX/Uplink→Local)" % args.direction.upper())
@@ -1404,20 +1444,23 @@ Examples:
     if dst_port:
         print("Destination port filter: %d" % dst_port)
     print("Internal interface: %s (ifindex %d)" % (args.internal_interface, internal_ifindex))
-    print("Physical interface: %s (ifindex %d)" % (args.phy_interface, phy_ifindex))
+    print("Physical interfaces: %s (ifindex %d, %d)" % (args.phy_interface, phy_ifindex1, phy_ifindex2))
     print("Conntrack measurement: %s" % ("ENABLED" if args.enable_ct else "DISABLED"))
+    if latency_threshold_ns > 0:
+        print("Latency threshold: >= %.3f us (only reporting flows exceeding this latency)" % args.latency_us)
     
     
     try:
         b = BPF(text=bpf_text % (
             src_ip_hex, dst_ip_hex, src_port, dst_port,
-            protocol_filter, internal_ifindex, phy_ifindex, direction_filter
+            protocol_filter, internal_ifindex, phy_ifindex1, phy_ifindex2, direction_filter,
+            latency_threshold_ns
         ))
         print("BPF program loaded successfully")
     except Exception as e:
         print("Error loading BPF program: %s" % e)
         print("\nActual format string substitution:")
-        print("Parameters passed: %d arguments" % len([src_ip_hex, dst_ip_hex, src_port, dst_port, protocol_filter, internal_ifindex, phy_ifindex, direction_filter]))
+        print("Parameters passed: %d arguments" % len([src_ip_hex, dst_ip_hex, src_port, dst_port, protocol_filter, internal_ifindex, phy_ifindex1, phy_ifindex2, direction_filter, latency_threshold_ns]))
         sys.exit(1)
     
     b["events"].open_perf_buffer(print_event)

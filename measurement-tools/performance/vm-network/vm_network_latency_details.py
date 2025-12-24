@@ -75,8 +75,10 @@ bpf_text = """
 #define DST_PORT_FILTER %d
 #define PROTOCOL_FILTER %d  // 0=all, 6=TCP, 17=UDP, 1=ICMP
 #define VM_IFINDEX %d
-#define PHY_IFINDEX %d
+#define PHY_IFINDEX1 %d
+#define PHY_IFINDEX2 %d
 #define DIRECTION_FILTER %d  // 0=both, 1=tx, 2=rx
+#define LATENCY_THRESHOLD_NS %d  // Minimum latency threshold in nanoseconds
 
 // RX direction stages (VM -> Physical)
 #define RX_STAGE_0    0  // netif_receive_skb (vnet)
@@ -163,57 +165,39 @@ BPF_STACK_TRACE(stack_traces, 10240);
 BPF_PERF_OUTPUT(events);
 BPF_PERCPU_ARRAY(event_scratch_map, struct event_data_t, 1);
 
-// Debug statistics - use histogram with stage_id and code_point as key
-BPF_HISTOGRAM(ifindex_seen, u32);       // Track which ifindex values we see
-
-// Code point definitions for debugging
-
-// Special counters for interface debugging
-BPF_ARRAY(interface_debug, u64, 4);
-#define IF_DBG_NULL_DEV             0   // dev is NULL
-#define IF_DBG_READ_FAIL            1   // ifindex read failed
-
-// Helper function to record debug statistics
-
-// Helper function for interface debugging
-
 // Helper function to check if an interface index matches our targets
 static __always_inline bool is_target_vm_interface(const struct sk_buff *skb) {
     if (VM_IFINDEX == 0) return false;
-    
+
     struct net_device *dev = NULL;
     int ifindex = 0;
-    
+
     if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) < 0 || dev == NULL) {
         return false;
     }
-    
+
     if (bpf_probe_read_kernel(&ifindex, sizeof(ifindex), &dev->ifindex) < 0) {
         return false;
     }
-    
-    // Track all interface indices we see
-    u32 idx = (u32)ifindex;
-    ifindex_seen.increment(idx);
-    
+
     return (ifindex == VM_IFINDEX);
 }
 
 static __always_inline bool is_target_phy_interface(const struct sk_buff *skb) {
-    if (PHY_IFINDEX == 0) return false;
-    
+    if (PHY_IFINDEX1 == 0) return false;
+
     struct net_device *dev = NULL;
     int ifindex = 0;
-    
+
     if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) < 0 || dev == NULL) {
         return false;
     }
-    
+
     if (bpf_probe_read_kernel(&ifindex, sizeof(ifindex), &dev->ifindex) < 0) {
         return false;
     }
-    
-    return (ifindex == PHY_IFINDEX);
+
+    return (ifindex == PHY_IFINDEX1 || ifindex == PHY_IFINDEX2);
 }
 
 // Helper functions for packet parsing
@@ -411,11 +395,12 @@ static __always_inline int parse_packet_key_userspace(
     if (PROTOCOL_FILTER != 0 && ip.protocol != PROTOCOL_FILTER) {
         return 0;
     }
-    
-    if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER && ip.daddr != SRC_IP_FILTER) {
+
+    // Apply IP filters - use exact matching for packet direction
+    if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER) {
         return 0;
     }
-    if (DST_IP_FILTER != 0 && ip.saddr != DST_IP_FILTER && ip.daddr != DST_IP_FILTER) {
+    if (DST_IP_FILTER != 0 && ip.daddr != DST_IP_FILTER) {
         return 0;
     }
 
@@ -531,18 +516,19 @@ static __always_inline int parse_packet_key(
     key->src_ip = ip.saddr;
     key->dst_ip = ip.daddr;
     key->protocol = ip.protocol;
-    
+
     if (PROTOCOL_FILTER != 0 && ip.protocol != PROTOCOL_FILTER) {
         return 0;
     }
-    
-    if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER && ip.daddr != SRC_IP_FILTER) {
+
+    // Apply IP filters - use exact matching for packet direction
+    if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER) {
         return 0;
     }
-    if (DST_IP_FILTER != 0 && ip.saddr != DST_IP_FILTER && ip.daddr != DST_IP_FILTER) {
+    if (DST_IP_FILTER != 0 && ip.daddr != DST_IP_FILTER) {
         return 0;
     }
-    
+
     switch (ip.protocol) {
         case IPPROTO_TCP:
             if (!parse_tcp_key(skb, key, stage_id)) return 0;
@@ -655,21 +641,42 @@ static __always_inline void handle_stage_event(struct pt_regs *ctx, struct sk_bu
     
     bool rx_complete = (stage_id == RX_STAGE_6 && flow_ptr->rx_start && flow_ptr->rx_end);
     bool tx_complete = (stage_id == TX_STAGE_6 && flow_ptr->tx_start && flow_ptr->tx_end);
-    
+
     if (tx_complete || rx_complete) {
+        // Check latency threshold before submitting
+        if (LATENCY_THRESHOLD_NS > 0) {
+            u64 start_ts = 0;
+            u64 end_ts = current_ts;
+
+            // Find the first valid timestamp
+            #pragma unroll
+            for (int i = 0; i < MAX_STAGES; i++) {
+                if (flow_ptr->ts[i] > 0) {
+                    start_ts = flow_ptr->ts[i];
+                    break;
+                }
+            }
+
+            // Skip if latency below threshold
+            if (start_ts == 0 || end_ts == 0 || (end_ts - start_ts) < LATENCY_THRESHOLD_NS) {
+                flow_sessions.delete(&key);
+                return;
+            }
+        }
+
         u32 map_key_zero = 0;
         struct event_data_t *event_data_ptr = event_scratch_map.lookup(&map_key_zero);
         if (!event_data_ptr) {
             flow_sessions.delete(&key);
             return;
         }
-        
+
         event_data_ptr->key = key;
         if (bpf_probe_read_kernel(&event_data_ptr->data, sizeof(event_data_ptr->data), flow_ptr) != 0) {
             flow_sessions.delete(&key);
             return;
         }
-        
+
         events.perf_submit(ctx, event_data_ptr, sizeof(*event_data_ptr));
         flow_sessions.delete(&key);
     }
@@ -845,16 +852,6 @@ RAW_TRACEPOINT_PROBE(netif_receive_skb) {
     // Get skb from tracepoint args
     struct sk_buff *skb = (struct sk_buff *)ctx->args[0];
     if (!skb) return 0;
-
-    // Debug: log all interface indices we see at this probe point
-    struct net_device *dev = NULL;
-    int ifindex = 0;
-    if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) == 0 && dev != NULL) {
-        if (bpf_probe_read_kernel(&ifindex, sizeof(ifindex), &dev->ifindex) == 0) {
-            u32 idx = (u32)ifindex;
-            ifindex_seen.increment(idx);
-        }
-    }
 
     // TX Direction: Physical interface receives packets for VM
     if (is_target_phy_interface(skb)) {
@@ -1113,20 +1110,26 @@ if __name__ == "__main__":
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  Monitor TCP flow from VM to host (rx direction):
+  Monitor VM TX traffic (packets leaving VM, e.g., 192.168.76.198 -> 192.168.64.1):
     sudo %(prog)s --src-ip 192.168.76.198 --dst-ip 192.168.64.1 \\
+                  --protocol tcp --direction tx \\
+                  --vm-interface vnet0 --phy-interface enp94s0f0np0
+
+  Monitor VM RX traffic (packets entering VM, e.g., 192.168.64.1 -> 192.168.76.198):
+    sudo %(prog)s --src-ip 192.168.64.1 --dst-ip 192.168.76.198 \\
                   --protocol tcp --direction rx \\
                   --vm-interface vnet0 --phy-interface enp94s0f0np0
 
-  Monitor UDP flow from VM to host (rx direction):
+  Monitor UDP traffic from VM:
     sudo %(prog)s --src-ip 192.168.76.198 --dst-port 53 \\
-                  --protocol udp --direction rx \\
+                  --protocol udp --direction tx \\
                   --vm-interface vnet0 --phy-interface enp94s0f0np0
 
-  Monitor ICMP flow from host to VM (tx direction):
-    sudo %(prog)s --src-ip 192.168.64.1 --dst-ip 192.168.76.198 \\
-                  --protocol icmp --direction tx \\
-                  --vm-interface vnet0 --phy-interface enp94s0f0np0
+  Monitor flows with latency > 100us:
+    sudo %(prog)s --src-ip 192.168.76.198 --dst-ip 192.168.64.1 \\
+                  --protocol tcp --direction tx \\
+                  --vm-interface vnet0 --phy-interface enp94s0f0np0 \\
+                  --latency-us 100
 """
     )
     
@@ -1140,13 +1143,15 @@ Examples:
                         help='Destination port filter (TCP/UDP)')
     parser.add_argument('--protocol', type=str, choices=['tcp', 'udp', 'icmp', 'all'], 
                         default='all', help='Protocol filter (default: all)')
-    parser.add_argument('--direction', type=str, choices=['tx', 'rx'], 
-                        required=True, help='Direction filter: tx=host->VM, rx=VM->host')
+    parser.add_argument('--direction', type=str, choices=['tx', 'rx'],
+                        required=True, help='Direction filter: tx=VM TX (packets leaving VM), rx=VM RX (packets entering VM)')
     parser.add_argument('--vm-interface', type=str, required=True,
                         help='VM interface to monitor (e.g., vnet0)')
     parser.add_argument('--phy-interface', type=str, required=True,
-                        help='Physical interface to monitor (e.g., enp94s0f0np0)')
-    
+                        help='Physical interface(s) to monitor. Supports comma-separated list for bond members (e.g., enp94s0f0np0 or eth0,eth1)')
+    parser.add_argument('--latency-us', type=float, default=0,
+                        help='Minimum latency threshold in microseconds to report (default: 0, report all)')
+
     args = parser.parse_args()
     
     # Convert parameters
@@ -1158,16 +1163,25 @@ Examples:
     protocol_map = {'tcp': 6, 'udp': 17, 'icmp': 1, 'all': 0}
     protocol_filter = protocol_map[args.protocol]
     
-    direction_map = {'tx': 1, 'rx': 2}
+    # Direction mapping from VM perspective:
+    # tx = VM TX (packets leaving VM) = vnet RX path = RX_STAGE (needs DIRECTION_FILTER=2 to enable)
+    # rx = VM RX (packets entering VM) = vnet TX path = TX_STAGE (needs DIRECTION_FILTER=1 to enable)
+    direction_map = {'tx': 2, 'rx': 1}
     direction_filter = direction_map[args.direction]
-    
+
+    # Convert latency threshold from microseconds to nanoseconds
+    latency_threshold_ns = int(args.latency_us * 1000)
+
+    # Support multiple interfaces (split by comma)
+    phy_interfaces = args.phy_interface.split(',')
     try:
         vm_ifindex = get_if_index(args.vm_interface)
-        phy_ifindex = get_if_index(args.phy_interface)
+        phy_ifindex1 = get_if_index(phy_interfaces[0].strip())
+        phy_ifindex2 = get_if_index(phy_interfaces[1].strip()) if len(phy_interfaces) > 1 else phy_ifindex1
     except OSError as e:
         print("Error getting interface index: %s" % e)
         sys.exit(1)
-    
+
     print("=== VM Network Latency Tracer ===")
     print("Protocol filter: %s" % args.protocol.upper())
     print("Direction filter: %s" % args.direction.upper())
@@ -1180,12 +1194,15 @@ Examples:
     if dst_port:
         print("Destination port filter: %d" % dst_port)
     print("VM interface: %s (ifindex %d)" % (args.vm_interface, vm_ifindex))
-    print("Physical interface: %s (ifindex %d)" % (args.phy_interface, phy_ifindex))
-    
+    print("Physical interfaces: %s (ifindex %d, %d)" % (args.phy_interface, phy_ifindex1, phy_ifindex2))
+    if latency_threshold_ns > 0:
+        print("Latency threshold: >= %.3f us (only reporting flows exceeding this latency)" % args.latency_us)
+
     try:
         b = BPF(text=bpf_text % (
             src_ip_hex, dst_ip_hex, src_port, dst_port,
-            protocol_filter, vm_ifindex, phy_ifindex, direction_filter
+            protocol_filter, vm_ifindex, phy_ifindex1, phy_ifindex2, direction_filter,
+            latency_threshold_ns
         ))
         print("BPF program loaded successfully")
     except Exception as e:
@@ -1201,69 +1218,5 @@ Examples:
             b.perf_buffer_poll()
     except KeyboardInterrupt:
         print("\nDetaching...")
-        print("\n=== Debug Statistics ===")
-        
-        # Define stage names
-        stage_names = {
-            0: "RX0_netif_receive_skb",
-            1: "RX1_netdev_frame_hook", 
-            2: "RX2_ovs_dp_process_packet",
-            3: "RX3_ovs_dp_upcall",
-            4: "RX4_ovs_flow_key_extract_userspace",
-            5: "RX5_ovs_vport_send",
-            6: "RX6___dev_queue_xmit",
-            7: "TX0___netif_receive_skb",
-            8: "TX1_netdev_frame_hook",
-            9: "TX2_ovs_dp_process_packet", 
-            10: "TX3_ovs_dp_upcall",
-            11: "TX4_ovs_flow_key_extract_userspace",
-            12: "TX5_ovs_vport_send",
-            13: "TX6_tun_net_xmit"
-        }
-        
-        # Define code point names
-        code_names = {
-            1: "PROBE_ENTRY",
-            2: "INTERFACE_FILTER", 
-            3: "DIRECTION_FILTER",
-            4: "HANDLE_CALLED",
-            5: "HANDLE_ENTRY",
-            6: "PARSE_ENTRY",
-            7: "PARSE_SUCCESS",
-            8: "PARSE_IP_FILTER",
-            9: "PARSE_PROTO_FILTER",
-            10: "PARSE_PORT_FILTER",
-            11: "PARSE_TCP_SUCCESS",
-            12: "PARSE_UDP_SUCCESS", 
-            13: "PARSE_ICMP_SUCCESS",
-            14: "FLOW_CREATE",
-            15: "FLOW_LOOKUP",
-            16: "FLOW_FOUND",
-            17: "FLOW_NOT_FOUND",
-            18: "SKB_READ_FAIL",
-            19: "PERF_SUBMIT"
-        }
-        
-        print("\nStage Statistics:")
-        for k, v in sorted(stage_stats.items(), key=lambda x: x[0].value):
-            if v.value > 0:
-                stage_id = k.value >> 8
-                code_point = k.value & 0xFF
-                stage_name = stage_names.get(stage_id, "UNKNOWN_%d" % stage_id)
-                code_name = code_names.get(code_point, "CODE_%d" % code_point)
-                print("  %s.%s: %d" % (stage_name, code_name, v.value))
-        
-        print("\nInterface Debug:")
-        interface_debug = b["interface_debug"]
-        if interface_debug[0].value > 0:
-            print("  NULL_DEV: %d" % interface_debug[0].value)
-        if interface_debug[1].value > 0:
-            print("  READ_FAIL: %d" % interface_debug[1].value)
-        
-        print("\nInterface indices seen:")
-        ifindex_hist = b["ifindex_seen"]
-        for k, v in ifindex_hist.items():
-            if v.value > 0:
-                print("  ifindex %d: %d packets" % (k.value, v.value))
     finally:
         print("Exiting.")

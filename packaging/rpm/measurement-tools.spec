@@ -58,6 +58,9 @@ done
 find %{buildroot}/usr/share/measurement-tools -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 find %{buildroot}/usr/share/measurement-tools -type f -name "*.pyc" -delete 2>/dev/null || true
 
+# Remove bpftrace scripts (not included in this package)
+find %{buildroot}/usr/share/measurement-tools -type f -name "*.bt" -delete 2>/dev/null || true
+
 %clean
 rm -rf %{buildroot}
 

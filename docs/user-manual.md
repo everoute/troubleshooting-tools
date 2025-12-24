@@ -581,7 +581,7 @@ sudo python3 measurement-tools/performance/system-network/system_network_perfoma
 # ICMP 往返时间测量
 sudo python3 measurement-tools/performance/system-network/system_network_icmp_rtt.py \
   --src-ip 10.132.114.11 --dst-ip 10.132.114.12 \
-  --direction tx --phy-iface1 ens11
+  --direction tx --phy-interface ens11
 ```
 
 #### 4.2.3 虚拟机网络性能工具

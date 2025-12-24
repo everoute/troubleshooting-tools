@@ -83,6 +83,7 @@ struct inet_cork;
 #define TARGET_IFINDEX1 %d
 #define TARGET_IFINDEX2 %d
 #define DIRECTION_FILTER %d  // 1=tx, 2=rx
+#define LATENCY_THRESHOLD_NS %d  // Minimum latency threshold in nanoseconds
 
 // TX direction stages (System -> Physical)
 #define TX_STAGE_0    0  // ip_queue_xmit (TCP) / ip_send_skb (UDP)
@@ -172,68 +173,19 @@ BPF_STACK_TRACE(stack_traces, 10240);
 BPF_PERF_OUTPUT(events);
 BPF_PERCPU_ARRAY(event_scratch_map, struct event_data_t, 1);
 
-// Debug statistics
-BPF_HISTOGRAM(ifindex_seen, u32);       // Track which ifindex values we see
-BPF_HISTOGRAM(proto_seen, u8);          // Track protocol values seen at TX0
-
-// Special counters for interface debugging
-BPF_ARRAY(interface_debug, u64, 4);
-#define IF_DBG_NULL_DEV             0   // dev is NULL
-#define IF_DBG_READ_FAIL            1   // ifindex read failed
-
-// Key debugging - print key components for analysis
-BPF_PERF_OUTPUT(key_debug_events);
-
-struct key_debug_t {
-    u8 stage_id;
-    __be32 src_ip;
-    __be32 dst_ip;
-    __be16 src_port;
-    __be16 dst_port;
-    __be32 tcp_seq;
-    u8 payload_len;
-    u32 timestamp;
-};
-
-static __always_inline void debug_key(struct pt_regs *ctx, struct packet_key_t *key, u8 stage_id) {
-    struct key_debug_t debug_data = {};
-    debug_data.stage_id = stage_id;
-    debug_data.src_ip = key->src_ip;
-    debug_data.dst_ip = key->dst_ip;
-    debug_data.src_port = key->tcp.src_port;
-    debug_data.dst_port = key->tcp.dst_port;
-    debug_data.tcp_seq = 0;  // Removed from key structure
-    debug_data.payload_len = 0;  // Removed from key structure
-    debug_data.timestamp = bpf_ktime_get_ns() / 1000000;  // Convert to ms
-    
-    key_debug_events.perf_submit(ctx, &debug_data, sizeof(debug_data));
-}
-
-// Helper function for interface debugging
-static __always_inline void increment_interface_debug(u32 idx) {
-    u64 *val = interface_debug.lookup(&idx);
-    if (val) {
-        (*val)++;
-    }
-}
-
 // Helper function to check if an interface index matches our targets
 static __always_inline bool is_target_ifindex(const struct sk_buff *skb) {
     struct net_device *dev = NULL;
     int ifindex = 0;
-    
+
     if (bpf_probe_read_kernel(&dev, sizeof(dev), &skb->dev) < 0 || dev == NULL) {
         return false;
     }
-    
+
     if (bpf_probe_read_kernel(&ifindex, sizeof(ifindex), &dev->ifindex) < 0) {
         return false;
     }
-    
-    // Track all interface indices we see
-    u32 idx = (u32)ifindex;
-    ifindex_seen.increment(idx);
-    
+
     return (ifindex == TARGET_IFINDEX1 || ifindex == TARGET_IFINDEX2);
 }
 
@@ -390,23 +342,17 @@ static __always_inline int parse_packet_key_userspace(
     key->src_ip = ip.saddr;
     key->dst_ip = ip.daddr;
     key->protocol = ip.protocol;
-    
+
     // Apply filters
     if (PROTOCOL_FILTER != 0 && ip.protocol != PROTOCOL_FILTER) {
-        // Track what protocol we're filtering out (only for TX0)
-        if (stage_id == TX_STAGE_0) {
-            proto_seen.increment(ip.protocol);
-            if (ip.protocol == IPPROTO_ICMP) {
-            } else {
-            }
-        }
         return 0;
     }
-    
-    if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER && ip.daddr != SRC_IP_FILTER) {
+
+    // Apply IP filters - use exact matching for packet direction
+    if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER) {
         return 0;
     }
-    if (DST_IP_FILTER != 0 && ip.saddr != DST_IP_FILTER && ip.daddr != DST_IP_FILTER) {
+    if (DST_IP_FILTER != 0 && ip.daddr != DST_IP_FILTER) {
         return 0;
     }
 
@@ -520,25 +466,19 @@ static __always_inline int parse_packet_key(
     key->src_ip = ip.saddr;
     key->dst_ip = ip.daddr;
     key->protocol = ip.protocol;
-    
+
     if (PROTOCOL_FILTER != 0 && ip.protocol != PROTOCOL_FILTER) {
-        // Track what protocol we're filtering out (only for TX0)
-        if (stage_id == TX_STAGE_0) {
-            proto_seen.increment(ip.protocol);
-            if (ip.protocol == IPPROTO_ICMP) {
-            } else {
-            }
-        }
         return 0;
     }
-    
-    if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER && ip.daddr != SRC_IP_FILTER) {
+
+    // Apply IP filters - use exact matching for packet direction
+    if (SRC_IP_FILTER != 0 && ip.saddr != SRC_IP_FILTER) {
         return 0;
     }
-    if (DST_IP_FILTER != 0 && ip.saddr != DST_IP_FILTER && ip.daddr != DST_IP_FILTER) {
+    if (DST_IP_FILTER != 0 && ip.daddr != DST_IP_FILTER) {
         return 0;
     }
-    
+
     switch (ip.protocol) {
         case IPPROTO_TCP:
             if (!parse_tcp_key(skb, key, stage_id)) return 0;
@@ -599,7 +539,6 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
     
     // Flow creation for start stages
     if (stage_id == TX_STAGE_0 || stage_id == RX_STAGE_0) {
-        debug_key(ctx, &key, stage_id);  // Enable key debugging for TCP flow mismatch investigation
         struct flow_data_t zero = {};
         flow_sessions.delete(&key);
         flow_ptr = flow_sessions.lookup_or_try_init(&key, &zero);
@@ -641,9 +580,8 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
                 flow_ptr->udp_len = ntohs(udp.len);
             }
         }
-        
+
     } else {
-        debug_key(ctx, &key, stage_id);  // Enable key debugging for TCP flow mismatch investigation
         flow_ptr = flow_sessions.lookup(&key);
         if (!flow_ptr) {
             return;
@@ -670,8 +608,29 @@ static __always_inline void handle_stage_event(void *ctx, struct sk_buff *skb, u
     // Check for complete paths and submit events
     bool path1_complete = (stage_id == TX_STAGE_6 && flow_ptr->saw_path1_start && flow_ptr->saw_path1_end);
     bool path2_complete = (stage_id == RX_STAGE_6 && flow_ptr->saw_path2_start && flow_ptr->saw_path2_end);
-    
+
     if (path1_complete || path2_complete) {
+        // Check latency threshold before submitting
+        if (LATENCY_THRESHOLD_NS > 0) {
+            u64 start_ts = 0;
+            u64 end_ts = current_ts;
+
+            // Find the first valid timestamp
+            #pragma unroll
+            for (int i = 0; i < MAX_STAGES; i++) {
+                if (flow_ptr->ts[i] > 0) {
+                    start_ts = flow_ptr->ts[i];
+                    break;
+                }
+            }
+
+            // Skip if latency below threshold
+            if (start_ts == 0 || end_ts == 0 || (end_ts - start_ts) < LATENCY_THRESHOLD_NS) {
+                flow_sessions.delete(&key);
+                return;
+            }
+        }
+
         submit_event(ctx, &key, flow_ptr);
         flow_sessions.delete(&key);
     }
@@ -732,10 +691,11 @@ static __always_inline int parse_packet_key_tcp_early(
         return 0;
     }
 
-    if (SRC_IP_FILTER != 0 && key->src_ip != SRC_IP_FILTER && key->dst_ip != SRC_IP_FILTER) {
+    // Apply IP filters - use exact matching for packet direction
+    if (SRC_IP_FILTER != 0 && key->src_ip != SRC_IP_FILTER) {
         return 0;
     }
-    if (DST_IP_FILTER != 0 && key->src_ip != DST_IP_FILTER && key->dst_ip != DST_IP_FILTER) {
+    if (DST_IP_FILTER != 0 && key->dst_ip != DST_IP_FILTER) {
         return 0;
     }
 
@@ -842,9 +802,6 @@ int kprobe____ip_queue_xmit(struct pt_regs *ctx, struct sock *sk, struct sk_buff
     flow_ptr->kstack_id[TX_STAGE_0] = stack_id;
 
     flow_sessions.update(&key, flow_ptr);
-
-    // Debug the key we created at TCP TX0
-    debug_key(ctx, &key, TX_STAGE_0);
 
     return 0;
 }
@@ -1207,81 +1164,6 @@ def print_event(cpu, data, size):
     
     print("\n" + "="*80 + "\n")
 
-# Global list to store key debug events for analysis
-key_debug_data = []
-
-def print_key_debug(cpu, data, size):
-    """Print key debug event for flow matching analysis"""
-    import ctypes
-    import socket
-    
-    # Define the structure to match the C struct
-    class KeyDebugEvent(ctypes.Structure):
-        _fields_ = [
-            ("stage_id", ctypes.c_uint8),
-            ("src_ip", ctypes.c_uint32),
-            ("dst_ip", ctypes.c_uint32),
-            ("src_port", ctypes.c_uint16),
-            ("dst_port", ctypes.c_uint16),
-            ("tcp_seq", ctypes.c_uint32),
-            ("payload_len", ctypes.c_uint8),
-            ("timestamp", ctypes.c_uint32),
-        ]
-    
-    event = ctypes.cast(data, ctypes.POINTER(KeyDebugEvent)).contents
-    
-    # Store for analysis
-    key_debug_data.append({
-        'stage_id': event.stage_id,
-        'src_ip': format_ip(event.src_ip),
-        'dst_ip': format_ip(event.dst_ip),
-        'src_port': socket.ntohs(event.src_port),
-        'dst_port': socket.ntohs(event.dst_port),
-        'tcp_seq': event.tcp_seq,
-        'payload_len': event.payload_len,
-        'timestamp': event.timestamp
-    })
-    
-    # Only print key info for first 5 entries to avoid spam
-    if len(key_debug_data) <= 5:
-        print("KEY_DEBUG: Stage %d: %s:%d -> %s:%d seq=0x%08x len=%d ts=%d" % (
-            event.stage_id,
-            format_ip(event.src_ip), socket.ntohs(event.src_port),
-            format_ip(event.dst_ip), socket.ntohs(event.dst_port),
-            event.tcp_seq, event.payload_len, event.timestamp
-        ))
-
-def analyze_key_consistency():
-    """Analyze key consistency between stages"""
-    if not key_debug_data:
-        print("\nNo key debug data available for analysis")
-        return
-    
-    print("\n=== Key Consistency Analysis ===")
-    
-    # Group by similar connection tuples (ignoring seq and payload_len for now)
-    connections = {}
-    for entry in key_debug_data:
-        key = (entry['src_ip'], entry['dst_ip'], entry['src_port'], entry['dst_port'])
-        if key not in connections:
-            connections[key] = []
-        connections[key].append(entry)
-    
-    print("Found %d unique connections:" % len(connections))
-    
-    for i, (conn_key, stages) in enumerate(connections.items()):
-        if i >= 5:  # Limit to first 5 connections for readability
-            break
-            
-        print("\nConnection %d: %s:%d -> %s:%d" % (i+1, conn_key[0], conn_key[2], conn_key[1], conn_key[3]))
-        
-        # Sort by stage_id
-        stages.sort(key=lambda x: x['stage_id'])
-        
-        # Check for differences in seq and payload_len
-        for stage in stages:
-            print("  Stage %d: seq=0x%08x len=%d" % (stage['stage_id'], stage['tcp_seq'], stage['payload_len']))
-
 if __name__ == "__main__":
     if os.geteuid() != 0:
         print("This program must be run as root")
@@ -1312,6 +1194,12 @@ Examples:
     sudo %(prog)s --src-ip 70.0.0.33 --dst-ip 70.0.0.34 \\
                   --protocol all \\
                   --phy-interface enp94s0f0np0
+
+  Monitor flows with latency > 100us:
+    sudo %(prog)s --src-ip 70.0.0.33 --dst-ip 70.0.0.34 \\
+                  --protocol tcp --direction tx \\
+                  --phy-interface enp94s0f0np0 \\
+                  --latency-us 100
 """
     )
     
@@ -1325,10 +1213,12 @@ Examples:
                         help='Destination port filter (TCP/UDP)')
     parser.add_argument('--protocol', type=str, choices=['tcp', 'udp', 'all'], 
                         default='all', help='Protocol filter (default: all)')
-    parser.add_argument('--direction', type=str, choices=['tx', 'rx'], 
+    parser.add_argument('--direction', type=str, choices=['tx', 'rx'],
                         required=True, help='Direction filter (tx or rx)')
     parser.add_argument('--phy-interface', type=str, required=True,
                         help='Physical interface to monitor (e.g., enp94s0f0np0)')
+    parser.add_argument('--latency-us', type=float, default=0,
+                        help='Minimum latency threshold in microseconds to report (default: 0, report all)')
     
     args = parser.parse_args()
     
@@ -1337,12 +1227,15 @@ Examples:
     dst_ip_hex = ip_to_hex(args.dst_ip) if args.dst_ip else 0
     src_port = args.src_port if args.src_port else 0
     dst_port = args.dst_port if args.dst_port else 0
-    
+
     protocol_map = {'tcp': 6, 'udp': 17, 'all': 0}
     protocol_filter = protocol_map[args.protocol]
-    
+
     direction_map = {'tx': 1, 'rx': 2}
     direction_filter = direction_map[args.direction]
+
+    # Convert latency threshold from microseconds to nanoseconds
+    latency_threshold_ns = int(args.latency_us * 1000)
     
     # Support multiple interfaces (split by comma)
     phy_interfaces = args.phy_interface.split(',')
@@ -1365,11 +1258,14 @@ Examples:
     if dst_port:
         print("Destination port filter: %d" % dst_port)
     print("Physical interfaces: %s (ifindex %d, %d)" % (args.phy_interface, ifindex1, ifindex2))
+    if latency_threshold_ns > 0:
+        print("Latency threshold: >= %.3f us (only reporting flows exceeding this latency)" % args.latency_us)
     
     try:
         b = BPF(text=bpf_text % (
             src_ip_hex, dst_ip_hex, src_port, dst_port,
-            protocol_filter, ifindex1, ifindex2, direction_filter
+            protocol_filter, ifindex1, ifindex2, direction_filter,
+            latency_threshold_ns
         ))
         print("BPF program loaded successfully")
 
@@ -1378,16 +1274,14 @@ Examples:
         sys.exit(1)
 
     b["events"].open_perf_buffer(print_event)
-    # b["key_debug_events"].open_perf_buffer(print_key_debug)  # Temporarily disabled for testing
-    
+
     print("\nTracing system network TCP/UDP latency... Hit Ctrl-C to end.")
     print("Generate some TCP/UDP traffic to see results...\n")
-    
+
     try:
         while True:
             b.perf_buffer_poll()
     except KeyboardInterrupt:
         print("\nDetaching...")
-        analyze_key_consistency()
     finally:
         print("Exiting.")

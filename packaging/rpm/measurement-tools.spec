@@ -36,6 +36,7 @@ Tools categories:
 - kvm-virt-network: Virtio/TUN/TAP/vhost monitoring
 - cpu: CPU and scheduler analysis
 - other: Additional tracers (ARP, qdisc, VPC datapath)
+- boundary-detection: Network boundary drop detection (system and VM level path tracers)
 
 %prep
 %setup -q -n %{name}-%{version}
@@ -48,7 +49,7 @@ rm -rf %{buildroot}
 mkdir -p %{buildroot}/usr/share/measurement-tools
 
 # Copy all tool directories
-for dir in cpu kvm-virt-network linux-network-stack other ovs performance; do
+for dir in cpu kvm-virt-network linux-network-stack other ovs performance boundary-detection; do
     if [ -d "$dir" ]; then
         cp -rp "$dir" %{buildroot}/usr/share/measurement-tools/
     fi
@@ -69,6 +70,18 @@ rm -rf %{buildroot}
 /usr/share/measurement-tools
 
 %changelog
+* Mon Mar 09 2026 - 1.1.0-1
+- Add boundary-detection module with 6 path tracer tools (system and VM level)
+- Add kvm_vhost_tun_latency_no_discovery_details and tun_tx_to_kvm_irq tools
+- Add performance tools: deploy_full_mesh_icmp_tracer, OVS internal port latency, TCP perf analyzers
+- Fix IP byte order in trace_conntrack and trace_ip_defrag
+- Fix BPF context type in system_network_icmp_rtt
+- Improve GCC optimized function handling across multiple tools
+- Enhance kernel_icmp_rtt with TX/RX direction and bond interface support
+- Add --stage-latency mode to system/vm network latency summary tools
+- Add --l4-protocol filter to eth_drop, --drops-only/--summary to qdisc_drop_trace
+- Remove deprecated vm_pair_latency tool
+
 * Mon Nov 25 2024 - 1.0.0-1
 - Initial release
 - Include BCC Python tools and bpftrace scripts

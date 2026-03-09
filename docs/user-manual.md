@@ -10,6 +10,7 @@
   - [2.3 Simple 版本 - 简化版工具](#23-simple-版本---简化版工具)
   - [2.4 Standalone 工具 - 独立功能工具](#24-standalone-工具---独立功能工具)
   - [2.5 分层测量策略建议](#25-分层测量策略建议)
+  - [2.6 Path Tracer 版本 - 边界检测路径追踪工具](#26-path-tracer-版本---边界检测路径追踪工具)
 - [3. 模块特定工具详情](#3-模块特定工具详情)
   - [3.1 CPU 模块](#31-cpu-模块-cpu)
   - [3.2 KVM 虚拟化网络模块](#32-kvm-虚拟化网络模块-kvm-virt-network)
@@ -17,6 +18,7 @@
   - [3.4 Open vSwitch 模块](#34-open-vswitch-模块-ovs)
   - [3.5 性能模块](#35-性能模块-performance)
   - [3.6 其他工具模块](#36-其他工具模块-other)
+  - [3.7 边界检测模块](#37-边界检测模块-boundary-detection)
 - [4. 工具使用指南](#4-工具使用指南)
   - [4.1 基本使用模式](#41-基本使用模式)
   - [4.2 性能监控模块](#42-性能监控模块-performance)
@@ -26,6 +28,7 @@
   - [4.6 Bpftrace 脚本工具](#46-bpftrace-脚本工具)
   - [4.7 CPU 和调度器监控脚本](#47-cpu-和调度器监控脚本)
   - [4.8 参数模式总结](#48-参数模式总结)
+  - [4.9 边界检测模块](#49-边界检测模块-boundary-detection)
 - [5. 输出数据格式详解](#5-输出数据格式详解)
   - [5.1 性能监控工具输出格式](#51-性能监控工具输出格式)
   - [5.2 Linux 网络栈监控输出格式](#52-linux-网络栈监控输出格式)
@@ -33,6 +36,7 @@
   - [5.4 KVM 虚拟化网络输出格式](#54-kvm-虚拟化网络输出格式)
   - [5.5 Bpftrace 脚本输出格式](#55-bpftrace-脚本输出格式)
   - [5.6 输出格式特点总结](#56-输出格式特点总结)
+  - [5.7 边界检测工具输出格式](#57-边界检测工具输出格式)
 - [6. 部署和环境](#6-部署和环境)
   - [6.1 系统要求](#61-系统要求)
   - [6.2 目标环境](#62-目标环境)
@@ -50,10 +54,13 @@
 
 ```
 measurement-tools/
+├── boundary-detection/               # 网络边界丢包检测工具
+│   ├── system-network/              # 系统级边界检测（主机端点场景）
+│   └── vm-network/                  # 虚拟机级边界检测（转发路径场景）
 ├── cpu/                              # CPU 和调度器监控工具
 ├── kvm-virt-network/                 # KVM/QEMU 虚拟化网络栈工具
-│   ├── kvm/                         # KVM 中断和 IRQ 监控
-│   ├── tun/                         # TUN/TAP 设备监控
+│   ├── kvm/                         # KVM 中断、IRQ 和 TX 延迟监控
+│   ├── tun/                         # TUN/TAP 设备和中断链监控
 │   ├── vhost-net/                   # vhost-net 后端监控
 │   └── virtio-net/                  # virtio-net 客户机驱动监控
 ├── linux-network-stack/             # Linux 内核网络栈工具
@@ -62,8 +69,9 @@ measurement-tools/
 ├── ovs/                             # Open vSwitch 监控工具
 └── performance/                     # 网络性能监控
     ├── system-network/              # 系统级网络性能
+    │   ├── ovs-internal-port/       # OVS 内部端口延迟分析
+    │   └── tcp-perf/                # TCP 性能分析工具集
     └── vm-network/                  # 虚拟机专用网络性能
-        └── vm_pair_latency/         # 同节点虚拟机间延迟监控
 ```
 
 ## 2. 工具测量类型分类
@@ -132,6 +140,9 @@ measurement-tools/
 - `kernel_drop_stack_stats_summary_all.py` - 内核丢包栈统计(直方图)
 - `tun_to_vhost_queue_stats_full_summary.py` - TUN 到 vhost 队列完整统计(直方图)
 - `tun_to_vhost_queue_status_simple_summary.py` - TUN 到 vhost 队列状态简化统计(直方图)
+- `enqueue_to_iprec_latency_summary.py` - OVS 内部端口 enqueue 到 ip_rcv 延迟直方图
+- `tcp_rtt_inflight_summary.py` - TCP RTT/inflight/cwnd 三重直方图
+- `syscall_recv_latency_summary.py` - recv 系统调用延迟直方图
 
 ### 2.3 Simple 版本 - 简化版工具
 
@@ -166,6 +177,8 @@ measurement-tools/
 - `system_network_icmp_rtt.py` - ICMP RTT 专用测量
 - `trace_conntrack.py` - 连接跟踪监控
 - `ovs_userspace_megaflow.py` - OVS megaflow 跟踪
+- `tcp_connection_analyzer.py` - TCP 连接综合分析（BDP、瓶颈检测）
+- `deploy_full_mesh_icmp_tracer.py` - 集群全网格 ICMP RTT 部署编排
 - 各类 bpftrace 脚本 (*.bt)
 
 ### 2.5 分层测量策略建议
@@ -218,6 +231,36 @@ sudo python3 measurement-tools/performance/vm-network/vm_network_latency_summary
   --protocol tcp --direction rx --interval 10
 ```
 
+### 2.6 Path Tracer 版本 - 边界检测路径追踪工具
+
+**特点:**
+
+- 在网络路径的关键边界点（物理网卡、内核协议栈入口/出口）设置探针，追踪数据包是否通过每个边界
+- 通过对比相邻边界的包计数来定位丢包发生的区间
+- 支持双向追踪（请求包和响应包的完整路径）
+- 针对不同协议（TCP/UDP/ICMP）使用不同的包标识策略（ICMP ID/seq、TCP seq、UDP IP ID）
+
+**适用场景:**
+
+- 快速定位网络丢包发生在哪两个网络边界之间
+- 区分物理网卡层、内核协议栈、OVS 数据路径等不同层面的丢包
+- 虚拟化环境中定位丢包是发生在宿主机侧还是虚拟机侧
+- 配合 Details/Summary 工具使用：先用 Path Tracer 定位丢包区间，再用对应阶段的详细工具分析根因
+
+**性能开销:**
+
+- 中等（每个边界点一个 eBPF 探针，per-packet 处理）
+- 建议使用 IP 和端口过滤器缩小监控范围
+
+**典型工具:**
+
+- `system_icmp_path_tracer.py` - 系统级 ICMP 路径边界检测
+- `system_tcp_path_tracer.py` - 系统级 TCP 路径边界检测
+- `system_udp_path_tracer.py` - 系统级 UDP 路径边界检测（含 IP 分片处理）
+- `icmp_path_tracer.py` - 虚拟机 ICMP 路径边界检测
+- `tcp_path_tracer.py` - 虚拟机 TCP 路径边界检测
+- `udp_path_tracer.py` - 虚拟机 UDP 路径边界检测（分片组跟踪）
+
 ## 3. 模块特定工具详情
 
 ### 3.1 CPU 模块 (`cpu/`)
@@ -261,6 +304,12 @@ sudo python3 measurement-tools/performance/vm-network/vm_network_latency_summary
 
   - **使用场景**：ARM64 服务器虚拟化环境的中断分析，针对 ARM GIC 中断控制器特性优化
   - **收集数据**：ARM 特定 IRQ 统计、vGIC 中断注入数据
+- **kvm_vhost_tun_latency_no_discovery_details.py**：KVM 主机侧 TX 延迟单阶段测量工具
+
+  - **使用场景**：测量虚拟机发包路径中主机侧 TX 延迟，覆盖从 KVM ioeventfd 触发到 vhost 处理再到 TUN 设备发送到 netif_receive_skb 的完整 TX 路径
+  - **收集数据**：ioeventfd_write → vhost handle_tx_kick → tun_sendmsg → netif_receive_skb 全路径延迟、按流分组的 per-packet 延迟详情
+  - **参数**：`--device` 目标设备名（如 vnet94），`--qemu-pid` QEMU 进程 PID（可自动检测），`--flow` 流过滤器（proto/src/dst/sport/dport），`--warmup` 预热秒数（默认 2 秒用于学习 eventfd）
+  - **特点**：自动发现 QEMU PID（通过 OVS/libvirt），通过 QEMU PID 过滤跟踪所有 vhost 线程
 
 #### 3.2.2 TUN/TAP 子系统 (`tun/`)
 
@@ -284,6 +333,12 @@ sudo python3 measurement-tools/performance/vm-network/vm_network_latency_summary
 
   - **使用场景**：TX 环性能分析，监控发送路径的吞吐量
   - **收集数据**：TX 环占用率、发送数据包计数、吞吐量统计
+- **tun_tx_to_kvm_irq.py**：TUN TX 完整中断链路跟踪工具
+
+  - **使用场景**：追踪 TUN 设备发包触发的完整中断注入链路，从 tun_net_xmit 到最终 posted interrupt 的 5 个阶段，用于诊断虚拟化网络中断延迟
+  - **收集数据**：5 阶段延迟分解（tun_net_xmit → vhost_signal → eventfd_signal → irqfd_wakeup → posted_int）、socket 指针和 eventfd_ctx 指针关联
+  - **参数**：`--device` 目标设备名，`--protocol` 协议过滤（tcp/udp/icmp/all），`--src-ip`/`--dst-ip` IP 过滤，`--src-port`/`--dst-port` 端口过滤，`--stats-interval` 统计输出间隔（默认 10 秒），`--analyze-chains` 启用中断链分析
+  - **特点**：跨内核子系统（TUN/vhost/eventfd/KVM）关联跟踪，支持中断链完整性分析
 
 #### 3.2.3 vhost-net 后端 (`vhost-net/`)
 
@@ -350,8 +405,9 @@ sudo python3 measurement-tools/performance/vm-network/vm_network_latency_summary
 
 - **eth_drop.py**：全内核范围数据包丢包监控工具
 
-  - **使用场景**：监控全内核范围内的所有 kfree_skb 丢包事件，覆盖多种协议类型（ARP、RARP、IPv4、IPv6、LLDP、流控等），支持按协议类型、L4 协议、IP 地址、端口、VLAN ID、接口过滤，可选过滤正常的 kfree_skb 模式（如 tcp_recvmsg 正常释放）
+  - **使用场景**：监控全内核范围内的所有 kfree_skb 丢包事件，覆盖多种协议类型（ARP、RARP、IPv4、IPv6、LLDP、流控等），支持按二层协议类型、L4 协议（ICMP/TCP/UDP）、IP 地址、端口、VLAN ID、接口过滤，内置正常 kfree_skb 模式过滤
   - **收集数据**：丢包位置（kfree_skb 完整调用栈）、数据包二层/三层/四层信息、VLAN 标签、接口名称
+  - **新增参数**：`--l4-protocol` 按 L4 协议过滤（icmp/tcp/udp/all），`--disable-normal-filter` 关闭正常丢包模式过滤（默认过滤 tcp_recvmsg 等正常释放事件）
 - **kernel_drop_stack_stats_summary_all.py**：内核丢包栈统计分析（histogram 版本）
 
   - **使用场景**：按调用栈聚合统计内核中所有丢包事件，识别丢包热点位置，支持长时间监控
@@ -362,8 +418,10 @@ sudo python3 measurement-tools/performance/vm-network/vm_network_latency_summary
   - **收集数据**：实时丢包事件、完整内核调用栈
 - **qdisc_drop_trace.py**：Qdisc 队列规则丢包监控
 
-  - **使用场景**：分析流量控制（TC）层面的丢包，诊断队列满导致的丢包
-  - **收集数据**：Qdisc 丢包原因、队列深度、数据包信息
+  - **使用场景**：分析流量控制（TC）层面的丢包，诊断队列满导致的丢包，支持按设备和协议过滤
+  - **收集数据**：Qdisc 丢包原因、队列深度、数据包信息、基于 histogram 的高效统计
+  - **新增参数**：`--drops-only` 仅显示丢弃的数据包（return code != 0），`--summary` 仅输出汇总统计（适用于高流量场景）
+  - **监控函数**：`__dev_queue_xmit`、`dev_hard_start_xmit`、`erspan_xmit`、`fq_codel_enqueue`
 
 ### 3.4 Open vSwitch 模块 (`ovs/`)
 
@@ -391,10 +449,12 @@ sudo python3 measurement-tools/performance/vm-network/vm_network_latency_summary
 - **system_network_latency_summary.py** [Summary 版本]
 
   - **使用场景**：长时间监控系统网络栈各阶段的延迟分布，建立性能基线，识别异常延迟时段
-  - **测量方式**：基于 BPF_HISTOGRAM 的相邻阶段延迟统计
-  - **收集数据**：延迟分布直方图（对数刻度 buckets）、端到端总延迟、各阶段对延迟
-  - **性能开销**：低（内核态聚合）
-  - **监控阶段**：netif_receive_skb → ovs_vport_receive → nf_conntrack → qdisc → dev_hard_start_xmit
+  - **测量方式**：基于 BPF_HISTOGRAM 的延迟统计，默认仅测量端到端总延迟（最小探针开销），可选开启逐阶段延迟分解
+  - **收集数据**：延迟分布直方图（对数刻度 buckets）、端到端总延迟、可选各阶段对延迟、per-flow Top-N 统计
+  - **性能开销**：低（默认总延迟模式），中等（`--stage-latency` 模式，约 10 个探针）
+  - **监控阶段**：TX: ip_queue_xmit(TCP)/ip_send_skb(UDP) → internal_dev_xmit → ovs_dp_process_packet → ovs_vport_send → net_dev_xmit；RX: __netif_receive_skb → netdev_frame_hook → ovs_dp_process_packet → ovs_vport_send → tcp_v4_rcv/udp_rcv/icmp_rcv
+  - **新增参数**：`--stage-latency` 开启逐阶段延迟分解，`--sort-by` (count/avg/p90/p99) 排序 per-flow 统计，`--top` 控制显示 Top-N 流
+  - **注意**：upcall 延迟测量已分离到独立工具 `ovs_upcall_latency_summary.py`
 - **system_network_latency_details.py** [Details 版本]
 
   - **使用场景**：精确问题定位，详细数据包路径分析，追踪特定流量的每包延迟
@@ -405,21 +465,68 @@ sudo python3 measurement-tools/performance/vm-network/vm_network_latency_summary
 
   - **使用场景**：ICMP 网络延迟基准测试，测量端到端 RTT，验证网络连通性和延迟
   - **收集数据**：ICMP echo request/reply 往返时间、丢包率统计
+- **kernel_icmp_rtt.py** [Standalone 工具]
+
+  - **使用场景**：内核级 ICMP RTT 测量，支持本机发起 ping（TX 模式）和远端 ping 本机（RX 模式）两种方向，测量内核协议栈各阶段精确时间戳
+  - **收集数据**：ICMP 往返时间（微秒级）、可选内核调用栈
+  - **参数**：`--interface` 物理接口（支持逗号分隔的多接口用于 bond 场景），`--direction` (tx/rx) 选择测量方向，`--disable-kernel-stacks` 关闭栈跟踪输出
+  - **监控阶段**：TX: ip_local_out → net_dev_xmit；RX: netif_receive_skb → icmp_rcv
+- **deploy_full_mesh_icmp_tracer.py** [Standalone 部署工具]
+
+  - **使用场景**：集群环境全网格 ICMP RTT 追踪部署，为 N 个节点自动生成 N*(N-1)*2 个追踪器（每对节点的 TX 和 RX 方向），用于集群网络延迟全面监控
+  - **收集数据**：集群内任意两节点间的 ICMP RTT 数据
+  - **参数**：`--nodes` 逗号分隔的节点管理 IP 列表，`--user` SSH 用户名（默认 smartx），`--network-type` 监控网络类型（默认 storage），`--tx-latency`/`--rx-latency` 延迟阈值（ms），`--dry-run` 预览模式，`--stop` 停止所有追踪器，`--status` 查看状态
+  - **特点**：SSH 自动部署、支持 dry-run 预览、JSON 输出
 - **system_network_perfomance_metrics.py** [Standalone 工具]
 
   - **使用场景**：整体系统网络性能评估，综合监控吞吐量和延迟
   - **收集数据**：完整数据流跟踪、吞吐量、延迟统计
   - **特点**：支持连接跟踪（`--enable-ct`）
 
+##### OVS 内部端口延迟分析 (`ovs-internal-port/`)
+
+- **enqueue_to_iprec_latency_summary.py** [Summary 版本]
+
+  - **使用场景**：测量 OVS 内部端口关键异步边界延迟（enqueue_to_backlog → __netif_receive_skb → ip_rcv），诊断软中断处理延迟和 RX 路径瓶颈
+  - **收集数据**：异步边界延迟直方图、可选高延迟事件跟踪
+  - **参数**：`--interface` 目标接口（物理网卡或 OVS 内部端口如 br-int），`--protocol` (tcp/udp/all)，`--src-ip`/`--dst-ip`/`--src-port`/`--dst-port` 过滤，`--interval` 统计间隔（默认 5 秒），`--threshold` 高延迟阈值（微秒）
+- **enqueue_to_iprec_latency_threshold.py** [Threshold 版本]
+
+  - **使用场景**：当延迟超过阈值时捕获内核栈跟踪，用于定位造成异步边界高延迟的具体内核函数和上下文
+  - **收集数据**：超阈值延迟事件、CPU 信息、队列深度、内核栈跟踪
+  - **参数**：`--interface` 目标接口，`--threshold-us` 延迟阈值（微秒，默认 1000），`--protocol` (tcp/udp/all)，IP/端口过滤
+
+##### TCP 性能分析 (`tcp-perf/`)
+
+- **tcp_rtt_inflight_summary.py** [Summary 版本]
+
+  - **使用场景**：TCP 性能综合分析，同时收集 RTT、inflight 包数和拥塞窗口三个关键指标的分布，用于快速识别 TCP 性能瓶颈
+  - **收集数据**：RTT 直方图（微秒）、inflight 包数直方图、cwnd 直方图、可选带宽直方图
+  - **参数**：`--laddr`/`--raddr` 本地/远端 IP 过滤，`--lport`/`--rport` 端口过滤，`--interval` 输出间隔（默认 1 秒），`--sample-rate` 采样率（降低开销），`--bw-hist` 启用带宽直方图
+  - **特点**：三重直方图并行收集，支持 per-interval 时间序列输出
+- **syscall_recv_latency_summary.py** [Summary 版本]
+
+  - **使用场景**：诊断用户态应用接收性能，分析 read/recv/recvfrom/recvmsg 系统调用延迟，评估 CPU/NUMA 绑定对接收性能的影响
+  - **收集数据**：系统调用延迟直方图、每次调用接收字节数、CPU 迁移次数、NUMA 节点信息
+  - **参数**：`--process` 进程名，`--pid` 进程 PID，`--port` 端口过滤，`--interval` 统计间隔（默认 5 秒），`--high-latency-threshold` 高延迟阈值（微秒）
+- **tcp_connection_analyzer.py** [Standalone 分析工具]
+
+  - **使用场景**：TCP 连接全面分析，计算带宽延迟积（BDP）和推荐缓冲区大小，检测性能瓶颈（rwnd_limited/cwnd_limited）并提供可操作的优化建议
+  - **收集数据**：TCP 连接详情、BDP 计算、缓冲区建议、瓶颈分类
+  - **参数**：`--role` (client/server)，`--local-ip`/`--local-port`/`--remote-ip`/`--remote-port` 过滤，`--interval` 监控间隔（0=单次快照），`--target-bandwidth` 目标带宽（Gbps，默认 25），`--show-analysis` 显示瓶颈分析和建议，`--json` JSON 输出
+  - **特点**：自动检测瓶颈类型并生成优化建议（调整缓冲区、拥塞控制等）
+
 #### 虚拟机网络性能 (`vm-network/`)
 
 - **vm_network_latency_summary.py** [Summary 版本]
 
   - **使用场景**：长时间监控虚拟机网络栈各阶段延迟，建立 VM 网络性能基线，识别瓶颈阶段
-  - **测量方式**：基于 BPF_HISTOGRAM 的相邻阶段延迟统计
-  - **收集数据**：VM 网络栈各阶段延迟分布直方图、端到端总延迟
-  - **性能开销**：低（内核态聚合）
-  - **监控阶段**：VNET_RX → OVS_RX → FLOW_EXTRACT → CT → QDISC → TX_QUEUE → TX_XMIT（TX 方向）；PHY_RX → OVS_TX → VNET_TX（RX 方向）
+  - **测量方式**：基于 BPF_HISTOGRAM 的延迟统计，默认仅测量端到端总延迟，可选开启逐阶段延迟分解
+  - **收集数据**：VM 网络栈各阶段延迟分布直方图、端到端总延迟、per-flow Top-N 统计
+  - **性能开销**：低（默认总延迟模式），中等（`--stage-latency` 模式，约 10 个探针）
+  - **监控阶段**：VM TX (VNET RX): VNET_RX → OVS_RX → FLOW_EXTRACT → CT → QDISC_ENQ → QDISC_DEQ → TX_QUEUE → TX_XMIT；VM RX (VNET TX): PHY_RX → OVS_TX → FLOW_EXTRACT → CT → VNET_QDISC_ENQ → VNET_QDISC_DEQ → VNET_TX
+  - **新增参数**：`--vm-ip` VM IP 过滤，`--enable-ct` 启用 conntrack 测量，`--stage-latency` 开启逐阶段分解，`--sort-by` (count/avg/p90/p99) 排序 per-flow 统计，`--top` 显示 Top-N 流
+  - **注意**：upcall 延迟测量已分离到独立工具 `ovs_upcall_latency_summary.py`
 - **vm_network_latency_details.py** [Details 版本]
 
   - **使用场景**：虚拟机网络精确延迟分析，追踪特定 VM 流量的每包处理延迟
@@ -430,14 +537,6 @@ sudo python3 measurement-tools/performance/vm-network/vm_network_latency_summary
 
   - **使用场景**：虚拟机网络性能全面监控，综合评估 VM 网络吞吐和延迟
   - **收集数据**：虚拟机特定吞吐量、PPS、完整流跟踪
-
-##### 虚拟机对延迟分析 (`vm_pair_latency/`)
-
-- **vm_pair_latency.py** [Standalone 工具]
-
-  - **使用场景**：测量同节点两个虚拟机之间的通信延迟，评估 VM-to-VM 网络性能
-  - **收集数据**：点对点延迟、基本统计信息
-  - **配置**：支持从 vm_pairs.txt 配置文件读取 VM 对信息
 
 #### 通用性能工具
 
@@ -483,6 +582,54 @@ sudo python3 measurement-tools/performance/vm-network/vm_network_latency_summary
 
   - **使用场景**：调试 TC（流量控制）配置，分析流量分类和整形行为
   - **收集数据**：TC 动作、分类结果、队列统计
+
+### 3.7 边界检测模块 (`boundary-detection/`)
+
+**模块概述**：该模块提供网络路径边界丢包检测工具，通过在网络路径的关键边界点（物理网卡、内核协议栈入口/出口）设置 eBPF 探针，追踪数据包是否通过每个边界。通过对比相邻边界的包计数来快速定位丢包发生的区间。分为系统级（system-network）和虚拟机级（vm-network）两个子类，分别适用于主机端点场景和虚拟化网络转发路径场景。
+
+#### 系统级边界检测 (`system-network/`)
+
+- **system_icmp_path_tracer.py** [Path Tracer]
+
+  - **使用场景**：检测系统网络中 ICMP 数据包在物理网卡与协议栈之间的丢包位置，支持 RX 模式（本机回复远端 ping）和 TX 模式（本机发起 ping）
+  - **监控阶段**：4 阶段：ReqRX@phy → ReqRcv@stack → RepSnd@stack → RepTX@phy
+  - **收集数据**：每个边界的包计数、请求/响应匹配统计、丢包区间定位
+  - **参数**：`--src-ip`/`--dst-ip`（必填）ICMP 请求的源/目标 IP，`--phy-iface`（必填）物理接口（逗号分隔支持 bond），`--direction` (rx/tx，默认 rx)，`--timeout-ms` 超时（默认 1000ms），`--verbose` 输出所有流事件
+- **system_tcp_path_tracer.py** [Path Tracer]
+
+  - **使用场景**：检测系统网络中 TCP 数据包在物理网卡与协议栈之间的丢包位置
+  - **监控阶段**：4 阶段双向：RX@phy → tcp_v4_rcv → __ip_queue_xmit → TX@phy
+  - **收集数据**：每个边界的包计数、TCP 序列号匹配、21-bucket 延迟直方图
+  - **参数**：`--src-ip`/`--dst-ip`（必填），`--phy-iface`（必填），`--port` 本地服务端口过滤（默认 0=全部），`--timeout-ms`，`--verbose` per-packet 输出模式，`--stats-interval` 统计间隔（默认 10 秒）
+- **system_udp_path_tracer.py** [Path Tracer]
+
+  - **使用场景**：检测系统网络中 UDP 数据包在物理网卡与协议栈之间的丢包位置，支持 IP 分片处理
+  - **监控阶段**：4 阶段：RX@phy → __udp4_lib_rcv → ip_send_skb → TX@phy
+  - **收集数据**：每个边界的包计数、IP 分片的 port_map 关联、丢包区间定位
+  - **参数**：`--src-ip`/`--dst-ip`（必填），`--phy-iface`（必填），`--port` 本地服务端口过滤，`--timeout-ms`，`--verbose`，`--stats-interval`
+  - **特点**：通过 port_map 处理 IP 分片场景下非首片的端口信息丢失问题
+
+#### 虚拟机级边界检测 (`vm-network/`)
+
+- **icmp_path_tracer.py** [Path Tracer]
+
+  - **使用场景**：追踪虚拟机环境中 ICMP 数据包在两个网络接口（如物理网卡和虚拟接口）之间的路径，定位转发路径上的丢包边界
+  - **监控阶段**：4 阶段路径跟踪（ReqRX → ReqTX → RepRX → RepTX），支持请求/响应关联
+  - **收集数据**：每个接口的包计数、请求/响应匹配、丢包区间（内部 vs 外部）
+  - **参数**：`--src-ip`/`--dst-ip`（必填），`--rx-iface`（必填）请求接收接口（逗号分隔），`--tx-iface`（必填）请求发送接口（逗号分隔），`--timeout-ms`，`--verbose`
+  - **特点**：支持 bond 接口和多 slave 网卡（每方向最多 8 个接口）
+- **tcp_path_tracer.py** [Path Tracer]
+
+  - **使用场景**：追踪虚拟机环境中 TCP 数据包在两个网络接口之间的路径，使用 TCP 序列号精确标识数据包
+  - **收集数据**：TCP 序列号标识的包跟踪、每接口包计数、双向流跟踪
+  - **参数**：`--src-ip`/`--dst-ip`（必填），`--rx-iface`/`--tx-iface`（必填），`--src-port`/`--dst-port` 端口过滤，`--timeout-ms`，`--verbose` per-packet 输出，`--stats-mode` 定期汇总模式，`--stats-interval`
+  - **特点**：假定启用 TSO/GRO（TCP 无 IP 分片），`--verbose` 与 `--stats-mode` 互斥
+- **udp_path_tracer.py** [Path Tracer]
+
+  - **使用场景**：追踪虚拟机环境中 UDP 数据包路径，支持 IP 分片组跟踪（按 IP ID 分组），需在源和目标宿主机同时部署
+  - **收集数据**：分片组完整跟踪、每阶段分片计数、丢包区间
+  - **参数**：`--src-ip`/`--dst-ip`（必填），`--rx-iface`/`--tx-iface`（必填），`--src-port`/`--dst-port`，`--timeout-ms`，`--verbose`，`--stats-mode`，`--stats-interval`
+  - **特点**：IP 分片组完整跟踪（通过 IP ID 关联），需要双端部署以完整覆盖转发路径
 
 ## 4. 工具使用指南
 
@@ -536,14 +683,19 @@ sudo bpftrace <脚本路径> [参数]
 **system_network_latency_summary.py** - 系统网络延迟直方图 [Summary 版本]
 
 ```bash
-# 系统网络相邻阶段延迟直方图统计
+# 系统网络端到端延迟直方图统计（默认总延迟模式，低开销）
 sudo python3 measurement-tools/performance/system-network/system_network_latency_summary.py \
   --phy-interface ens11 --src-ip 10.132.114.11 --dst-ip 10.132.114.12 \
   --direction rx --protocol tcp --interval 5
 
-# 监控所有协议的延迟分布
+# 开启逐阶段延迟分解（较高开销，约 10 个探针）
 sudo python3 measurement-tools/performance/system-network/system_network_latency_summary.py \
-  --phy-interface eth0 --protocol all --direction tx --interval 10
+  --phy-interface ens11 --src-ip 10.132.114.11 --dst-ip 10.132.114.12 \
+  --direction rx --protocol tcp --interval 5 --stage-latency
+
+# 按平均延迟排序 Top 20 流
+sudo python3 measurement-tools/performance/system-network/system_network_latency_summary.py \
+  --phy-interface ens11 --protocol all --direction tx --interval 10 --sort-by avg --top 20
 ```
 
 **system_network_latency_details.py** - 系统网络延迟详细分析 [Details 版本]
@@ -584,21 +736,134 @@ sudo python3 measurement-tools/performance/system-network/system_network_icmp_rt
   --direction tx --phy-interface ens11
 ```
 
+**kernel_icmp_rtt.py** - 内核级 ICMP RTT 测量
+
+```bash
+# TX 模式 - 本机发起 ping，测量内核栈延迟
+sudo python3 measurement-tools/performance/system-network/kernel_icmp_rtt.py \
+  --interface ens4 --direction tx
+
+# RX 模式 - 远端 ping 本机，测量接收路径延迟
+sudo python3 measurement-tools/performance/system-network/kernel_icmp_rtt.py \
+  --interface ens4 --direction rx
+
+# Bond 接口场景（逗号分隔多 slave）
+sudo python3 measurement-tools/performance/system-network/kernel_icmp_rtt.py \
+  --interface ens4f0,ens4f1 --direction tx --disable-kernel-stacks
+```
+
+**deploy_full_mesh_icmp_tracer.py** - 集群全网格 ICMP 部署
+
+```bash
+# 预览全网格部署命令（dry-run）
+sudo python3 measurement-tools/performance/system-network/deploy_full_mesh_icmp_tracer.py \
+  --nodes 10.132.114.11,10.132.114.12,10.132.114.13 --dry-run
+
+# 实际部署全网格 ICMP 追踪
+sudo python3 measurement-tools/performance/system-network/deploy_full_mesh_icmp_tracer.py \
+  --nodes 10.132.114.11,10.132.114.12,10.132.114.13 --user smartx --network-type storage
+
+# 检查追踪器状态
+sudo python3 measurement-tools/performance/system-network/deploy_full_mesh_icmp_tracer.py \
+  --nodes 10.132.114.11,10.132.114.12,10.132.114.13 --status
+
+# 停止所有追踪器
+sudo python3 measurement-tools/performance/system-network/deploy_full_mesh_icmp_tracer.py \
+  --nodes 10.132.114.11,10.132.114.12,10.132.114.13 --stop
+```
+
+#### 4.2.2a OVS 内部端口延迟分析工具
+
+**enqueue_to_iprec_latency_summary.py** - OVS 内部端口 RX 延迟
+
+```bash
+# OVS 内部端口 enqueue 到 ip_rcv 延迟统计
+sudo python3 measurement-tools/performance/system-network/ovs-internal-port/enqueue_to_iprec_latency_summary.py \
+  --interface br-int --interval 5
+
+# 带流过滤和高延迟阈值
+sudo python3 measurement-tools/performance/system-network/ovs-internal-port/enqueue_to_iprec_latency_summary.py \
+  --interface br-int --protocol tcp --src-ip 192.168.1.100 --threshold 100 --interval 5
+```
+
+**enqueue_to_iprec_latency_threshold.py** - 延迟阈值栈跟踪
+
+```bash
+# 超过 1ms 时捕获内核栈跟踪
+sudo python3 measurement-tools/performance/system-network/ovs-internal-port/enqueue_to_iprec_latency_threshold.py \
+  --interface br-int --threshold-us 1000
+
+# 指定协议和 IP 过滤
+sudo python3 measurement-tools/performance/system-network/ovs-internal-port/enqueue_to_iprec_latency_threshold.py \
+  --interface enp24s0f0np0 --protocol tcp --src-ip 10.0.0.1 --threshold-us 500
+```
+
+#### 4.2.2b TCP 性能分析工具
+
+**tcp_rtt_inflight_summary.py** - TCP RTT/inflight/cwnd 三重直方图
+
+```bash
+# 基本 TCP 性能直方图（每秒输出）
+sudo python3 measurement-tools/performance/system-network/tcp-perf/tcp_rtt_inflight_summary.py \
+  --interval 1
+
+# 带 IP/端口过滤和带宽直方图
+sudo python3 measurement-tools/performance/system-network/tcp-perf/tcp_rtt_inflight_summary.py \
+  --laddr 10.132.114.11 --raddr 10.132.114.12 --rport 5201 --interval 5 --bw-hist
+
+# 高流量场景降低采样率
+sudo python3 measurement-tools/performance/system-network/tcp-perf/tcp_rtt_inflight_summary.py \
+  --sample-rate 10 --interval 5
+```
+
+**syscall_recv_latency_summary.py** - recv 系统调用延迟
+
+```bash
+# 按进程名监控
+sudo python3 measurement-tools/performance/system-network/tcp-perf/syscall_recv_latency_summary.py \
+  --process iperf3 --interval 5
+
+# 按 PID 监控，设置高延迟阈值
+sudo python3 measurement-tools/performance/system-network/tcp-perf/syscall_recv_latency_summary.py \
+  --pid 12345 --interval 5 --high-latency-threshold 1000
+```
+
+**tcp_connection_analyzer.py** - TCP 连接综合分析
+
+```bash
+# 作为服务端分析连接
+sudo python3 measurement-tools/performance/system-network/tcp-perf/tcp_connection_analyzer.py \
+  --role server --local-port 5201 --show-analysis
+
+# 作为客户端分析，指定目标带宽
+sudo python3 measurement-tools/performance/system-network/tcp-perf/tcp_connection_analyzer.py \
+  --role client --remote-ip 10.132.114.12 --remote-port 5201 --target-bandwidth 25 --show-analysis
+
+# 持续监控模式（每 5 秒输出）
+sudo python3 measurement-tools/performance/system-network/tcp-perf/tcp_connection_analyzer.py \
+  --role server --local-port 5201 --interval 5 --show-analysis
+```
+
 #### 4.2.3 虚拟机网络性能工具
 
 **vm_network_latency_summary.py** - VM 网络延迟直方图 [Summary 版本]
 
 ```bash
-# VM 网络相邻阶段延迟直方图统计
+# VM 网络端到端延迟直方图统计（默认总延迟模式，低开销）
 sudo python3 measurement-tools/performance/vm-network/vm_network_latency_summary.py \
   --vm-interface vnet0 --phy-interface ens4 \
   --src-ip 172.21.153.113 --dst-ip 172.21.153.114 \
   --direction rx --protocol tcp --interval 5
 
-# 监控所有协议的 VM 网络延迟分布
+# 开启逐阶段延迟分解
 sudo python3 measurement-tools/performance/vm-network/vm_network_latency_summary.py \
-  --vm-interface tap0 --phy-interface eth0 \
-  --protocol all --direction tx --interval 10
+  --vm-interface vnet0 --phy-interface ens4 \
+  --direction rx --protocol tcp --interval 5 --stage-latency
+
+# 按 P99 排序 Top 20 流，指定 VM IP
+sudo python3 measurement-tools/performance/vm-network/vm_network_latency_summary.py \
+  --vm-interface vnet0 --phy-interface ens4 --vm-ip 172.21.153.113 \
+  --direction rx --protocol tcp --interval 5 --sort-by p99 --top 20
 ```
 
 **vm_network_latency_details.py** - VM 网络延迟详细分析 [Details 版本]
@@ -619,22 +884,6 @@ sudo python3 measurement-tools/performance/vm-network/vm_network_performance_met
   --vm-interface vnet0 --phy-interface ens4 \
   --src-ip 172.21.153.113 --dst-ip 172.21.153.114 \
   --direction rx --protocol tcp
-```
-
-#### 4.2.4 虚拟机对延迟分析工具
-
-**vm_pair_latency.py** - 虚拟机间延迟分析
-
-```bash
-# 虚拟机对延迟监控（需配合 vm_pairs.txt 配置文件）
-sudo python3 measurement-tools/performance/vm-network/vm_pair_latency/vm_pair_latency.py
-```
-
-配置文件 `vm_pairs.txt` 示例格式：
-```
-# 格式: send_dev recv_dev [描述]
-vnet0 vnet1 VM1-to-VM2
-tap0 tap1 Pair-A
 ```
 
 ### 4.3 Linux 网络栈模块 (Linux Network Stack)
@@ -678,6 +927,14 @@ sudo python3 measurement-tools/linux-network-stack/packet-drop/eth_drop.py \
 sudo python3 measurement-tools/linux-network-stack/packet-drop/eth_drop.py \
   --type ipv4 --src-ip 192.168.1.100 --dst-port 80 \
   --interface eth0 --verbose
+
+# 按 L4 协议过滤（仅 ICMP 丢包）
+sudo python3 measurement-tools/linux-network-stack/packet-drop/eth_drop.py \
+  --interface ens4 --type ipv4 --l4-protocol icmp
+
+# 关闭正常丢包模式过滤，查看所有 kfree_skb 事件
+sudo python3 measurement-tools/linux-network-stack/packet-drop/eth_drop.py \
+  --interface ens4 --disable-normal-filter
 ```
 
 **kernel_drop_stack_stats_summary_all.py** - 内核丢包栈统计
@@ -698,6 +955,14 @@ sudo python3 measurement-tools/linux-network-stack/packet-drop/kernel_drop_stack
 ```bash
 # 队列规则丢包监控
 sudo python3 measurement-tools/linux-network-stack/packet-drop/qdisc_drop_trace.py
+
+# 仅显示丢弃的数据包
+sudo python3 measurement-tools/linux-network-stack/packet-drop/qdisc_drop_trace.py \
+  --interface ens4 --drops-only
+
+# 高流量场景仅输出汇总统计
+sudo python3 measurement-tools/linux-network-stack/packet-drop/qdisc_drop_trace.py \
+  --interface ens4 --summary
 ```
 
 #### 4.3.3 连接跟踪和分片工具
@@ -918,6 +1183,40 @@ sudo python3 measurement-tools/kvm-virt-network/kvm/kvm_irqfd_stats_summary.py \
 - `--category {data,control}`: 中断类别过滤（data=vhost 线程，control=QEMU 进程）
 - `--subcategory {rx,tx}`: 子类别过滤（仅当 --category=data 时有效）
 
+#### 4.5.5 KVM TX 延迟和中断链工具
+
+**kvm_vhost_tun_latency_no_discovery_details.py** - KVM 主机侧 TX 延迟
+
+```bash
+# 测量指定设备的 TX 延迟（自动检测 QEMU PID）
+sudo python3 measurement-tools/kvm-virt-network/kvm/kvm_vhost_tun_latency_no_discovery_details.py \
+  --device vnet94
+
+# 指定 QEMU PID 和流过滤
+sudo python3 measurement-tools/kvm-virt-network/kvm/kvm_vhost_tun_latency_no_discovery_details.py \
+  --device vnet94 --qemu-pid 12345 --flow "proto=tcp,dst=192.168.1.100,dport=5201"
+
+# 仅统计模式（不输出 per-packet 详情）
+sudo python3 measurement-tools/kvm-virt-network/kvm/kvm_vhost_tun_latency_no_discovery_details.py \
+  --device vnet0 --no-detail --duration 60
+```
+
+**tun_tx_to_kvm_irq.py** - TUN TX 中断链跟踪
+
+```bash
+# 跟踪指定设备的完整中断链
+sudo python3 measurement-tools/kvm-virt-network/tun/tun_tx_to_kvm_irq.py \
+  --device vnet0 --stats-interval 10
+
+# 带协议和 IP 过滤
+sudo python3 measurement-tools/kvm-virt-network/tun/tun_tx_to_kvm_irq.py \
+  --device vnet0 --protocol tcp --dst-ip 192.168.1.100 --dst-port 5201
+
+# 启用中断链分析
+sudo python3 measurement-tools/kvm-virt-network/tun/tun_tx_to_kvm_irq.py \
+  --device vnet0 --analyze-chains --stats-interval 5
+```
+
 ### 4.6 Bpftrace 脚本工具
 
 #### 4.6.1 网络异常检测脚本
@@ -1016,6 +1315,102 @@ sudo python3 measurement-tools/cpu/offcputime-ts.py
 --no-stack-trace         # 禁用栈跟踪
 --clear                  # 清空计数器（部分工具）
 --top NUMBER             # 显示前 N 项（统计工具）
+--stage-latency          # 开启逐阶段延迟分解（latency summary 工具）
+--sort-by METRIC         # 排序 per-flow 统计（count/avg/p90/p99）
+--l4-protocol PROTO      # L4 协议过滤（icmp/tcp/udp/all，丢包工具）
+--drops-only             # 仅显示丢弃的数据包（qdisc_drop_trace）
+--disable-normal-filter  # 关闭正常丢包过滤（eth_drop）
+--vm-ip IP               # VM IP 地址过滤（vm_network_latency_summary）
+```
+
+### 4.9 边界检测模块 (Boundary Detection)
+
+边界检测工具通过在网络路径关键点设置 eBPF 探针，快速定位丢包发生的区间。工具分为系统级（主机端点场景）和虚拟机级（转发路径场景）两类。
+
+#### 4.9.1 系统级边界检测
+
+**system_icmp_path_tracer.py** - 系统 ICMP 路径追踪
+
+```bash
+# RX 模式 - 远端 ping 本机，检测回复路径丢包
+sudo python3 measurement-tools/boundary-detection/system-network/system_icmp_path_tracer.py \
+  --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --phy-iface ens4 --direction rx
+
+# TX 模式 - 本机发起 ping，检测发送路径丢包
+sudo python3 measurement-tools/boundary-detection/system-network/system_icmp_path_tracer.py \
+  --src-ip 10.132.114.11 --dst-ip 10.132.114.12 --phy-iface ens4 --direction tx
+
+# Bond 接口（逗号分隔多 slave），verbose 输出
+sudo python3 measurement-tools/boundary-detection/system-network/system_icmp_path_tracer.py \
+  --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --phy-iface ens4f0,ens4f1 --direction rx --verbose
+```
+
+**system_tcp_path_tracer.py** - 系统 TCP 路径追踪
+
+```bash
+# 基本 TCP 边界检测（stats 模式，每 10 秒输出）
+sudo python3 measurement-tools/boundary-detection/system-network/system_tcp_path_tracer.py \
+  --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --phy-iface ens4
+
+# 指定端口过滤和 verbose per-packet 输出
+sudo python3 measurement-tools/boundary-detection/system-network/system_tcp_path_tracer.py \
+  --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --phy-iface ens4 --port 5201 --verbose
+```
+
+**system_udp_path_tracer.py** - 系统 UDP 路径追踪（含分片处理）
+
+```bash
+# 基本 UDP 边界检测
+sudo python3 measurement-tools/boundary-detection/system-network/system_udp_path_tracer.py \
+  --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --phy-iface ens4
+
+# 指定端口和统计间隔
+sudo python3 measurement-tools/boundary-detection/system-network/system_udp_path_tracer.py \
+  --src-ip 10.132.114.12 --dst-ip 10.132.114.11 --phy-iface ens4 --port 4789 --stats-interval 5
+```
+
+#### 4.9.2 虚拟机级边界检测
+
+**icmp_path_tracer.py** - VM ICMP 路径追踪
+
+```bash
+# 追踪 ICMP 包在两个接口之间的路径
+sudo python3 measurement-tools/boundary-detection/vm-network/icmp_path_tracer.py \
+  --src-ip 172.21.153.113 --dst-ip 172.21.153.114 \
+  --rx-iface ens4 --tx-iface vnet0
+
+# Bond 接口场景
+sudo python3 measurement-tools/boundary-detection/vm-network/icmp_path_tracer.py \
+  --src-ip 172.21.153.113 --dst-ip 172.21.153.114 \
+  --rx-iface ens4f0,ens4f1 --tx-iface vnet0 --verbose
+```
+
+**tcp_path_tracer.py** - VM TCP 路径追踪
+
+```bash
+# TCP 边界检测（stats 模式）
+sudo python3 measurement-tools/boundary-detection/vm-network/tcp_path_tracer.py \
+  --src-ip 172.21.153.113 --dst-ip 172.21.153.114 \
+  --rx-iface ens4 --tx-iface vnet0 --stats-mode --stats-interval 10
+
+# 带端口过滤的 verbose 模式
+sudo python3 measurement-tools/boundary-detection/vm-network/tcp_path_tracer.py \
+  --src-ip 172.21.153.113 --dst-ip 172.21.153.114 \
+  --rx-iface ens4 --tx-iface vnet0 --dst-port 5201 --verbose
+```
+
+**udp_path_tracer.py** - VM UDP 路径追踪（需双端部署）
+
+```bash
+# UDP 边界检测（含分片组跟踪）
+sudo python3 measurement-tools/boundary-detection/vm-network/udp_path_tracer.py \
+  --src-ip 172.21.153.113 --dst-ip 172.21.153.114 \
+  --rx-iface ens4 --tx-iface vnet0 --stats-mode --stats-interval 10
+
+# 带端口过滤
+sudo python3 measurement-tools/boundary-detection/vm-network/udp_path_tracer.py \
+  --src-ip 172.21.153.113 --dst-ip 172.21.153.114 \
+  --rx-iface ens4 --tx-iface vnet0 --dst-port 4789 --verbose
 ```
 
 ## 5. 输出数据格式详解
@@ -1698,6 +2093,47 @@ Tracing kernel packet drops. Hit Ctrl-C to end.
 - **错误码**: BPF 程序加载错误信息
 
 这些输出格式提供了丰富的网络性能和问题诊断信息，帮助用户全面理解系统网络状态和性能特征。
+
+### 5.7 边界检测工具输出格式
+
+边界检测工具提供两种输出模式：统计模式（默认）和 verbose 模式。
+
+#### 5.7.1 统计模式输出
+
+统计模式按时间间隔输出每个监控阶段的包计数，通过对比相邻阶段的计数差异定位丢包区间：
+
+```
+=== Stats interval 10s ===
+Stage               | FWD count | REV count | FWD drop% | REV drop%
+RX@phy              |      1000 |       998 |     0.00% |     0.00%
+tcp_v4_rcv          |       998 |           |     0.20% |
+__ip_queue_xmit     |           |       995 |           |     0.30%
+TX@phy              |       995 |       993 |     0.30% |     0.50%
+```
+
+#### 5.7.2 Verbose 模式输出
+
+Verbose 模式输出每个数据包通过各边界点的事件：
+
+```
+[2024-01-15 10:30:15.123] ICMP req 10.0.0.1→10.0.0.2 id=1234 seq=1 stage=ReqRX@phy latency=0us
+[2024-01-15 10:30:15.125] ICMP req 10.0.0.1→10.0.0.2 id=1234 seq=1 stage=ReqRcv@stack latency=2us
+[2024-01-15 10:30:15.126] ICMP rep 10.0.0.2→10.0.0.1 id=1234 seq=1 stage=RepSnd@stack latency=3us
+[2024-01-15 10:30:15.128] ICMP rep 10.0.0.2→10.0.0.1 id=1234 seq=1 stage=RepTX@phy latency=5us
+```
+
+#### 5.7.3 延迟直方图（TCP/UDP Path Tracer）
+
+TCP 和 UDP path tracer 在 stats 模式下额外输出 21-bucket 延迟直方图：
+
+```
+Latency histogram (us):
+  [0-1)     : ######### 450
+  [1-2)     : ############ 600
+  [2-4)     : ###### 300
+  [4-8)     : ### 150
+  ...
+```
 
 ## 6. 部署和环境
 

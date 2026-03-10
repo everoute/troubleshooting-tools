@@ -88,10 +88,10 @@ done
 
 # Validate dist
 case $DIST in
-    el7|oe1|tl3)
+    el7|el9|oe1|tl3)
         ;;
     *)
-        error "Invalid dist: $DIST (must be el7, oe1, or tl3)"
+        error "Invalid dist: $DIST (must be el7, el9, oe1, or tl3)"
         ;;
 esac
 
@@ -105,6 +105,9 @@ if [ "$USE_DOCKER" = true ]; then
     case $DIST in
         el7)
             DOCKER_IMAGE="centos:7"
+            ;;
+        el9)
+            DOCKER_IMAGE="registry.smtx.io/linux/rockylinux:9.7.20251123"
             ;;
         oe1)
             DOCKER_IMAGE="openeuler/openeuler:20.03"

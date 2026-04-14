@@ -20,11 +20,13 @@ Usage: sudo python3 kernel_drop_stack_stats_fivetuple.py [-i INTERVAL] [-d DURAT
        --l4-protocol PROTO: filter by L4 protocol (tcp/udp/icmp/all, default: all)
        --max-entries NUM: maximum histogram entries (default: 10240)
        --group-by: grouping mode (stack/fivetuple/all, default: all)
+       --expt-ip: filter out the except ip address packet
 
 Examples:
   sudo python3 kernel_drop_stack_stats_summary_all.py -i 5 -d 60 -n eth0
   sudo python3 kernel_drop_stack_stats_summary_all.py -t 10 -n br-int --src 192.168.1.10 --dst-port 80
   sudo python3 kernel_drop_stack_stats_summary_all.py --l4-protocol tcp --src-port 22 --group-by fivetuple
+  sudo python3 kernel_drop_stack_stats_summary_all.py -i 5 --l4-protocol icmp --expt-ip "192.168.1.11" --group-by fivetuple
 
 """
 
@@ -82,6 +84,7 @@ struct custom_vlan_hdr {
 #define DST_PORT %d
 #define L4_PROTOCOL %d
 #define MAX_ENTRIES %d
+#define EXPT_IP 0x%x
 
 union name_buf{
     char name[IFNAMSIZ];
@@ -262,7 +265,7 @@ static inline int extract_five_tuple(struct sk_buff* skb, struct five_tuple *tup
 
 static inline int five_tuple_filter(struct five_tuple *tuple) {
     // If no five-tuple filters are set, allow all
-    if (SRC_IP == 0 && DST_IP == 0 && SRC_PORT == 0 && DST_PORT == 0 && L4_PROTOCOL == 0) {
+    if (SRC_IP == 0 && DST_IP == 0 && SRC_PORT == 0 && DST_PORT == 0 && L4_PROTOCOL == 0 && EXPT_IP == 0) {
         return 1;
     }
 
@@ -280,6 +283,11 @@ static inline int five_tuple_filter(struct five_tuple *tuple) {
     // Check port filters
     if ((SRC_PORT != 0 && tuple->sport != SRC_PORT) ||
         (DST_PORT != 0 && tuple->dport != DST_PORT)) {
+        return 0;
+    }
+
+    // Check expt filter
+    if ((EXPT_IP != 0) && (tuple->saddr == EXPT_IP || tuple->daddr == EXPT_IP)) {
         return 0;
     }
 
@@ -490,6 +498,7 @@ def main():
                         help="maximum histogram entries (default: 10240)")
     parser.add_argument("--group-by", type=str, choices=['all', 'stack', 'fivetuple'],
                         default='all', help="grouping mode (default: all)")
+    parser.add_argument("--expt-ip", type=str, help="except IP address filter")
     args = parser.parse_args()
 
     # Process five-tuple arguments
@@ -497,6 +506,7 @@ def main():
     l4_protocol = l4_protocol_map.get(args.l4_protocol, 0)
     src_ip_hex = ip_to_hex(args.src_ip) if args.src_ip else 0
     dst_ip_hex = ip_to_hex(args.dst_ip) if args.dst_ip else 0
+    expt_ip_hex = ip_to_hex(args.expt_ip) if args.expt_ip else 0
     src_port = args.src_port if args.src_port else 0
     dst_port = args.dst_port if args.dst_port else 0
 
@@ -512,6 +522,8 @@ def main():
         filters.append("src IP: %s" % args.src_ip)
     if args.dst_ip:
         filters.append("dst IP: %s" % args.dst_ip)
+    if args.expt_ip:
+        filters.append("expt IP: %s" % args.expt_ip)
     if args.src_port:
         filters.append("src port: %d" % args.src_port)
     if args.dst_port:
@@ -529,7 +541,7 @@ def main():
     print("="*60)
 
     # Initialize BPF with five-tuple parameters
-    b = BPF(text=bpf_text % (src_ip_hex, dst_ip_hex, src_port, dst_port, l4_protocol, args.max_entries))
+    b = BPF(text=bpf_text % (src_ip_hex, dst_ip_hex, src_port, dst_port, l4_protocol, args.max_entries, expt_ip_hex))
     b.attach_kprobe(event="kfree_skb", fn_name="trace_kfree_skb")
 
     # Set device name filter if specified

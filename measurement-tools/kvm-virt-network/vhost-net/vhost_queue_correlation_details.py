@@ -145,6 +145,13 @@ def needs_5x_vhost_layout():
     # Other 5.x kernels typically use 5.x layout
     return True
 
+def needs_6x_vhost_layout():
+    """
+    Check if kernel needs 6.x vhost structure additions.
+    """
+    major, minor = get_kernel_version()
+    return major >= 6
+
 # BPF program for queue correlation using sock pointer
 bpf_text = """
 #include <linux/skbuff.h>
@@ -153,8 +160,8 @@ bpf_text = """
 #include <linux/udp.h>
 #include <linux/netdevice.h>
 #include <linux/if_ether.h>
-#include <net/ip.h>
 #include <net/sock.h>
+#include <net/xdp.h>
 #include <linux/socket.h>
 #include <linux/ptr_ring.h>
 #include <linux/if_tun.h>
@@ -253,6 +260,14 @@ struct tun_file {
 // Complete vhost structures from kernel headers (drivers/vhost/vhost.h)
 // Need complete definition for correct field offsets
 
+// KERNEL_VERSION_6X controls 6.x vhost structure additions
+// Set via Python based on kernel version detection
+#ifndef KERNEL_VERSION_6X
+#define KERNEL_VERSION_6X 0
+#endif
+
+struct vhost_virtqueue;
+
 struct vhost_work {
     struct llist_node node;
     void *fn;  // vhost_work_fn_t
@@ -266,6 +281,9 @@ struct vhost_poll {
     struct vhost_work work;
     __poll_t mask;
     struct vhost_dev *dev;
+#if KERNEL_VERSION_6X
+    struct vhost_virtqueue *vq;
+#endif
 };
 
 struct vhost_dev {
@@ -274,6 +292,20 @@ struct vhost_dev {
     struct vhost_virtqueue **vqs;
     int nvqs;
     struct eventfd_ctx *log_ctx;
+#if KERNEL_VERSION_6X
+    struct vhost_umem *umem;
+    struct vhost_umem *iotlb;
+    spinlock_t iotlb_lock;
+    struct list_head read_list;
+    struct list_head pending_list;
+    wait_queue_head_t wait;
+    int iov_limit;
+    int weight;
+    int byte_weight;
+    char worker_xa[16];
+    bool use_worker;
+    void *msg_handler;
+#else
     struct llist_head work_list;
     struct task_struct *worker;
     struct vhost_umem *umem;
@@ -285,6 +317,7 @@ struct vhost_dev {
     int iov_limit;
     int weight;
     int byte_weight;
+#endif
 };
 
 // irq_bypass_producer structure (kernel 5.x+)
@@ -322,6 +355,9 @@ struct vhost_vring_call {
 
 struct vhost_virtqueue {
     struct vhost_dev *dev;
+#if KERNEL_VERSION_6X
+    struct vhost_worker *worker;
+#endif
 
     // The actual ring of buffers
     struct mutex mutex;
@@ -381,7 +417,14 @@ struct vhost_virtqueue {
     void *private_data;            // This is the socket pointer we need!
     u64 acked_features;
     u64 acked_backend_features;
-    
+
+#if KERNEL_VERSION_6X
+    void *log_base;
+    struct vhost_log *log;
+    struct iovec log_iov[64];
+    bool is_le;
+    u32 busyloop_timeout;
+#else
     // Is this vq being used by a worker?
     bool is_le;
     
@@ -405,6 +448,7 @@ struct vhost_virtqueue {
     
     // Memory mapping
     struct mm_struct *mm;
+#endif
 };
 
 // Complete vhost_net structures from kernel headers
@@ -422,9 +466,16 @@ struct vhost_net_virtqueue {
     // vhost zerocopy support fields
     int upend_idx;
     int done_idx;
+#if KERNEL_VERSION_6X
+    int batched_xdp;
+    void *ubuf_info;
+#endif
     struct vhost_net_ubuf_ref *ubufs;
     struct ptr_ring *rx_ring;
     struct vhost_net_buf rxq;
+#if KERNEL_VERSION_6X
+    void *xdp;
+#endif
 };
 
 #define VHOST_NET_VQ_MAX 2
@@ -1250,6 +1301,7 @@ Examples:
 
     # Detect kernel version, distro and set appropriate structure layout
     kernel_5x = needs_5x_vhost_layout()
+    kernel_6x = needs_6x_vhost_layout()
     major, minor = get_kernel_version()
     distro = get_distro_id()
 
@@ -1271,7 +1323,9 @@ Examples:
             print("Detected kernel version: {}.{}, distro: {}".format(major, minor, distro))
             print("IRQ bypass module: {}".format("loaded" if irqbypass_loaded else "not loaded"))
             print("Using {} vhost structure layout".format(
-                "5.x (with vhost_vring_call, 72 bytes)" if kernel_5x else "4.x (pointer only, 8 bytes)"))
+                "6.x (with vhost_worker/vhost_poll.vq)" if kernel_6x else
+                "5.x (with vhost_vring_call, 72 bytes)" if kernel_5x else
+                "4.x (pointer only, 8 bytes)"))
             if vhost_notify_func:
                 print("vhost_notify function: {} (constprop={})".format(
                     vhost_notify_func, "YES" if is_constprop else "NO"))
@@ -1283,6 +1337,8 @@ Examples:
         defines = []
         if kernel_5x:
             defines.append("#define KERNEL_VERSION_5X 1")
+        if kernel_6x:
+            defines.append("#define KERNEL_VERSION_6X 1")
         if is_constprop:
             defines.append("#define VHOST_NOTIFY_CONSTPROP 1")
 

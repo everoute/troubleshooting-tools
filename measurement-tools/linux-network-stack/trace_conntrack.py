@@ -919,7 +919,12 @@ def attach_kretprobe(event_name, fn_name):
 # Attach basic probes
 attach_probe("nf_conntrack_in", "trace_nf_conntrack_in")
 attach_probe("__ovs_ct_lookup", "trace_ovs_ct_lookup")
-attach_probe("ovs_ct_update_key", "trace_ovs_ct_update_key")
+if BPF.get_kprobe_functions(b"ovs_ct_update_key"):
+    attach_probe("ovs_ct_update_key", "trace_ovs_ct_update_key")
+elif BPF.get_kprobe_functions(b"__ovs_ct_update_key"):
+    attach_probe("__ovs_ct_update_key", "trace_ovs_ct_update_key")
+else:
+    print("Warning: Could not find kprobe for 'ovs_ct_update_key' or '__ovs_ct_update_key'. Conntrack key update events will not be traced.")
 attach_probe("__nf_ct_refresh_acct", "trace_nf_ct_refresh_acct")
 attach_probe("ovs_ct_execute", "trace_ovs_ct_execute")
 

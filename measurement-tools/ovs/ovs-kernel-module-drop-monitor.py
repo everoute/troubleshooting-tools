@@ -359,7 +359,13 @@ b = BPF(text=bpf_text % (src_ip_hex, dst_ip_hex, src_port, dst_port, protocol_nu
 
 # Attach kprobes
 b.attach_kprobe(event="clone_execute", fn_name="trace_clone_execute")
-b.attach_kprobe(event="kfree_skb", fn_name="trace_kfree_skb")
+if BPF.get_kprobe_functions(b"__kfree_skb"):
+    b.attach_kprobe(event="__kfree_skb", fn_name="trace_kfree_skb")
+elif BPF.get_kprobe_functions(b"kfree_skb"):
+    b.attach_kprobe(event="kfree_skb", fn_name="trace_kfree_skb")
+else:
+    print("Warning: Could not find kprobe for '__kfree_skb' or 'kfree_skb'. Free events will not be traced.")
+    exit(1)
 
 # Process events from perf buffer
 def print_ovs_drop_event(cpu, data, size):

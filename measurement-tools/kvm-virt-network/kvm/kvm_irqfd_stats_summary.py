@@ -82,7 +82,7 @@ typedef struct hist_key {
     u64 irqfd_ptr;
     u32 gsi;
     u32 cpu_id;            // CPU ID
-    u32 pid;
+    u32 tid;
     char comm[16];
     // irqfd_wakeup function parameters
     u64 wait_ptr;          // wait_queue_entry_t *wait parameter
@@ -164,7 +164,7 @@ BPF_HASH(arch_set_irq_args, u64, struct arch_set_irq_ret_key, 1024);
 // Filter parameters (set from userspace)
 struct filter_params {
     u32 qemu_pid;          // Required parameter
-    u32 vhost_pid;         // 0 means no filtering (only used when category=data)
+    u32 vhost_tid;         // 0 means no filtering (only used when category=data)
     u8 filter_category;    // 0=all, 1=data, 2=control
     u8 filter_subcategory; // 0=all, 1=rx, 2=tx
 };
@@ -200,7 +200,9 @@ int trace_vm_irqfd_stats(struct pt_regs *ctx) {
         return 0;
     }
     
-    u32 pid = bpf_get_current_pid_tgid() >> 32;
+    u64 pid_tgid = bpf_get_current_pid_tgid();
+    u32 pid = pid_tgid >> 32;
+    u32 tid = (u32)pid_tgid;
     char comm[16] = {};
     bpf_get_current_comm(&comm, sizeof(comm));
     
@@ -247,8 +249,8 @@ int trace_vm_irqfd_stats(struct pt_regs *ctx) {
         if (!is_vhost_match) {
             return 0;
         }
-        // Additional vhost PID filtering if specified
-        if (filter->vhost_pid != 0 && pid != filter->vhost_pid) {
+        // Additional vhost TID filtering if specified
+        if (filter->vhost_tid != 0 && tid != filter->vhost_tid) {
             return 0;
         }
     } else if (filter->filter_category == 2) {
@@ -266,7 +268,7 @@ int trace_vm_irqfd_stats(struct pt_regs *ctx) {
     hist_key.irqfd_ptr = (u64)irqfd;
     hist_key.gsi = (u32)gsi;
     hist_key.cpu_id = bpf_get_smp_processor_id();
-    hist_key.pid = pid;
+    hist_key.tid = tid;
     // Copy comm manually
     #pragma unroll
     for (int i = 0; i < 16; i++) {
@@ -469,7 +471,7 @@ class HistKey(ct.Structure):
         ("irqfd_ptr", ct.c_uint64),
         ("gsi", ct.c_uint32),
         ("cpu_id", ct.c_uint32),
-        ("pid", ct.c_uint32),
+        ("tid", ct.c_uint32),
         ("comm", ct.c_char * 16),
         # irqfd_wakeup function parameters
         ("wait_ptr", ct.c_uint64),
@@ -529,7 +531,7 @@ class KvmVcpuKickHistKey(ct.Structure):
 class FilterParams(ct.Structure):
     _fields_ = [
         ("qemu_pid", ct.c_uint32),
-        ("vhost_pid", ct.c_uint32),
+        ("vhost_tid", ct.c_uint32),
         ("filter_category", ct.c_uint8),
         ("filter_subcategory", ct.c_uint8),
     ]
@@ -576,7 +578,7 @@ def print_histogram_stats(b):
             'gsi': None,
             'eventfd': None,
             'cpus': set(),
-            'pids': set(),
+            'tids': set(),
             'comms': set(),
             'data_count': 0,
             'control_count': 0,
@@ -628,7 +630,7 @@ def print_histogram_stats(b):
             queue_stat['eventfd'] = irqfd_info.eventfd_ctx
         
         queue_stat['cpus'].add(k.cpu_id)
-        queue_stat['pids'].add(k.pid)
+        queue_stat['tids'].add(k.tid)
         
         comm_str = k.comm.decode('utf-8', 'replace')
         queue_stat['comms'].add(comm_str)
@@ -826,9 +828,9 @@ def print_histogram_stats(b):
                 print("        Categories: {}".format(", ".join(categories)))
             
             print("        CPU Distribution: {}".format(sorted(list(queue_stat['cpus']))))
-            print("        Process: {} (PID: {})".format(
+            print("        Process: {} (TID: {})".format(
                 ', '.join(list(queue_stat['comms'])[:3]),
-                ', '.join(str(pid) for pid in sorted(list(queue_stat['pids']))[:3])
+                ', '.join(str(tid) for tid in sorted(list(queue_stat['tids']))[:3])
             ))
             
             # Display call sources for this GSI
@@ -867,7 +869,7 @@ def main():
     parser = argparse.ArgumentParser(description="VM Interrupt Statistics Tool - Histogram Version (BCC Statistics Features)")
     parser.add_argument("qemu_pid", type=int, help="QEMU-KVM process PID (required)")
     parser.add_argument("--interval", type=int, default=5, help="Statistics output interval (seconds)")
-    parser.add_argument("--vhost-pid", type=int, help="Filter specific VHOST thread PID (only with --category=data)")
+    parser.add_argument("--vhost-tid", type=int, help="Filter specific VHOST thread TID (only with --category=data)")
     parser.add_argument("--category", choices=['data', 'control'], help="Filter interrupt category")
     parser.add_argument("--subcategory", choices=['rx', 'tx'], help="Filter RX or TX (only with --category=data)")
     args = parser.parse_args()
@@ -885,15 +887,21 @@ def main():
         print("Successfully attached to kvm_arch_set_irq_inatomic")
         b.attach_kprobe(event="kvm_set_msi", fn_name="trace_kvm_set_msi")
         print("Successfully attached to kvm_set_msi")
-        b.attach_kprobe(event="kvm_vcpu_kick", fn_name="trace_kvm_vcpu_kick")
-        print("Successfully attached to kvm_vcpu_kick")
+        if BPF.get_kprobe_functions(b"__kvm_vcpu_kick"):
+            b.attach_kprobe(event="__kvm_vcpu_kick", fn_name="trace_kvm_vcpu_kick")
+            print("Successfully attached to __kvm_vcpu_kick")
+        elif BPF.get_kprobe_functions(b"kvm_vcpu_kick"):
+            b.attach_kprobe(event="kvm_vcpu_kick", fn_name="trace_kvm_vcpu_kick")
+            print("Successfully attached to kvm_vcpu_kick")
+        else:
+            print("Warning: Could not find kprobe for '__kvm_vcpu_kick' or 'kvm_vcpu_kick'. VCPU kick events will not be traced.")
     except Exception as e:
         print("Loading failed: {}".format(e))
         return
     
     # Validate arguments
-    if args.vhost_pid and args.category != 'data':
-        print("Error: --vhost-pid can only be used with --category=data")
+    if args.vhost_tid and args.category != 'data':
+        print("Error: --vhost-tid can only be used with --category=data")
         return
     
     if args.subcategory and not args.category:
@@ -902,7 +910,7 @@ def main():
     
     filter_params = FilterParams()
     filter_params.qemu_pid = args.qemu_pid
-    filter_params.vhost_pid = args.vhost_pid if args.vhost_pid else 0
+    filter_params.vhost_tid = args.vhost_tid if args.vhost_tid else 0
     
     # Convert category filtering
     if args.category == 'data':
@@ -927,7 +935,7 @@ def main():
     print("="*80)
     print("Features:")
     print("  - Use BPF_HISTOGRAM for kernel-side statistics aggregation")
-    print("  - Fixed vhost PID and COMM filtering issues")
+    print("  - Fixed vhost TID and COMM filtering issues")
     print("  - Periodic statistics histogram output")
     print("  - Call source analysis with irqfd_wakeup parameter tracking")
     print("  - Complete interrupt chain tracking: irqfd_wakeup -> kvm_arch_set_irq_inatomic -> kvm_set_msi -> kvm_vcpu_kick")
@@ -941,8 +949,8 @@ def main():
         filters.append("Tracking both vhost-{} threads and control interrupts".format(args.qemu_pid))
     elif args.category == 'data':
         filters.append("Category: data (vhost-{} threads only)".format(args.qemu_pid))
-        if args.vhost_pid:
-            filters.append("VHOST Thread PID: {} (specific thread)".format(args.vhost_pid))
+        if args.vhost_tid:
+            filters.append("VHOST Thread TID: {} (specific thread)".format(args.vhost_tid))
     elif args.category == 'control':
         filters.append("Category: control (QEMU process only)")
     

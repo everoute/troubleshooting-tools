@@ -173,62 +173,52 @@ class EBPFCentricWorkflowGenerator:
 
     def _get_performance_tests_for_env(self, env_name: str, perf_spec: Dict) -> List[Dict]:
         """Get performance test configurations for environment"""
-        # Generate PPS configs - unified style (no stream count in config name)
-        pps_configs = []
-        if 'pps' in perf_spec['performance_tests']:
-            pps_config = perf_spec['performance_tests']['pps']
-            # Add single_stream if it exists
-            if 'single_stream' in pps_config:
-                pps_configs.append('single_stream')
-            # Add multi_stream config (without stream count suffix)
-            if 'multi_stream' in pps_config:
-                pps_configs.append('multi_stream')
-
-        return [
-            {
-                "type": "throughput",
-                "configs": ["single_stream", "multi_stream"]
-            },
-            {
-                "type": "latency",
-                "configs": ["tcp_rr", "udp_rr"]
-            },
-            {
-                "type": "pps",
-                "configs": pps_configs
-            }
-        ]
+        return self._build_performance_tests(
+            ['throughput', 'latency', 'pps'], perf_spec
+        )
 
     def _get_applicable_performance_tests(self, test_types: List[str],
                                          perf_spec: Dict) -> List[Dict]:
         """Get applicable performance tests"""
+        return self._build_performance_tests(test_types, perf_spec)
+
+    def _build_performance_tests(self, test_types: List[str],
+                                 perf_spec: Dict) -> List[Dict]:
+        """Build performance tests from config, preserving only enabled configs."""
         tests = []
+        perf_tests = perf_spec.get('performance_tests', {})
+
         for test_type in test_types:
             if test_type == "throughput":
-                tests.append({
-                    "type": "throughput",
-                    "configs": ["single_stream", "multi_stream"]
-                })
+                throughput = perf_tests.get('throughput', {})
+                configs = [
+                    name for name in ['single_stream', 'multi_stream']
+                    if name in throughput
+                ]
             elif test_type == "latency":
-                tests.append({
-                    "type": "latency",
-                    "configs": ["tcp_rr", "udp_rr"]
-                })
+                latency = perf_tests.get('latency', {})
+                configs = [
+                    name for name in ['tcp_rr', 'udp_rr']
+                    if name in latency
+                ]
             elif test_type == "pps":
-                # Generate PPS configs - unified style (no stream count in config name)
-                pps_configs = []
-                if 'pps' in perf_spec['performance_tests']:
-                    pps_config = perf_spec['performance_tests']['pps']
-                    # Add single_stream if it exists
-                    if 'single_stream' in pps_config:
-                        pps_configs.append('single_stream')
-                    # Add multi_stream config (without stream count suffix)
-                    if 'multi_stream' in pps_config:
-                        pps_configs.append('multi_stream')
+                pps = perf_tests.get('pps', {})
+                configs = [
+                    name for name in ['single_stream', 'multi_stream']
+                    if name in pps
+                ]
+            elif test_type == "icmp_ping":
+                icmp_ping = perf_tests.get('icmp_ping', {})
+                configs = ['bidirectional'] if icmp_ping else []
+            else:
+                configs = []
+
+            if configs:
                 tests.append({
-                    "type": "pps",
-                    "configs": pps_configs
+                    "type": test_type,
+                    "configs": configs
                 })
+
         return tests
 
     def _calculate_cycle_duration(self, perf_spec: Dict) -> int:

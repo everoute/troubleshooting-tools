@@ -141,12 +141,19 @@ class ConfigLoader:
         Returns:
             Dictionary containing all configs
         """
-        return {
+        configs = {
             'ssh': self.load_ssh_config(),
             'env': self.load_env_config(),
             'perf': self.load_perf_spec(),
             'ebpf': self.load_ebpf_config()
         }
+        if self._is_unified and self._unified_config:
+            configs['execution'] = self._unified_config.get('execution', {})
+            configs['paths'] = self._unified_config.get('paths', {})
+        else:
+            configs['execution'] = {}
+            configs['paths'] = {}
+        return configs
 
     def _load_yaml_file(self, filename: str) -> Dict[str, Any]:
         """Load YAML file.

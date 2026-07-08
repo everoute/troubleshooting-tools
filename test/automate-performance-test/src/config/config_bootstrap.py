@@ -3,7 +3,7 @@
 
 Takes minimal input config and auto-discovers:
 - Host: internal interface, physical interface, test IP
-- VM: qemu_pid, vhost_pids, vnet interface, physical interface
+- VM: qemu_pid, vhost_tids, vnet interface, physical interface
 
 Generates:
 - Full unified config (replaces ssh-config.yaml + test-env-config.yaml)
@@ -68,7 +68,7 @@ class NodeInfo:
     vm_nic_name: str = ""  # NIC name inside VM (e.g., ens4, eth1)
     vm_nic_mac: str = ""  # MAC address of VM NIC
     qemu_pid: int = 0
-    vhost_pids: List[str] = field(default_factory=list)
+    vhost_tids: List[str] = field(default_factory=list)
     python_interpreter: str = "python3"
 
 
@@ -279,15 +279,15 @@ class ConfigBootstrap:
 
             logger.info(f"VM {node_name}: mac={node.vm_nic_mac} -> vnet={node.vm_interface}")
 
-            # Step 4: Get vhost PIDs for the specific vnet
+            # Step 4: Get vhost TIDs for the specific vnet
             if node.vm_interface:
                 tap_fd_mapping = host_collector.get_tap_fd_to_vnet_mapping(node.qemu_pid)
-                vhost_by_vnet = host_collector.get_vhost_pids_grouped_by_vnet(
+                vhost_by_vnet = host_collector.get_vhost_tids_grouped_by_vnet(
                     node.qemu_pid, tap_fd_mapping
                 )
                 vhost_infos = vhost_by_vnet.get(node.vm_interface, [])
-                node.vhost_pids = [str(v.pid) for v in vhost_infos]
-                logger.info(f"VM {node_name}: vnet={node.vm_interface} -> vhost_pids={node.vhost_pids}")
+                node.vhost_tids = [str(v.tid) for v in vhost_infos]
+                logger.info(f"VM {node_name}: vnet={node.vm_interface} -> vhost_tids={node.vhost_tids}")
 
             # Step 5: Get physical interface and bond members
             if node.vm_interface:
@@ -306,7 +306,7 @@ class ConfigBootstrap:
         node.python_interpreter = self._detect_python(vm_executor)
 
         logger.info(f"Discovered VM {node_name}: test_ip={node.test_ip}, nic={node.vm_nic_name}, "
-                   f"qemu_pid={node.qemu_pid}, vhost_pids={node.vhost_pids}, "
+                   f"qemu_pid={node.qemu_pid}, vhost_tids={node.vhost_tids}, "
                    f"vnet={node.vm_interface}, phy={node.physical_interface}")
 
         return node
@@ -435,18 +435,28 @@ class ConfigBootstrap:
                     if server.qemu_pid > 0:
                         kvm_config['server'] = {
                             'qemu_pid': str(server.qemu_pid),
-                            'vhost_pids': list(server.vhost_pids)
+                            'vhost_tids': list(server.vhost_tids)
                         }
                     if client.qemu_pid > 0:
                         kvm_config['client'] = {
                             'qemu_pid': str(client.qemu_pid),
-                            'vhost_pids': list(client.vhost_pids)
+                            'vhost_tids': list(client.vhost_tids)
                         }
                     if kvm_config:
                         environments['vm']['kvm_config'] = kvm_config
 
         # Get tools from template with dynamic parameters
         tools_config = self._prepare_tools_config()
+
+        performance_tests = self.config.get(
+            'performance_tests',
+            self.perf_template.get('performance_tests', {})
+        )
+        execution_config = self.config.get('execution', {
+            'include_baseline': False,
+            'continue_on_failure': True,
+            'fail_on_hook_task_failure': True
+        })
 
         # Build full config
         self._full_config = {
@@ -474,23 +484,24 @@ class ConfigBootstrap:
                 'cpu_stats': ['avg', 'peak']
             },
             'tools': tools_config,
-            'performance_tests': self.perf_template.get('performance_tests', {})
+            'performance_tests': performance_tests,
+            'execution': execution_config
         }
 
         return self._full_config
 
     def _prepare_tools_config(self) -> dict:
-        """Prepare tools config with dynamic parameters (e.g., vhost_pids)."""
+        """Prepare tools config with dynamic parameters (e.g., vhost_tids)."""
         tools = copy.deepcopy(self.tools_template.get('tools', {}))
 
-        # Get vhost_pids from VM server node
+        # Get vhost_tids from VM server node
         test_pairs = self.config.get('test_pairs', {})
         vm_pair = test_pairs.get('vm', {})
         server_name = vm_pair.get('server')
 
-        vhost_pids = []
+        vhost_tids = []
         if server_name and server_name in self.nodes:
-            vhost_pids = list(self.nodes[server_name].vhost_pids)
+            vhost_tids = list(self.nodes[server_name].vhost_tids)
 
         # Update dynamic parameters in KVM tools
         categories = tools.get('categories', {})
@@ -499,8 +510,8 @@ class ConfigBootstrap:
 
         for tool in kvm_tools:
             params = tool.get('parameters', {})
-            if 'vhost_pid' in params and params['vhost_pid'] == '{vhost_pids}':
-                params['vhost_pid'] = list(vhost_pids) if vhost_pids else ['0']
+            if 'vhost_tid' in params and params['vhost_tid'] == '{vhost_tids}':
+                params['vhost_tid'] = list(vhost_tids) if vhost_tids else ['0']
 
         return tools
 
@@ -707,18 +718,18 @@ class ConfigBootstrap:
         # Merge updated tools template
         new_tools = copy.deepcopy(self.tools_template.get('tools', {}))
 
-        # Resolve vhost_pids from existing kvm_config
+        # Resolve vhost_tids from existing kvm_config
         vm_env = self._full_config.get('environments', {}).get('vm', {})
         kvm_config = vm_env.get('kvm_config', {})
         kvm_server = kvm_config.get('server', kvm_config) if isinstance(kvm_config.get('server'), dict) else kvm_config
-        vhost_pids = kvm_server.get('vhost_pids', [])
+        vhost_tids = kvm_server.get('vhost_tids', [])
 
         categories = new_tools.get('categories', {})
         kvm_category = categories.get('kvm-virt-network/kvm', {})
         for tool in kvm_category.get('tools', []):
             params = tool.get('parameters', {})
-            if 'vhost_pid' in params and params['vhost_pid'] == '{vhost_pids}':
-                params['vhost_pid'] = list(vhost_pids) if vhost_pids else ['0']
+            if 'vhost_tid' in params and params['vhost_tid'] == '{vhost_tids}':
+                params['vhost_tid'] = list(vhost_tids) if vhost_tids else ['0']
 
         self._full_config['tools'] = new_tools
 

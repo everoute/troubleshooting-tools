@@ -353,10 +353,23 @@ class InitHooks:
                     # Wait for BPF compilation
                     sleep {bpf_compile_wait}
 
-                    # Check if process is still alive
-                    if ps -p {ebpf_pid} >/dev/null 2>&1; then
-                        echo "BPF compilation check PASSED: process {ebpf_pid} still alive at $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
-                        echo "ALIVE"
+                    OUTPUT_FILE="{ebpf_result_path}/ebpf_output_{timestamp}.log"
+                    STARTUP_FAILURE_PATTERN='Traceback \\(most recent call last\\)|^Exception:|^SyntaxError:|^ImportError:|^ModuleNotFoundError:|cannot attach kprobe|WARN: Failed to attach kprobe|WARN: Failed to attach kretprobe|Warning: .*not available on this kernel, skipping|Warning: Failed to attach to|Failed to attach to .*:|eventfd_signal not available|irqfd_wakeup not available|vmx_deliver_posted_interrupt not available'
+
+                    # Kernel compatibility scan mode treats probe attach warnings
+                    # and partial probe unavailability as startup failures.
+                    if [ -f "$OUTPUT_FILE" ] && grep -Eq "$STARTUP_FAILURE_PATTERN" "$OUTPUT_FILE"; then
+                        echo "BPF compilation check FAILED: startup failure or compatibility warning found in $OUTPUT_FILE at $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
+                        echo "FATAL_OUTPUT"
+                    elif ps -p {ebpf_pid} >/dev/null 2>&1; then
+                        PROC_STATE=$(ps -o stat= -p {ebpf_pid} 2>/dev/null | tr -d ' ')
+                        if echo "$PROC_STATE" | grep -q '^Z'; then
+                            echo "BPF compilation check FAILED: process {ebpf_pid} is zombie at $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
+                            echo "EXITED"
+                        else
+                            echo "BPF compilation check PASSED: process {ebpf_pid} still alive at $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
+                            echo "ALIVE"
+                        fi
                     else
                         echo "BPF compilation check FAILED: process {ebpf_pid} exited during compilation at $(date '+%Y-%m-%d %H:%M:%S.%N')" >> {ebpf_result_path}/ebpf_start_{timestamp}.log
                         echo "EXITED"
@@ -365,12 +378,17 @@ class InitHooks:
                 stdout, stderr, status = self.ssh_manager.execute_command(ebpf_host_ref, health_check_cmd)
                 process_status = (stdout or "").strip()
 
-                if process_status == "EXITED":
-                    logger.warning(f"eBPF process {ebpf_pid} exited during BPF compilation (within {bpf_compile_wait}s)")
+                if process_status in ("EXITED", "FATAL_OUTPUT"):
+                    error_msg = (
+                        "Startup failure or compatibility warning found in eBPF output"
+                        if process_status == "FATAL_OUTPUT"
+                        else "Process exited during BPF compilation"
+                    )
+                    logger.warning(f"eBPF process {ebpf_pid} failed BPF startup check: {error_msg}")
                     results['tasks'].append({
                         'name': 'bpf_compile_check',
                         'status': False,
-                        'error': f'Process exited during BPF compilation'
+                        'error': error_msg
                     })
                     results['ebpf_process_healthy'] = False
                 else:

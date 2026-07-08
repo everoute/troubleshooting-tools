@@ -258,7 +258,7 @@ tools:
           parameters:
             protocol: ["tcp", "udp", "icmp"]
 
-    # KVM - IRQ Tools (uses dynamic vhost_pids)
+    # KVM - IRQ Tools (uses dynamic vhost_tids)
     kvm-virt-network/kvm:
       environment: "vm"
       directions:
@@ -270,9 +270,9 @@ tools:
           DST_IP: "{vm_REMOTE_IP}"
       tools:
         - script: "kvm_irqfd_stats_summary.py"
-          template: "sudo python3 {path} {QEMU_PID} --interval 1 --vhost-pid {vhost_pid} --category data --subcategory {subcategory}"
+          template: "sudo python3 {path} {QEMU_PID} --interval 1 --vhost-tid {vhost_tid} --category data --subcategory {subcategory}"
           parameters:
-            vhost_pid: "{vhost_pids}"
+            vhost_tid: "{vhost_tids}"
             subcategory: ["rx", "tx"]
 
         - script: "kvm_irqfd_stats_summary.py"

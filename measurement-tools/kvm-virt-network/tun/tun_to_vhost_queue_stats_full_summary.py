@@ -9,6 +9,7 @@ import sys
 import datetime
 import re
 import platform
+
 # BCC module import with fallback
 try:
     from bcc import BPF
@@ -25,9 +26,11 @@ except ImportError:
 import ctypes as ct
 from time import sleep, strftime
 
+
 # Devname structure for device filtering
 class Devname(ct.Structure):
-    _fields_=[("name", ct.c_char*16)]
+    _fields_ = [("name", ct.c_char * 16)]
+
 
 def find_kernel_function(base_name, verbose=False):
     """
@@ -43,13 +46,14 @@ def find_kernel_function(base_name, verbose=False):
     #   vmlinux: "ffffffff81234567 t func_name"
     #   module:  "ffffffffc1234567 t func_name\t[module_name]"
     pattern = re.compile(
-        r'^[0-9a-f]+\s+[tT]\s+(' + re.escape(base_name) +
-        r'(?:\.(?:isra|constprop|part|cold|hot)\.\d+)*)(?:\s+\[\w+\])?$'
+        r"^[0-9a-f]+\s+[tT]\s+("
+        + re.escape(base_name)
+        + r"(?:\.(?:isra|constprop|part|cold|hot)\.\d+)*)(?:\s+\[\w+\])?$"
     )
 
     candidates = []
     try:
-        with open('/proc/kallsyms', 'r') as f:
+        with open("/proc/kallsyms", "r") as f:
             for line in f:
                 match = pattern.match(line.strip())
                 if match:
@@ -69,6 +73,7 @@ def find_kernel_function(base_name, verbose=False):
         return base_name
     return min(candidates, key=len)
 
+
 def get_kernel_version():
     """
     Get kernel major.minor version tuple.
@@ -77,10 +82,11 @@ def get_kernel_version():
     try:
         version_str = platform.release()
         # Extract version numbers (e.g., "5.10.0-247.0.0.el7.v72.x86_64" -> (5, 10))
-        parts = version_str.split('-')[0].split('.')
+        parts = version_str.split("-")[0].split(".")
         return (int(parts[0]), int(parts[1]))
     except Exception:
         return (0, 0)
+
 
 def get_distro_id():
     """
@@ -88,15 +94,16 @@ def get_distro_id():
     Returns lowercase distro ID (e.g., 'openeuler', 'centos', 'anolis') or 'unknown'.
     """
     try:
-        with open('/etc/os-release', 'r') as f:
+        with open("/etc/os-release", "r") as f:
             for line in f:
-                if line.startswith('ID='):
+                if line.startswith("ID="):
                     # Remove quotes and newline, convert to lowercase
-                    distro_id = line.split('=')[1].strip().strip('"').lower()
+                    distro_id = line.split("=")[1].strip().strip('"').lower()
                     return distro_id
     except Exception:
         pass
-    return 'unknown'
+    return "unknown"
+
 
 def has_irqbypass_module():
     """
@@ -104,7 +111,9 @@ def has_irqbypass_module():
     This indicates the kernel has IRQ bypass support for vhost.
     """
     import os
-    return os.path.exists('/sys/module/irqbypass')
+
+    return os.path.exists("/sys/module/irqbypass")
+
 
 def needs_5x_vhost_layout():
     """
@@ -134,11 +143,12 @@ def needs_5x_vhost_layout():
 
     # Fallback: openEuler 5.x without irqbypass uses 4.x layout
     distro = get_distro_id()
-    if distro == 'openeuler':
+    if distro == "openeuler":
         return False
 
     # Other 5.x kernels typically use 5.x layout
     return True
+
 
 def needs_6x_vhost_layout():
     """
@@ -146,6 +156,7 @@ def needs_6x_vhost_layout():
     """
     major, minor = get_kernel_version()
     return major >= 6
+
 
 # BPF program for queue statistics using histograms
 bpf_text = """
@@ -277,10 +288,23 @@ struct tun_struct {
 	struct tun_prog __rcu *filter_prog;
 };
 
+// Kernel layout versions are set via Python based on the running kernel.
+#ifndef KERNEL_VERSION_4X
+#define KERNEL_VERSION_4X 0
+#endif
+#ifndef KERNEL_VERSION_5X
+#define KERNEL_VERSION_5X 0
+#endif
+#ifndef KERNEL_VERSION_6X
+#define KERNEL_VERSION_6X 0
+#endif
+
 struct tun_file {
 	struct sock sk;
 	struct socket socket;
+#if KERNEL_VERSION_4X
 	struct socket_wq wq;
+#endif
 	struct tun_struct __rcu *tun;
 	struct fasync_struct *fasync;
 	unsigned int flags;
@@ -299,12 +323,6 @@ struct tun_file {
 };
 
 // Complete vhost structures from kernel headers (drivers/vhost/vhost.h)
-
-// KERNEL_VERSION_6X controls 6.x vhost structure additions
-// Set via Python based on kernel version detection
-#ifndef KERNEL_VERSION_6X
-#define KERNEL_VERSION_6X 0
-#endif
 
 struct vhost_virtqueue;
 
@@ -326,12 +344,6 @@ struct vhost_poll {
 #endif
 };
 
-// KERNEL_VERSION_5X controls which structure layout to use
-// Set via Python based on kernel version detection
-#ifndef KERNEL_VERSION_5X
-#define KERNEL_VERSION_5X 0
-#endif
-
 struct vhost_dev {
     struct mm_struct *mm;
     struct mutex mutex;
@@ -348,7 +360,8 @@ struct vhost_dev {
     int iov_limit;
     int weight;
     int byte_weight;
-    char worker_xa[16];
+    // struct xarray is 16 bytes on x86_64 and has 8-byte alignment.
+    char worker_xa[16] __attribute__((aligned(8)));
     bool use_worker;
     void *msg_handler;
 #else
@@ -687,7 +700,7 @@ int trace_handle_rx(struct pt_regs *ctx) {
         return 0;
     }
 
-    // Get RX virtqueue (vqs[0].vq) using member_read
+    // Get the inline RX virtqueue after the leading vhost_dev.
     struct vhost_net_virtqueue *nvq = &net->vqs[0];
     struct vhost_virtqueue *vq = &nvq->vq;
 
@@ -949,48 +962,57 @@ int trace_vhost_signal(struct pt_regs *ctx) {
 }
 """
 
+
 def print_index_histogram(hist_table):
     """Print histogram for u16 index values (0-65535)"""
     if len(hist_table) == 0:
         print("    No data")
         return
-    
+
     # Group by queue and device
     queue_data = {}
     for k, v in hist_table.items():
-        dev_name = k.dev_name.decode('utf-8', 'replace')
+        dev_name = k.dev_name.decode("utf-8", "replace")
         queue_index = k.queue_index
         queue_key = "{}:q{}".format(dev_name, queue_index)
         if queue_key not in queue_data:
             queue_data[queue_key] = {}
         slot = k.slot  # This is now the original u16 value (0-65535)
         queue_data[queue_key][slot] = v.value
-    
+
     for queue_name in sorted(queue_data.keys()):
         print("  Queue: {}".format(queue_name))
         slots = queue_data[queue_name]
         if not slots:
             print("    No data")
             continue
-            
+
         total_count = sum(slots.values())
         print("    Total: {} events".format(total_count))
-        
+
         # Find min and max slot values (original u16 values)
         min_slot = min(slots.keys())
         max_slot = max(slots.keys())
-        
+
         # Show distribution range for u16 values (0-65535)
         print("    Index value distribution (u16 range 0-65535):")
-        print("    Min: {}, Max: {}, Range: {}".format(min_slot, max_slot, max_slot - min_slot))
-        
+        print(
+            "    Min: {}, Max: {}, Range: {}".format(
+                min_slot, max_slot, max_slot - min_slot
+            )
+        )
+
         # Count how many index values appeared more than once (duplicates)
         duplicate_count = sum(1 for count in slots.values() if count > 1)
         unique_count = len(slots)
-        print("    Unique indices: {}, Duplicate indices: {} ({:.1f}%)".format(
-            unique_count, duplicate_count, 
-            (duplicate_count * 100.0 / unique_count) if unique_count > 0 else 0))
-        
+        print(
+            "    Unique indices: {}, Duplicate indices: {} ({:.1f}%)".format(
+                unique_count,
+                duplicate_count,
+                (duplicate_count * 100.0 / unique_count) if unique_count > 0 else 0,
+            )
+        )
+
         # Only show top list if there are duplicate indices
         if duplicate_count > 0:
             # Show top 20 most frequent values (focus on duplicates)
@@ -999,37 +1021,42 @@ def print_index_histogram(hist_table):
             for slot, count in sorted_slots:
                 pct = (count * 100.0 / total_count) if total_count > 0 else 0
                 status = "DUPLICATE" if count > 1 else "normal"
-                print("      idx {:>5}: {:>3} times ({:>5.1f}%) [{}]".format(slot, count, pct, status))
+                print(
+                    "      idx {:>5}: {:>3} times ({:>5.1f}%) [{}]".format(
+                        slot, count, pct, status
+                    )
+                )
+
 
 def print_histogram(hist_table, unit):
     """Print histogram with queue information"""
     if len(hist_table) == 0:
         print("    No data")
         return
-    
+
     # Group by queue and device - kernel filtering already applied
     queue_data = {}
     for k, v in hist_table.items():
-        dev_name = k.dev_name.decode('utf-8', 'replace')
+        dev_name = k.dev_name.decode("utf-8", "replace")
         queue_index = k.queue_index
         queue_key = "{}:q{}".format(dev_name, queue_index)
         if queue_key not in queue_data:
             queue_data[queue_key] = {}
         slot = k.slot
         queue_data[queue_key][slot] = v.value
-    
+
     for queue_name in sorted(queue_data.keys()):
         print("  Queue: {}".format(queue_name))
         slots = queue_data[queue_name]
         if not slots:
             print("    No data")
             continue
-            
+
         max_slot = max(slots.keys())
         total_count = sum(slots.values())
-        
+
         print("    Total: {}".format(total_count))
-        
+
         # For last_used_idx histograms, show actual value ranges
         if "last_used_idx" in unit:
             min_slot = min(slots.keys())
@@ -1040,23 +1067,35 @@ def print_histogram(hist_table, unit):
                 min_val = 0
             else:
                 min_val = 1 << min_slot
-            
+
             if max_slot > 15:  # u16 max should be slot 15
                 max_val = 65535  # Cap at u16 max
-                print("    WARNING: Detected slot {} (>15), capping display at u16 max".format(max_slot))
+                print(
+                    "    WARNING: Detected slot {} (>15), capping display at u16 max".format(
+                        max_slot
+                    )
+                )
             else:
                 max_val = min(65535, (1 << (max_slot + 1)) - 1)
-            
-            print("    Actual value range in this period: {} - {}".format(min_val, max_val))
-        
+
+            print(
+                "    Actual value range in this period: {} - {}".format(
+                    min_val, max_val
+                )
+            )
+
         # For duplicate signals, show interpretation
         elif "duplicate_signals" in unit:
             max_duplicates = max_slot
             total_events = sum(slots.values())
             unique_idx_sequences = len([s for s in slots.keys() if slots[s] > 0])
             print("    Max consecutive duplicates: {} signals".format(max_duplicates))
-            print("    Total duplicate events: {} (across {} different sequences)".format(total_events, unique_idx_sequences))
-        
+            print(
+                "    Total duplicate events: {} (across {} different sequences)".format(
+                    total_events, unique_idx_sequences
+                )
+            )
+
         for slot in range(max_slot + 1):
             count = slots.get(slot, 0)
             if count > 0:
@@ -1071,79 +1110,89 @@ def print_histogram(hist_table, unit):
                     low = 1 << slot
                     high = min(65535, (1 << (slot + 1)) - 1)  # Cap at u16 max
                     range_str = "{}-{}".format(low, high)
-                
+
                 pct = (count * 100) // total_count if total_count > 0 else 0
                 print("    {:>10} : {:>8} ({}%)".format(range_str, count, pct))
 
-def print_signal_idx_frequency(signal_freq_table, target_queues_map, signal_total_count_table):
+
+def print_signal_idx_frequency(
+    signal_freq_table, target_queues_map, signal_total_count_table
+):
     """Print top 10 most frequent last_used_idx values in vhost_signal"""
     if len(signal_freq_table) == 0:
         print("    No data")
         return
-    
+
     # Build sock_ptr to queue info mapping
     sock_to_queue = {}
     for sock_ptr, qkey in target_queues_map.items():
         sock_to_queue[sock_ptr.value] = {
-            'dev_name': qkey.dev_name.decode('utf-8', 'replace'),
-            'queue_index': qkey.queue_index
+            "dev_name": qkey.dev_name.decode("utf-8", "replace"),
+            "queue_index": qkey.queue_index,
         }
-    
+
     # Get total count verification data
     total_count_verification = {}
     for sock_ptr, count in signal_total_count_table.items():
         total_count_verification[sock_ptr.value] = count.value
-    
+
     # Group by queue (sock_ptr)
     queue_data = {}
     for k, v in signal_freq_table.items():
         sock_ptr = k.sock_ptr
         last_used_idx = k.last_used_idx
         count = v.value
-        
+
         if sock_ptr not in queue_data:
             queue_data[sock_ptr] = {}
         queue_data[sock_ptr][last_used_idx] = count
-    
+
     for sock_ptr in sorted(queue_data.keys()):
         idx_counts = queue_data[sock_ptr]
         if not idx_counts:
             continue
-            
+
         # Sort by count (descending) and take top 10
         sorted_items = sorted(idx_counts.items(), key=lambda x: x[1], reverse=True)[:10]
         total_signals = sum(idx_counts.values())
         unique_indices = len(idx_counts)
-        
+
         # Get verification count
         verification_count = total_count_verification.get(sock_ptr, 0)
-        
+
         # Get queue name from mapping
         if sock_ptr in sock_to_queue:
             qinfo = sock_to_queue[sock_ptr]
-            queue_name = "{}:q{}".format(qinfo['dev_name'], qinfo['queue_index'])
+            queue_name = "{}:q{}".format(qinfo["dev_name"], qinfo["queue_index"])
             print("  Queue: {} (sock: 0x{:x})".format(queue_name, sock_ptr))
         else:
             print("  Sock: 0x{:x} (queue info not found)".format(sock_ptr))
-            
-        print("    Total signals: {} (verification: {}), Unique indices: {}".format(
-            total_signals, verification_count, unique_indices))
-        
+
+        print(
+            "    Total signals: {} (verification: {}), Unique indices: {}".format(
+                total_signals, verification_count, unique_indices
+            )
+        )
+
         # Discrepancy check removed as requested
-        
+
         if unique_indices < total_signals:
             duplicate_signals = total_signals - unique_indices
-            print("    Duplicate signals: {} ({:.1f}%)".format(
-                duplicate_signals, (duplicate_signals * 100.0 / total_signals)))
-        
+            print(
+                "    Duplicate signals: {} ({:.1f}%)".format(
+                    duplicate_signals, (duplicate_signals * 100.0 / total_signals)
+                )
+            )
+
         print("    Top 10 most frequent last_used_idx values:")
         print("    {:>8} : {:>6} {:>7}".format("idx", "count", "percent"))
         print("    " + "-" * 23)
-        
+
         for idx, count in sorted_items:
             pct = (count * 100.0 / total_signals) if total_signals > 0 else 0
             status = "DUP" if count > 1 else ""
             print("    {:>8} : {:>6} {:>6.1f}% {}".format(idx, count, pct, status))
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -1159,16 +1208,34 @@ Examples:
   
   # Monitor specific device and queue with 10 outputs
   sudo %(prog)s --device vnet33 --queue 0 --interval 1 10
-        """
+        """,
     )
-    
+
     parser.add_argument("--device", "-d", help="Target device name (e.g., vnet33)")
     parser.add_argument("--queue", "-q", type=int, help="Filter by queue index")
-    parser.add_argument("--interval", "-i", type=int, default=1, help="Output interval in seconds (default: 1)")
-    parser.add_argument("outputs", nargs="?", type=int, default=99999999, help="Number of outputs (default: unlimited)")
-    parser.add_argument("--timestamp", "-T", action="store_true", help="Include timestamp on output")
-    parser.add_argument("--debug", action="store_true", help="Enable debug output (sock pointers, VQ offsets)")
-    
+    parser.add_argument(
+        "--interval",
+        "-i",
+        type=int,
+        default=1,
+        help="Output interval in seconds (default: 1)",
+    )
+    parser.add_argument(
+        "outputs",
+        nargs="?",
+        type=int,
+        default=99999999,
+        help="Number of outputs (default: unlimited)",
+    )
+    parser.add_argument(
+        "--timestamp", "-T", action="store_true", help="Include timestamp on output"
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable debug output (sock pointers, VQ offsets)",
+    )
+
     args = parser.parse_args()
     countdown = args.outputs
 
@@ -1176,16 +1243,24 @@ Examples:
     kernel_5x = needs_5x_vhost_layout()
     kernel_6x = needs_6x_vhost_layout()
     major, minor = get_kernel_version()
+    kernel_4x = major == 4
     distro = get_distro_id()
-    print("Kernel version: {}.{}, Distro: {} (5.x vhost layout: {}, 6.x vhost layout: {})".format(
-        major, minor, distro, kernel_5x, kernel_6x))
+    print(
+        "Kernel version: {}.{}, Distro: {} (5.x vhost layout: {}, 6.x vhost layout: {})".format(
+            major, minor, distro, kernel_5x, kernel_6x
+        )
+    )
 
     # Find vhost_add_used_and_signal_n function (handles module symbols and GCC suffixes)
-    vhost_signal_func = find_kernel_function("vhost_add_used_and_signal_n", verbose=True)
+    vhost_signal_func = find_kernel_function(
+        "vhost_add_used_and_signal_n", verbose=True
+    )
     if vhost_signal_func:
         print("Found vhost signal function: {}".format(vhost_signal_func))
     else:
-        print("Warning: vhost_add_used_and_signal_n not found, signal stats will be unavailable")
+        print(
+            "Warning: vhost_add_used_and_signal_n not found, signal stats will be unavailable"
+        )
 
     # Find handle_rx function (in vhost_net module)
     handle_rx_func = find_kernel_function("handle_rx", verbose=True)
@@ -1198,6 +1273,8 @@ Examples:
     try:
         bpf_program = bpf_text
         defines = []
+        if kernel_4x:
+            defines.append("#define KERNEL_VERSION_4X 1")
         if kernel_5x:
             defines.append("#define KERNEL_VERSION_5X 1")
         if kernel_6x:
@@ -1225,7 +1302,9 @@ Examples:
                 print("Warning: Failed to attach to {}: {}".format(handle_rx_func, e))
 
         if not handle_rx_attached:
-            print("Warning: handle_rx probe not attached, handle_rx stats will be unavailable")
+            print(
+                "Warning: handle_rx probe not attached, handle_rx stats will be unavailable"
+            )
 
         # Attach vhost_add_used_and_signal_n with dynamic function name
         vhost_signal_attached = False
@@ -1235,15 +1314,19 @@ Examples:
                 vhost_signal_attached = True
                 print("Attached to {}".format(vhost_signal_func))
             except Exception as e:
-                print("Warning: Failed to attach to {}: {}".format(vhost_signal_func, e))
+                print(
+                    "Warning: Failed to attach to {}: {}".format(vhost_signal_func, e)
+                )
 
         if not vhost_signal_attached:
-            print("Warning: vhost_signal probe not attached, signal stats will be unavailable")
+            print(
+                "Warning: vhost_signal probe not attached, signal stats will be unavailable"
+            )
 
     except Exception as e:
         print("Failed to load BPF program: {}".format(e))
         return
-    
+
     devname_map = b["name_map"]
     _name = Devname()
     if args.device:
@@ -1254,7 +1337,7 @@ Examples:
         _name.name = b""
         devname_map[0] = _name
         print("Device filter: All TUN devices")
-    
+
     if args.queue is not None:
         b["filter_enabled"][0] = ct.c_uint32(1)
         b["filter_queue"][0] = ct.c_uint32(args.queue)
@@ -1262,23 +1345,27 @@ Examples:
     else:
         b["filter_enabled"][0] = ct.c_uint32(0)
         print("Queue filter: All queues")
-    
+
     print("VHOST-NET Queue Statistics Monitor Started")
-    print("Interval: {}s | Outputs: {}".format(args.interval, "unlimited" if args.outputs == 99999999 else args.outputs))
+    print(
+        "Interval: {}s | Outputs: {}".format(
+            args.interval, "unlimited" if args.outputs == 99999999 else args.outputs
+        )
+    )
     print("Collecting statistics... Press Ctrl+C to stop\n")
-    
+
     # Clear maps to avoid stale entries - CRITICAL for correct filtering
     target_queues_map = b["target_queues"]
     handle_rx_vqs_map = b["handle_rx_vqs"]
     signal_idx_freq_map = b["signal_idx_freq"]
     signal_total_count_map = b["signal_total_count"]
-    
+
     print("Clearing all maps to ensure clean state...")
     target_queues_map.clear()
     handle_rx_vqs_map.clear()
     signal_idx_freq_map.clear()
     signal_total_count_map.clear()
-    
+
     # Also clear histogram maps to ensure clean start
     vq_consumption_handle_rx = b.get_table("vq_consumption_progress_handle_rx")
     vq_delay_handle_rx = b.get_table("vq_processing_delay_handle_rx")
@@ -1288,7 +1375,7 @@ Examples:
     vq_last_used_idx_vhost_signal = b.get_table("vq_last_used_idx_vhost_signal")
     ptr_xmit = b.get_table("ptr_ring_depth_xmit")
     ptr_recv = b.get_table("ptr_ring_depth_recv")
-    
+
     vq_consumption_handle_rx.clear()
     vq_delay_handle_rx.clear()
     vq_consumption_vhost_signal.clear()
@@ -1297,11 +1384,11 @@ Examples:
     vq_last_used_idx_vhost_signal.clear()
     ptr_xmit.clear()
     ptr_recv.clear()
-    
+
     print("All maps cleared.")
-    
-# Maps already obtained above
-    
+
+    # Maps already obtained above
+
     exiting = 0
     try:
         while countdown > 0:
@@ -1309,19 +1396,32 @@ Examples:
                 sleep(args.interval)
             except KeyboardInterrupt:
                 exiting = 1
-            
-            print("\n" + "="*80)
+
+            print("\n" + "=" * 80)
             if args.timestamp:
                 import datetime
+
                 now = datetime.datetime.now()
                 print("Time: {}".format(now.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]))
 
             # Print debug statistics (only with --debug flag)
             if args.debug:
                 print("\n[DEBUG] Stage Statistics:")
-                stage_names = {0: "TUN_XMIT", 1: "HANDLE_RX", 2: "TUN_RECVMSG", 3: "VHOST_SIGNAL"}
-                code_names = {1: "PROBE_ENTRY", 2: "NULL_CHECK_FAIL", 3: "SOCK_LOOKUP",
-                             4: "SOCK_FOUND", 5: "SOCK_NOT_FOUND", 6: "VQ_READ", 7: "HISTOGRAM_UPDATE"}
+                stage_names = {
+                    0: "TUN_XMIT",
+                    1: "HANDLE_RX",
+                    2: "TUN_RECVMSG",
+                    3: "VHOST_SIGNAL",
+                }
+                code_names = {
+                    1: "PROBE_ENTRY",
+                    2: "NULL_CHECK_FAIL",
+                    3: "SOCK_LOOKUP",
+                    4: "SOCK_FOUND",
+                    5: "SOCK_NOT_FOUND",
+                    6: "VQ_READ",
+                    7: "HISTOGRAM_UPDATE",
+                }
                 debug_stats = b.get_table("debug_stage_stats")
                 for k, v in sorted(debug_stats.items(), key=lambda x: x[0].value):
                     if v.value > 0:
@@ -1334,92 +1434,140 @@ Examples:
 
                 print("\n[DEBUG] Sock Pointers from tun_net_xmit (target_queues):")
                 for sock_ptr, qkey in target_queues_map.items():
-                    print("  sock: 0x{:x} -> {}:q{}".format(sock_ptr.value,
-                        qkey.dev_name.decode('utf-8', 'replace'), qkey.queue_index))
+                    print(
+                        "  sock: 0x{:x} -> {}:q{}".format(
+                            sock_ptr.value,
+                            qkey.dev_name.decode("utf-8", "replace"),
+                            qkey.queue_index,
+                        )
+                    )
 
                 print("\n[DEBUG] Sock Pointers from handle_rx (top 10):")
                 debug_rx_socks = b.get_table("debug_handle_rx_socks")
-                rx_socks = sorted(debug_rx_socks.items(), key=lambda x: x[1].value, reverse=True)[:10]
+                rx_socks = sorted(
+                    debug_rx_socks.items(), key=lambda x: x[1].value, reverse=True
+                )[:10]
                 for sock_ptr, cnt in rx_socks:
-                    print("  sock: 0x{:x} -> count: {}".format(sock_ptr.value, cnt.value))
+                    print(
+                        "  sock: 0x{:x} -> count: {}".format(sock_ptr.value, cnt.value)
+                    )
                 debug_rx_socks.clear()
 
                 print("\n[DEBUG] handle_rx net -> computed VQ (top 10):")
                 debug_net_vq = b.get_table("debug_handle_rx_net_ptrs")
                 net_vq_list = list(debug_net_vq.items())[:10]
                 for net_ptr, vq_ptr in net_vq_list:
-                    offset = vq_ptr.value - net_ptr.value if vq_ptr.value > net_ptr.value else 0
-                    print("  net: 0x{:x} -> vq: 0x{:x} (offset: 0x{:x} = {} bytes)".format(
-                        net_ptr.value, vq_ptr.value, offset, offset))
+                    offset = (
+                        vq_ptr.value - net_ptr.value
+                        if vq_ptr.value > net_ptr.value
+                        else 0
+                    )
+                    print(
+                        "  net: 0x{:x} -> vq: 0x{:x} (offset: 0x{:x} = {} bytes)".format(
+                            net_ptr.value, vq_ptr.value, offset, offset
+                        )
+                    )
                 debug_net_vq.clear()
 
                 print("\n[DEBUG] VQ Pointers -> private_data (handle_rx, top 10):")
                 debug_vq = b.get_table("debug_vq_ptrs")
                 vq_list = list(debug_vq.items())[:10]
                 for vq_ptr, pd in vq_list:
-                    print("  vq: 0x{:x} -> private_data: 0x{:x}".format(vq_ptr.value, pd.value))
+                    print(
+                        "  vq: 0x{:x} -> private_data: 0x{:x}".format(
+                            vq_ptr.value, pd.value
+                        )
+                    )
                 debug_vq.clear()
 
                 print("\n[DEBUG] vhost_signal dev -> VQ (top 10):")
                 debug_dev_vq = b.get_table("debug_signal_dev_vq")
                 dev_vq_list = list(debug_dev_vq.items())[:10]
                 for dev_ptr, vq_ptr in dev_vq_list:
-                    print("  dev: 0x{:x} -> vq: 0x{:x}".format(dev_ptr.value, vq_ptr.value))
+                    print(
+                        "  dev: 0x{:x} -> vq: 0x{:x}".format(
+                            dev_ptr.value, vq_ptr.value
+                        )
+                    )
                 debug_dev_vq.clear()
 
                 print("\n[DEBUG] VQ Pointers -> private_data (vhost_signal, top 10):")
                 debug_signal_vq = b.get_table("debug_signal_vq_ptrs")
                 signal_vq_list = list(debug_signal_vq.items())[:10]
                 for vq_ptr, pd in signal_vq_list:
-                    match_status = "MATCH" if any(sp.value == pd.value for sp in target_queues_map.keys()) else "NO MATCH"
-                    print("  vq: 0x{:x} -> private_data: 0x{:x} [{}]".format(vq_ptr.value, pd.value, match_status))
+                    match_status = (
+                        "MATCH"
+                        if any(sp.value == pd.value for sp in target_queues_map.keys())
+                        else "NO MATCH"
+                    )
+                    print(
+                        "  vq: 0x{:x} -> private_data: 0x{:x} [{}]".format(
+                            vq_ptr.value, pd.value, match_status
+                        )
+                    )
                 debug_signal_vq.clear()
 
             # Print VQ Consumption Progress Distribution from handle_rx
-            print("\nVQ Consumption Progress Distribution at handle_rx (avail_idx - last_avail_idx):")
-            print("Shows how many descriptors are available for consumption when VHOST handles RX")
+            print(
+                "\nVQ Consumption Progress Distribution at handle_rx (avail_idx - last_avail_idx):"
+            )
+            print(
+                "Shows how many descriptors are available for consumption when VHOST handles RX"
+            )
             print_histogram(vq_consumption_handle_rx, "descriptors")
-            
+
             # Print VQ Processing Delay Distribution from handle_rx
-            print("\nVQ Processing Delay Distribution at handle_rx (last_avail_idx - last_used_idx):")
+            print(
+                "\nVQ Processing Delay Distribution at handle_rx (last_avail_idx - last_used_idx):"
+            )
             print("Shows how many descriptors are in-flight when VHOST handles RX")
             print_histogram(vq_delay_handle_rx, "descriptors")
-            
+
             # Print VQ Consumption Progress Distribution from vhost_signal
-            print("\nVQ Consumption Progress Distribution at vhost_signal (avail_idx - last_avail_idx):")
-            print("Shows how many descriptors are available for consumption when VHOST signals guest")
+            print(
+                "\nVQ Consumption Progress Distribution at vhost_signal (avail_idx - last_avail_idx):"
+            )
+            print(
+                "Shows how many descriptors are available for consumption when VHOST signals guest"
+            )
             print_histogram(vq_consumption_vhost_signal, "descriptors")
-            
+
             # Print VQ Processing Delay Distribution from vhost_signal
-            print("\nVQ Processing Delay Distribution at vhost_signal (last_avail_idx - last_used_idx):")
+            print(
+                "\nVQ Processing Delay Distribution at vhost_signal (last_avail_idx - last_used_idx):"
+            )
             print("Shows how many descriptors are in-flight when VHOST signals guest")
             print_histogram(vq_delay_vhost_signal, "descriptors")
-            
+
             # Print VQ last_used_idx Value Distribution from handle_rx
             print("\nVQ last_used_idx Value Distribution at handle_rx:")
             print("Shows last_used_idx value ranges when VHOST handles RX")
             print_histogram(vq_last_used_idx_handle_rx, "last_used_idx")
-            
+
             # Print VQ last_used_idx Value Distribution from vhost_signal
             print("\nVQ last_used_idx Value Distribution at vhost_signal:")
             print("Shows last_used_idx value ranges when VHOST signals guest")
             print_histogram(vq_last_used_idx_vhost_signal, "last_used_idx")
-            
+
             # Print Signal Index Frequency Analysis
             print("\nSignal Index Frequency Analysis at vhost_signal:")
-            print("Shows most frequently used last_used_idx values and their call counts")
-            print_signal_idx_frequency(signal_idx_freq_map, target_queues_map, signal_total_count_map)
-            
+            print(
+                "Shows most frequently used last_used_idx values and their call counts"
+            )
+            print_signal_idx_frequency(
+                signal_idx_freq_map, target_queues_map, signal_total_count_map
+            )
+
             # Print PTR Ring Depth at tun_net_xmit
             print("\nPTR Ring Depth Distribution at tun_net_xmit:")
             print("Shows ring buffer utilization when packets are transmitted")
             print_histogram(ptr_xmit, "entries")
-            
+
             # Print PTR Ring Depth at tun_recvmsg
             print("\nPTR Ring Depth Distribution at tun_recvmsg:")
             print("Shows ring buffer utilization when packets are received")
             print_histogram(ptr_recv, "entries")
-            
+
             # Clear histograms for next interval
             vq_consumption_handle_rx.clear()
             vq_delay_handle_rx.clear()
@@ -1431,15 +1579,16 @@ Examples:
             signal_total_count_map.clear()  # Clear verification map each cycle
             ptr_xmit.clear()
             ptr_recv.clear()
-            
+
             countdown -= 1
             if exiting:
                 break
-                
+
     except KeyboardInterrupt:
         pass
-    
+
     print("\nMonitoring stopped.")
+
 
 if __name__ == "__main__":
     main()

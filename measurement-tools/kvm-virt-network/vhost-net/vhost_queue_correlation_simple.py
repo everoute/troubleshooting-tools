@@ -241,10 +241,23 @@ struct tun_struct {
 	struct tun_prog __rcu *filter_prog;
 };
 
+// Kernel layout versions are set via Python based on the running kernel.
+#ifndef KERNEL_VERSION_4X
+#define KERNEL_VERSION_4X 0
+#endif
+#ifndef KERNEL_VERSION_5X
+#define KERNEL_VERSION_5X 0
+#endif
+#ifndef KERNEL_VERSION_6X
+#define KERNEL_VERSION_6X 0
+#endif
+
 struct tun_file {
 	struct sock sk;
 	struct socket socket;
+#if KERNEL_VERSION_4X
 	struct socket_wq wq;
+#endif
 	struct tun_struct __rcu *tun;
 	struct fasync_struct *fasync;
 	unsigned int flags;
@@ -264,18 +277,6 @@ struct tun_file {
 
 // Complete vhost structures from kernel headers (drivers/vhost/vhost.h)
 // Need complete definition for correct field offsets
-
-// KERNEL_VERSION_5X controls which structure layout to use
-// Set via Python based on kernel version detection
-#ifndef KERNEL_VERSION_5X
-#define KERNEL_VERSION_5X 0
-#endif
-
-// KERNEL_VERSION_6X controls 6.x vhost structure additions
-// Set via Python based on kernel version detection
-#ifndef KERNEL_VERSION_6X
-#define KERNEL_VERSION_6X 0
-#endif
 
 struct vhost_virtqueue;
 
@@ -857,16 +858,16 @@ class QueueEvent(ct.Structure):
 
 def print_event(cpu, data, size):
     event = ct.cast(data, ct.POINTER(QueueEvent)).contents
-    
+
     # Format timestamp
     timestamp = datetime.datetime.fromtimestamp(event.timestamp / 1000000000.0)
     timestamp_str = timestamp.strftime('%H:%M:%S.%f')[:-3]
-    
+
     event_names = {
         1: "vhost_signal",
         2: "vhost_notify"
     }
-    
+
     print("="*80)
     print("Event: {} | Time: {} | Timestamp: {}ns".format(
         event_names.get(event.event_type, "unknown"), timestamp_str, event.timestamp))
@@ -874,13 +875,13 @@ def print_event(cpu, data, size):
         event.queue_index, event.dev_name.decode('utf-8', 'replace'),
         event.comm.decode('utf-8', 'replace'), event.pid))
     print("Sock: 0x{:x}".format(event.sock_ptr))
-    
+
     if event.event_type == 1:  # vhost_signal
         print("VQ: 0x{:x}".format(event.vq_ptr))
         print("VQ State: avail_idx={}, last_avail={}, last_used={}, used_flags=0x{:x}".format(
             event.avail_idx, event.last_avail_idx, event.last_used_idx, event.used_flags))
         print("Signal: signalled_used={}, valid={}, log_used={}".format(
-            event.signalled_used, "YES" if event.signalled_used_valid else "NO", 
+            event.signalled_used, "YES" if event.signalled_used_valid else "NO",
             "YES" if event.log_used else "NO"))
         print("Features: acked=0x{:x}, backend=0x{:x}".format(
             event.acked_features, event.acked_backend_features))
@@ -901,13 +902,13 @@ def print_event(cpu, data, size):
                 event.avail_flags, "YES" if no_interrupt else "NO"))
         else:
             print("Guest avail_flags: <failed to read>")
-        
+
         if event.has_event_idx_feature and event.guest_event_valid:
             print("Guest used_event_idx: {} (host last_used={})".format(
                 event.used_event_idx, event.last_used_idx))
         elif event.has_event_idx_feature:
             print("Guest used_event_idx: <failed to read>")
-    
+
     print()
 
 def get_bpf_table(bpf_obj, table_name):
@@ -932,18 +933,19 @@ Examples:
   sudo %(prog)s --device vnet33 --verbose
         """
     )
-    
+
     parser.add_argument("--device", "-d", help="Target device name (e.g., vnet33)")
     parser.add_argument("--queue", "-q", type=int, help="Filter by queue index")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     parser.add_argument("--debug", action="store_true", help="Enable debug statistics output")
-    
+
     args = parser.parse_args()
 
     # Detect kernel version, distro and set appropriate structure layout
     kernel_5x = needs_5x_vhost_layout()
     kernel_6x = needs_6x_vhost_layout()
     major, minor = get_kernel_version()
+    kernel_4x = major == 4
     distro = get_distro_id()
 
     # Pre-scan for vhost_notify function name to detect constprop variant
@@ -976,6 +978,8 @@ Examples:
         # Set compile-time macros for correct structure/parameter handling
         bpf_program = bpf_text
         defines = []
+        if kernel_4x:
+            defines.append("#define KERNEL_VERSION_4X 1")
         if kernel_5x:
             defines.append("#define KERNEL_VERSION_5X 1")
         if kernel_6x:
@@ -1025,14 +1029,14 @@ Examples:
         if not vhost_notify_attached:
             print("Warning: Could not attach to vhost_notify (function not found or attach failed)")
             print("Continuing without vhost_notify monitoring...")
-        
+
         if args.verbose:
             print("All probes attached successfully")
-        
+
     except Exception as e:
         print("Failed to load BPF program: {}".format(e))
         return
-    
+
     devname_map = b["name_map"]
     _name = Devname()
     if args.device:
@@ -1043,7 +1047,7 @@ Examples:
         _name.name = b""
         devname_map[0] = _name
         print("Device filter: All TUN devices")
-    
+
     if args.queue is not None:
         b["filter_enabled"][0] = ct.c_uint32(1)
         b["filter_queue"][0] = ct.c_uint32(args.queue)
@@ -1051,19 +1055,19 @@ Examples:
     else:
         b["filter_enabled"][0] = ct.c_uint32(0)
         print("Queue filter: All queues")
-    
+
     print("Simple VHOST Queue Monitor Started")
     print("Monitoring: vhost_signal & vhost_notify events")
     print("Clearing maps to avoid stale entries")
-    
+
     # Clear maps
     target_queues_map = b["target_queues"]
     target_queues_map.clear()
-    
+
     vhost_notify_params_map = get_bpf_table(b, "vhost_notify_params")
     if vhost_notify_params_map is not None:
         vhost_notify_params_map.clear()
-    
+
     print("Waiting for events... Press Ctrl+C to stop\n")
 
     def print_debug_stats():

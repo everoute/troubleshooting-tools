@@ -283,10 +283,23 @@ struct tun_struct {
 	struct tun_prog __rcu *filter_prog;
 };
 
+// Kernel layout versions are set via Python based on the running kernel.
+#ifndef KERNEL_VERSION_4X
+#define KERNEL_VERSION_4X 0
+#endif
+#ifndef KERNEL_VERSION_5X
+#define KERNEL_VERSION_5X 0
+#endif
+#ifndef KERNEL_VERSION_6X
+#define KERNEL_VERSION_6X 0
+#endif
+
 struct tun_file {
 	struct sock sk;
 	struct socket socket;
+#if KERNEL_VERSION_4X
 	struct socket_wq wq;
+#endif
 	struct tun_struct __rcu *tun;
 	struct fasync_struct *fasync;
 	unsigned int flags;
@@ -305,12 +318,6 @@ struct tun_file {
 };
 
 // Proven VHOST structures from vhost_queue_correlation_monitor.py
-
-// KERNEL_VERSION_6X controls 6.x vhost structure additions
-// Set via Python based on kernel version detection
-#ifndef KERNEL_VERSION_6X
-#define KERNEL_VERSION_6X 0
-#endif
 
 struct vhost_virtqueue;
 
@@ -372,12 +379,6 @@ struct bpf_vhost_vring_call {
     struct eventfd_ctx *ctx;                // 8 bytes
     struct bpf_irq_bypass_producer producer;    // 64 bytes
 };  // Total: 72 bytes
-
-// KERNEL_VERSION_5X controls which structure layout to use
-// Set via Python based on kernel version detection
-#ifndef KERNEL_VERSION_5X
-#define KERNEL_VERSION_5X 0
-#endif
 
 struct vhost_virtqueue {
     struct vhost_dev *dev;
@@ -1175,20 +1176,20 @@ stage_names = {
 def process_interrupt_event(cpu, data, size):
     """Process interrupt trace events with enhanced correlation"""
     global sequence_errors
-    
+
     event = ct.cast(data, ct.POINTER(InterruptTraceEvent)).contents
-    
+
     timestamp = datetime.datetime.fromtimestamp(
         ktime_epoch_offset + event.timestamp / 1000000000.0)
     timestamp_str = timestamp.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
-    
+
     # Simplified correlation - BPF now handles the correlation properly
     if event.dev_name and event.queue_index < 256:
         queue_key = "{}:q{}".format(event.dev_name.decode('utf-8'), event.queue_index)
     else:
         queue_key = "unknown"
     calculated_delay = event.delay_ns
-    
+
     event_data = {
         'timestamp': event.timestamp,
         'stage': event.stage,
@@ -1213,19 +1214,19 @@ def process_interrupt_event(cpu, data, size):
         'icmp_code': event.icmp_code,
         'vector': event.vector,
     }
-    
+
     interrupt_traces.append(event_data)
-    
+
     if queue_key not in chain_stats:
         chain_stats[queue_key] = {}
     stage = event.stage
     if stage not in chain_stats[queue_key]:
         chain_stats[queue_key][stage] = 0
     chain_stats[queue_key][stage] += 1
-    
+
     # Real-time output with packet info
     delay_ms = calculated_delay / 1000000.0 if calculated_delay > 0 else 0
-    
+
     packet_info = ""
     if event.stage == 1 and event.saddr > 0:  # tun_net_xmit with packet info
         try:
@@ -1247,7 +1248,7 @@ def process_interrupt_event(cpu, data, size):
                 packet_info = " IP {} -> {} proto={}".format(src_ip, dst_ip, event.protocol)
         except:
             packet_info = " [packet info parse error]"
-    
+
     # Format output based on stage - only show relevant fields for each stage
     stage = event.stage
     base_info = "TUN TX INTERRUPT [{}] Stage {} [{}]: Time={}".format(
@@ -1305,20 +1306,20 @@ def analyze_interrupt_chains():
     if not chain_stats:
         print("\nNo chain data collected yet.")
         return
-    
+
     print("\n" + "="*80)
     print("TUN TX INTERRUPT CHAIN ANALYSIS")
     print("="*80)
-    
+
     for queue, stages in chain_stats.items():
         print("\nQueue: {}".format(queue))
         print("-" * 50)
-        
+
         # Count by stage
         print("Stage Event Counts:")
         for stage in sorted(stages.keys()):
             print("  Stage {} [{}]: {} events".format(stage, stage_names.get(stage, 'unknown'), stages[stage]))
-        
+
         # Chain completeness analysis
         if len(stages) > 1:
             stage_counts = list(stages.values())
@@ -1327,7 +1328,7 @@ def analyze_interrupt_chains():
             completeness = (min_count / max_count * 100) if max_count > 0 else 0
             print("  Chain Completeness: {:.1f}% (min {} / max {} events)".format(
                 completeness, min_count, max_count))
-            
+
             # Expected chain: Stage 1 -> Stage 2 -> Stage 3 -> Stage 4 -> Stage 5
             if 1 in stages and 2 in stages and 3 in stages and 4 in stages and 5 in stages:
                 print("  COMPLETE CHAIN: tun_net_xmit -> vhost_signal -> eventfd_signal -> irqfd_wakeup -> posted_int")
@@ -1343,7 +1344,7 @@ def analyze_interrupt_chains():
                 print("  INCOMPLETE: only vhost_signal detected (missing tun_net_xmit)")
             else:
                 print("  NO PROPER CHAIN DETECTED")
-    
+
     if sequence_errors > 0:
         print("\nSEQUENCE ERRORS: {} out-of-order events detected".format(sequence_errors))
 
@@ -1352,24 +1353,24 @@ def print_statistics_summary():
     if not interrupt_traces:
         print("\nNo interrupt traces collected yet.")
         return
-    
+
     print("\n" + "="*80)
     print("TUN TX QUEUE INTERRUPT TRACING STATISTICS")
     print("="*80)
-    
+
     # Overall stage distribution
     stage_counts = {}
     for trace in interrupt_traces:
         stage = trace['stage']
         stage_counts[stage] = stage_counts.get(stage, 0) + 1
-    
+
     print("\nOverall Stage Distribution:")
     for stage in sorted(stage_counts.keys()):
         print("  Stage {} [{}]: {} events".format(stage, stage_names.get(stage, 'unknown'), stage_counts[stage]))
-    
+
     # Analyze interrupt chains
     analyze_interrupt_chains()
-    
+
     # Show timing analysis for complete chains
     if len(stage_counts) >= 2:
         # Calculate average delays
@@ -1381,20 +1382,20 @@ def print_statistics_summary():
             p50_delay = delays[count//2] / 1000.0
             p90_delay = delays[int(count*0.9)] / 1000.0
             p99_delay = delays[int(count*0.99)] / 1000.0
-            
+
             print("\nInterrupt Latency Analysis:")
             print("  Average delay: {:.1f}μs (from {} samples)".format(avg_delay, count))
             print("  P50 delay: {:.1f}μs".format(p50_delay))
             print("  P90 delay: {:.1f}μs".format(p90_delay))
             print("  P99 delay: {:.1f}μs".format(p99_delay))
-    
+
     # Show packet type analysis
     protocols = {}
     for trace in interrupt_traces:
         if trace['stage'] == 1 and trace['protocol'] > 0:  # tun_net_xmit with valid protocol
             proto = trace['protocol']
             protocols[proto] = protocols.get(proto, 0) + 1
-    
+
     if protocols:
         print("\nPacket Type Distribution:")
         proto_names = {6: 'TCP', 17: 'UDP', 1: 'ICMP'}
@@ -1436,7 +1437,7 @@ Examples:
   sudo %(prog)s --device vnet0 --queue 0 --generate-traffic
         """
     )
-    
+
     parser.add_argument("--device", "-d", help="Target device name (e.g., vnet0)")
     parser.add_argument("--queue", "-q", type=int, help="Filter by queue index")
     parser.add_argument("--analyze-chains", action="store_true", help="Enable interrupt chain analysis")
@@ -1455,7 +1456,7 @@ Examples:
     parser.add_argument("--icmp-seq", type=int, help="Filter by ICMP echo sequence")
 
     args = parser.parse_args()
-    
+
     if args.generate_traffic:
         print("Network Traffic Generation Commands:")
         print("# Generate ICMP traffic:")
@@ -1466,11 +1467,12 @@ Examples:
         print("nc -u <target_ip> 53")
         print("\nRun the trace tool in another terminal and then execute these commands.")
         return
-    
+
     # Detect kernel version and set appropriate structure layout
     kernel_5x = needs_5x_vhost_layout()
     kernel_6x = needs_6x_vhost_layout()
     major, minor = get_kernel_version()
+    kernel_4x = major == 4
     distro = get_distro_id()
     irqbypass_loaded = has_irqbypass_module()
     apicv_tracepoint = has_tracepoint("kvm", "kvm_apicv_accept_irq")
@@ -1486,6 +1488,8 @@ Examples:
     # Load BPF program with kernel version macro
     try:
         bpf_program = bpf_text
+        if kernel_4x:
+            bpf_program = "#define KERNEL_VERSION_4X 1\n" + bpf_program
         if kernel_5x:
             bpf_program = "#define KERNEL_VERSION_5X 1\n" + bpf_program
         if kernel_6x:
@@ -1549,7 +1553,7 @@ Examples:
 
         b.attach_kprobe(event="vhost_add_used_and_signal_n", fn_name="trace_vhost_signal")
         print("Successfully attached to vhost_add_used_and_signal_n")
-        
+
         # Stage 3: eventfd_signal/eventfd_signal_mask - Called by vhost_signal
         try:
             b.attach_kprobe(event="eventfd_signal", fn_name="trace_eventfd_signal")
@@ -1597,14 +1601,14 @@ Examples:
             except Exception as e:
                 if args.debug:
                     print("Note: vmx_deliver_posted_interrupt not available: {}".format(e))
-        
+
     except Exception as e:
         print("Failed to load BPF program: {}".format(e))
         if args.debug:
             print("BPF program source:")
             print(bpf_text)
         return
-    
+
     devname_map = b["name_map"]
     _name = Devname()
     if args.device:
@@ -1615,7 +1619,7 @@ Examples:
         _name.name = b""
         devname_map[0] = _name
         print("Device filter: All TUN devices")
-    
+
     if args.queue is not None:
         b["filter_enabled"][0] = ct.c_uint32(1)
         b["filter_queue"][0] = ct.c_uint32(args.queue)
@@ -1623,7 +1627,7 @@ Examples:
     else:
         b["filter_enabled"][0] = ct.c_uint32(0)
         print("Queue filter: All queues")
-    
+
     print("\n" + "="*80)
     print("TUN TX QUEUE INTERRUPT TRACING STARTED")
     print("="*80)
@@ -1632,7 +1636,7 @@ Examples:
     if args.analyze_chains:
         print("Chain analysis: ENABLED (interval: {}s)".format(args.stats_interval))
     print("Press Ctrl+C to stop\n")
-    
+
     # Clear all maps for clean start
     print("Clearing BPF maps for clean state...")
     b["target_queues"].clear()
@@ -1640,32 +1644,32 @@ Examples:
     b["sequence_check"].clear()
     b["vector_to_queue"].clear()
     print("Maps cleared. Ready for tracing.\n")
-    
+
     # Open perf buffer for events
     b["interrupt_events"].open_perf_buffer(process_interrupt_event)
-    
+
     # Main event loop
     try:
         import time
         last_stats_time = time.time()
-        
+
         while True:
             try:
                 b.perf_buffer_poll(timeout=1000)  # Poll for 1 second
-                
+
                 # Print statistics periodically if chain analysis is enabled
                 if args.analyze_chains:
                     current_time = time.time()
                     if current_time - last_stats_time >= args.stats_interval:
                         print_statistics_summary()
                         last_stats_time = current_time
-                        
+
             except KeyboardInterrupt:
                 break
-                
+
     except KeyboardInterrupt:
         pass
-    
+
     # Final statistics and output
     print("\n" + "="*80)
     print("TUN TX INTERRUPT TRACING STOPPED - FINAL SUMMARY")
@@ -1682,7 +1686,7 @@ Examples:
             print("\nTrace data saved to: {}".format(args.output))
         except Exception as e:
             print("Failed to save trace data: {}".format(e))
-    
+
     print("\nTUN TX Queue Interrupt Tracing completed.")
     print("Total events collected: {}".format(len(interrupt_traces)))
 

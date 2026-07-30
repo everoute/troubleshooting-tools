@@ -10,6 +10,7 @@ except ImportError:
         from bpfcc.utils import printb
     except ImportError:
         import sys
+
         print("Error: Neither bcc nor bpfcc module found!")
         if sys.version_info[0] == 3:
             print("Please install: python3-bcc or python3-bpfcc")
@@ -25,6 +26,7 @@ import socket
 import struct
 import argparse
 import signal
+import platform
 
 # OVS Connection Tracking state flags
 OVS_CS_F_NEW = 0x01
@@ -36,12 +38,32 @@ OVS_CS_F_TRACKED = 0x20
 OVS_CS_F_SRC_NAT = 0x40
 OVS_CS_F_DST_NAT = 0x80
 
-parser = argparse.ArgumentParser(description='Monitor OpenVSwitch deferred action drops')
-parser.add_argument('--src-ip', '--src', type=str, help='Source IP address to monitor (in dotted decimal notation)')
-parser.add_argument('--dst-ip', '--dst', type=str, help='Destination IP address to monitor (in dotted decimal notation)')
-parser.add_argument('--protocol', type=str, choices=['all', 'icmp', 'tcp', 'udp'], default='all', help='Protocol to monitor')
-parser.add_argument('--src-port', type=int, help='Source port to monitor (for TCP/UDP)')
-parser.add_argument('--dst-port', type=int, help='Destination port to monitor (for TCP/UDP)')
+parser = argparse.ArgumentParser(
+    description="Monitor OpenVSwitch deferred action drops"
+)
+parser.add_argument(
+    "--src-ip",
+    "--src",
+    type=str,
+    help="Source IP address to monitor (in dotted decimal notation)",
+)
+parser.add_argument(
+    "--dst-ip",
+    "--dst",
+    type=str,
+    help="Destination IP address to monitor (in dotted decimal notation)",
+)
+parser.add_argument(
+    "--protocol",
+    type=str,
+    choices=["all", "icmp", "tcp", "udp"],
+    default="all",
+    help="Protocol to monitor",
+)
+parser.add_argument("--src-port", type=int, help="Source port to monitor (for TCP/UDP)")
+parser.add_argument(
+    "--dst-port", type=int, help="Destination port to monitor (for TCP/UDP)"
+)
 args = parser.parse_args()
 
 # Default values for filters
@@ -50,15 +72,22 @@ dst_ip = args.dst_ip if args.dst_ip else "0.0.0.0"
 src_port = args.src_port if args.src_port else 0
 dst_port = args.dst_port if args.dst_port else 0
 
+
 # Convert IP to hex for BPF program
 def ip_to_hex(ip):
     return htonl(unpack("!I", inet_aton(ip))[0])
+
 
 src_ip_hex = ip_to_hex(src_ip)
 dst_ip_hex = ip_to_hex(dst_ip)
 
 # Map protocol string to number
-protocol_map = {'all': 0, 'icmp': socket.IPPROTO_ICMP, 'tcp': socket.IPPROTO_TCP, 'udp': socket.IPPROTO_UDP}
+protocol_map = {
+    "all": 0,
+    "icmp": socket.IPPROTO_ICMP,
+    "tcp": socket.IPPROTO_TCP,
+    "udp": socket.IPPROTO_UDP,
+}
 protocol_num = protocol_map[args.protocol]
 
 # Print monitoring setup information
@@ -66,7 +95,7 @@ print("Monitoring OpenVSwitch deferred action drops")
 print("Source IP: {}".format(src_ip))
 print("Destination IP: {}".format(dst_ip))
 print("Protocol: {}".format(args.protocol))
-if args.protocol in ['tcp', 'udp']:
+if args.protocol in ["tcp", "udp"]:
     print("Source port: {}".format(src_port))
     print("Destination port: {}".format(dst_port))
 
@@ -121,9 +150,15 @@ struct ip_tunnel_key {
     __be16 tun_flags;   // 2 bytes
     u8 tos;             // 1 byte
     u8 ttl;             // 1 byte
+    __be32 label;       // 4 bytes
+#if KERNEL_VERSION_6X
+    u32 nhid;           // 4 bytes, added in 6.x kernels
+#endif
     __be16 tp_src;      // 2 bytes
     __be16 tp_dst;      // 2 bytes
-    // Some other fields may be present, but we don't need them
+#if KERNEL_VERSION_6X
+    u8 flow_flags;      // 1 byte, added in 6.x kernels
+#endif
 };
 
 struct vlan_head {
@@ -241,11 +276,9 @@ int trace_clone_execute(struct pt_regs *ctx)
     return 0;
 }
 
-// Probe for kfree_skb to detect dropped packets
-int trace_kfree_skb(struct pt_regs *ctx)
+// Tracepoint for kfree_skb to detect dropped packets
+static inline int collect_kfree_skb(void *ctx, struct sk_buff *skb)
 {
-    struct sk_buff *skb = (struct sk_buff *)PT_REGS_PARM1(ctx);
-    
     if (skb == NULL)
         return 0;
     
@@ -351,30 +384,36 @@ cleanup:
     active_skbs.delete(&skb_ptr);
     return 0;
 }
+
+TRACEPOINT_PROBE(skb, kfree_skb)
+{
+    return collect_kfree_skb(args, (struct sk_buff *)args->skbaddr);
+}
 """
 
 # Compile and load BPF program
-b = BPF(text=bpf_text % (src_ip_hex, dst_ip_hex, src_port, dst_port, protocol_num))
-#b = BPF(text=bpf_text % (src_ip_hex, dst_ip_hex, src_port, dst_port, protocol_num), cflags=["-I/usr/src/$(uname -r)/net/openvswitch/flow.h"])
+kernel_major = int(platform.release().split(".", 1)[0])
+bpf_program = "#define KERNEL_VERSION_6X %d\n" % (1 if kernel_major >= 6 else 0)
+bpf_program += bpf_text % (src_ip_hex, dst_ip_hex, src_port, dst_port, protocol_num)
+b = BPF(text=bpf_program)
+# b = BPF(text=bpf_text % (src_ip_hex, dst_ip_hex, src_port, dst_port, protocol_num), cflags=["-I/usr/src/$(uname -r)/net/openvswitch/flow.h"])
 
-# Attach kprobes
+# Attach the OVS function probe. The kfree_skb tracepoint is auto-attached by BCC.
 b.attach_kprobe(event="clone_execute", fn_name="trace_clone_execute")
-if BPF.get_kprobe_functions(b"__kfree_skb"):
-    b.attach_kprobe(event="__kfree_skb", fn_name="trace_kfree_skb")
-elif BPF.get_kprobe_functions(b"kfree_skb"):
-    b.attach_kprobe(event="kfree_skb", fn_name="trace_kfree_skb")
-else:
-    print("Warning: Could not find kprobe for '__kfree_skb' or 'kfree_skb'. Free events will not be traced.")
-    exit(1)
+
 
 # Process events from perf buffer
 def print_ovs_drop_event(cpu, data, size):
     event = b["ovs_drops"].event(data)
-    protocol_str = {socket.IPPROTO_ICMP: "ICMP", socket.IPPROTO_TCP: "TCP", socket.IPPROTO_UDP: "UDP"}.get(event.protocol, str(event.protocol))
-    
+    protocol_str = {
+        socket.IPPROTO_ICMP: "ICMP",
+        socket.IPPROTO_TCP: "TCP",
+        socket.IPPROTO_UDP: "UDP",
+    }.get(event.protocol, str(event.protocol))
+
     # Stack trace with better filtering
     stack_id = event.kernel_stack_id
-    
+
     if stack_id >= 0:
         stack_trace = []
         try:
@@ -383,68 +422,83 @@ def print_ovs_drop_event(cpu, data, size):
             print("  Failed to retrieve stack trace (ID: %d)" % stack_id)
 
         if stack_trace:
-            # where kfree_skb is called directly from clone_execute
+            # Accept frees anywhere below clone_execute in the current stack.
+            # Newer kernels add intermediate frames such as
+            # kfree_skb_reason and do_execute_actions.
             found_target_path = False
-            clone_execute_index = None
-            
-            # First find clone_execute in the stack
-            for i, addr in enumerate(stack_trace):
+            for addr in stack_trace:
                 func_name = b.ksym(addr)
                 if b"clone_execute" in func_name:
-                    clone_execute_index = i
+                    found_target_path = True
                     break
 
-            # If found, check if kfree_skb is the function immediately before it in the stack
-            # (In stack traces, the caller appears after the callee)
-            if clone_execute_index is not None and clone_execute_index > 0:
-                prev_func = b.ksym(stack_trace[clone_execute_index - 1])
-                if b"kfree_skb" in prev_func:
-                    found_target_path = True
-            
             if not found_target_path:
-                return  # Skip this event, it's not the direct clone_execute -> kfree_skb call
-                
+                return  # Skip frees outside the clone_execute call path
+
             # Now print the actual stack trace
             print("\n=== OpenVSwitch Deferred Action Drop Event ===")
-            print("Time: %s  PID: %-6d  Comm: %s" % (
-                strftime("%H:%M:%S"), event.pid, event.comm.decode('utf-8')))
-            
-            print("Source IP: %-15s  Destination IP: %-15s  Protocol: %s" % (
-                inet_ntop(AF_INET, pack("I", event.saddr)),
-                inet_ntop(AF_INET, pack("I", event.daddr)),
-                protocol_str))
-            
+            print(
+                "Time: %s  PID: %-6d  Comm: %s"
+                % (strftime("%H:%M:%S"), event.pid, event.comm.decode("utf-8"))
+            )
+
+            print(
+                "Source IP: %-15s  Destination IP: %-15s  Protocol: %s"
+                % (
+                    inet_ntop(AF_INET, pack("I", event.saddr)),
+                    inet_ntop(AF_INET, pack("I", event.daddr)),
+                    protocol_str,
+                )
+            )
+
             # Clone execute parameters
             print("OVS Parameters:")
-            print("  recirc_id: 0x%-8x last: %-5s  clone_flow_key: %s" % (
-                event.recirc_id, 
-                "True" if event.last else "False",
-                "True" if event.clone_flow_key else "False"))
-                
+            print(
+                "  recirc_id: 0x%-8x last: %-5s  clone_flow_key: %s"
+                % (
+                    event.recirc_id,
+                    "True" if event.last else "False",
+                    "True" if event.clone_flow_key else "False",
+                )
+            )
+
             ct_state = event.ct_state
             ct_state_flags = []
-            
+
             # Interpret CT state flags based on OVS definitions (rough mapping)
-            if ct_state & 0x01: ct_state_flags.append("NEW")         # OVS_CS_F_NEW
-            if ct_state & 0x02: ct_state_flags.append("ESTABLISHED") # OVS_CS_F_ESTABLISHED  
-            if ct_state & 0x04: ct_state_flags.append("RELATED")     # OVS_CS_F_RELATED
-            if ct_state & 0x08: ct_state_flags.append("REPLY_DIR")   # OVS_CS_F_REPLY_DIR
-            if ct_state & 0x10: ct_state_flags.append("INVALID")     # OVS_CS_F_INVALID
-            if ct_state & 0x20: ct_state_flags.append("TRACKED")     # OVS_CS_F_TRACKED
-            if ct_state & 0x40: ct_state_flags.append("SRC_NAT")     # OVS_CS_F_SRC_NAT
-            if ct_state & 0x80: ct_state_flags.append("DST_NAT")     # OVS_CS_F_DST_NAT
-            
+            if ct_state & 0x01:
+                ct_state_flags.append("NEW")  # OVS_CS_F_NEW
+            if ct_state & 0x02:
+                ct_state_flags.append("ESTABLISHED")  # OVS_CS_F_ESTABLISHED
+            if ct_state & 0x04:
+                ct_state_flags.append("RELATED")  # OVS_CS_F_RELATED
+            if ct_state & 0x08:
+                ct_state_flags.append("REPLY_DIR")  # OVS_CS_F_REPLY_DIR
+            if ct_state & 0x10:
+                ct_state_flags.append("INVALID")  # OVS_CS_F_INVALID
+            if ct_state & 0x20:
+                ct_state_flags.append("TRACKED")  # OVS_CS_F_TRACKED
+            if ct_state & 0x40:
+                ct_state_flags.append("SRC_NAT")  # OVS_CS_F_SRC_NAT
+            if ct_state & 0x80:
+                ct_state_flags.append("DST_NAT")  # OVS_CS_F_DST_NAT
+
             ct_state_str = ", ".join(ct_state_flags) if ct_state_flags else "NONE"
             print("  ct_state: 0x%02x (%s)" % (ct_state, ct_state_str))
-            
+
             # Protocol specific info
             if event.protocol == socket.IPPROTO_ICMP:
-                print("ICMP Type: %-2d  Code: %-2d" % (event.icmp_type, event.icmp_code))
+                print(
+                    "ICMP Type: %-2d  Code: %-2d" % (event.icmp_type, event.icmp_code)
+                )
             elif event.protocol in [socket.IPPROTO_TCP, socket.IPPROTO_UDP]:
-                print("Source Port: %-5d  Destination Port: %-5d" % (event.sport, event.dport))
-            
-            print("Device: %s" % event.ifname.decode('utf-8'))
-    
+                print(
+                    "Source Port: %-5d  Destination Port: %-5d"
+                    % (event.sport, event.dport)
+                )
+
+            print("Device: %s" % event.ifname.decode("utf-8"))
+
             print("Stack Trace:")
             for addr in stack_trace:
                 sym = b.ksym(addr, show_offset=True)
@@ -453,14 +507,16 @@ def print_ovs_drop_event(cpu, data, size):
             # After displaying the kernel stack trace, add user stack trace display
             print("User Stack Trace:")
             user_stack_id = event.user_stack_id
-            
+
             if user_stack_id >= 0:
                 user_stack = []
                 try:
                     user_stack = list(b.get_table("stack_traces").walk(user_stack_id))
                 except KeyError:
-                    print("  Failed to retrieve user stack trace (ID: %d)" % user_stack_id)
-                
+                    print(
+                        "  Failed to retrieve user stack trace (ID: %d)" % user_stack_id
+                    )
+
                 if user_stack:
                     for addr in user_stack:
                         # For user-space, we use sym() instead of ksym()
@@ -488,25 +544,30 @@ def print_ovs_drop_event(cpu, data, size):
                     error_msg = "Resource temporarily unavailable"
                 elif error_code == 524:
                     error_msg = "Uprobe not found"
-                
-                print("  Failed to capture user stack trace (Error: %s, code: %d)" % 
-                    (error_msg, error_code))
-            
-            #print("===============================================")
+
+                print(
+                    "  Failed to capture user stack trace (Error: %s, code: %d)"
+                    % (error_msg, error_code)
+                )
+
+            # print("===============================================")
     else:
         # Stack trace capture failed (e.g., BPF_MAX_STACK_DEPTH exceeded)
         # Without stack trace, we cannot verify if this is a direct
         # clone_execute -> kfree_skb call, so silently skip this event
         return
-    
-    #print("===============================================")
+
+    # print("===============================================")
+
 
 b["ovs_drops"].open_perf_buffer(print_ovs_drop_event)
+
 
 # Handle Ctrl-C gracefully
 def signal_handler(sig, frame):
     print("\nExiting...")
     exit(0)
+
 
 signal.signal(signal.SIGINT, signal_handler)
 
@@ -516,4 +577,4 @@ while True:
     try:
         b.perf_buffer_poll()
     except KeyboardInterrupt:
-        exit() 
+        exit()

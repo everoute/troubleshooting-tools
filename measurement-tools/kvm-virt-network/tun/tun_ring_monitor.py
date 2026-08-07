@@ -3,9 +3,11 @@
 
 from __future__ import print_function
 import argparse
+import platform
 import socket
 import struct
 import sys
+
 # BCC module import with fallback
 try:
     from bcc import BPF
@@ -14,6 +16,7 @@ except ImportError:
         from bpfcc import BPF
     except ImportError:
         import sys
+
         print("Error: Neither bcc nor bpfcc module found!")
         if sys.version_info[0] == 3:
             print("Please install: python3-bcc or python3-bpfcc")
@@ -22,9 +25,20 @@ except ImportError:
         sys.exit(1)
 import ctypes as ct
 
+
 # Devname structure for device filtering (same as iface_netstat.py)
 class Devname(ct.Structure):
-    _fields_=[("name", ct.c_char*16)]
+    _fields_ = [("name", ct.c_char * 16)]
+
+
+def get_kernel_version():
+    """Return the running kernel's major and minor version."""
+    try:
+        version = platform.release().split("-")[0].split(".")
+        return (int(version[0]), int(version[1]))
+    except (IndexError, ValueError):
+        return (0, 0)
+
 
 # BPF program with verified device filtering and ptr_ring monitoring
 bpf_text = """
@@ -35,10 +49,15 @@ bpf_text = """
 #include <linux/netdevice.h>
 #include <linux/if_ether.h>
 #include <linux/if_vlan.h>
-#include <net/ip.h>
+#include <net/xdp.h>
+#include <linux/filter.h>
 #include <linux/ptr_ring.h>
 
 #define NETDEV_ALIGN 32
+
+#ifndef KERNEL_VERSION_4X
+#define KERNEL_VERSION_4X 0
+#endif
 
 // Device name union for efficient comparison (from iface_netstat.c)
 union name_buf {
@@ -100,7 +119,9 @@ struct tun_struct {
 struct tun_file {
 	struct sock sk;
 	struct socket socket;
+#if KERNEL_VERSION_4X
 	struct socket_wq wq;
+#endif
 	struct tun_struct __rcu *tun;
 	struct fasync_struct *fasync;
 	/* only used for fasnyc */
@@ -402,6 +423,7 @@ int probe_tun_net_xmit(struct pt_regs *ctx, struct sk_buff *skb, struct net_devi
 }
 """
 
+
 class EventData(ct.Structure):
     _fields_ = [
         ("pid", ct.c_uint32),
@@ -434,18 +456,26 @@ class EventData(ct.Structure):
         ("tfile_index", ct.c_uint32),
     ]
 
+
 def ip_to_str(addr):
     if addr == 0:
         return "N/A"
     return socket.inet_ntoa(struct.pack("I", addr))
 
+
 def print_event(cpu, data, size):
     event = ct.cast(data, ct.POINTER(EventData)).contents
-    
+
     saddr_str = ip_to_str(event.saddr)
     daddr_str = ip_to_str(event.daddr)
-    protocol_str = "TCP" if event.protocol == 6 else "UDP" if event.protocol == 17 else str(event.protocol)
-    
+    protocol_str = (
+        "TCP"
+        if event.protocol == 6
+        else "UDP"
+        if event.protocol == 17
+        else str(event.protocol)
+    )
+
     # Calculate ring utilization
     if event.ptr_ring_size > 0:
         if event.producer >= event.consumer_tail:
@@ -455,39 +485,50 @@ def print_event(cpu, data, size):
         utilization = (used * 100) // event.ptr_ring_size
     else:
         utilization = 0
-    
+
     # Format timestamp
     import datetime
+
     timestamp = datetime.datetime.fromtimestamp(event.timestamp / 1000000000.0)
-    timestamp_str = timestamp.strftime('%H:%M:%S.%f')[:-3]
-    
-    print("="*80)
+    timestamp_str = timestamp.strftime("%H:%M:%S.%f")[:-3]
+
+    print("=" * 80)
     if event.ring_full:
         print("TUN RING FULL DETECTED!")
     else:
         print("TUN Ring Status")
-    
+
     print("Time: {}".format(timestamp_str))
-    print("Process: {} (PID: {})".format(event.comm.decode('utf-8', 'replace'), event.pid))
-    print("Device: {}".format(event.dev_name.decode('utf-8', 'replace')))
+    print(
+        "Process: {} (PID: {})".format(event.comm.decode("utf-8", "replace"), event.pid)
+    )
+    print("Device: {}".format(event.dev_name.decode("utf-8", "replace")))
     print("Queue: {}".format(event.queue_mapping))
     print("SKB Address: 0x{:x}".format(event.skb_addr))
     print()
-    
+
     # Show struct layout information
     print("Struct Layout Analysis:")
     print("  tfiles array size: {} bytes".format(event.tfiles_size))
     print("  numqueues offset: {} bytes".format(event.numqueues_offset))
     print("  Expected tfiles size: {} bytes (256 pointers * 8)".format(256 * 8))
     if event.tfiles_size == event.numqueues_offset:
-        print("  Layout correct: tfiles takes exactly {} bytes".format(event.tfiles_size))
+        print(
+            "  Layout correct: tfiles takes exactly {} bytes".format(event.tfiles_size)
+        )
     else:
-        print("  Layout mismatch: tfiles size {} != numqueues offset {}".format(
-            event.tfiles_size, event.numqueues_offset))
-    print("  Array access: queue_mapping={} -> tfiles[{}]".format(
-        event.queue_mapping, event.tfile_index))
+        print(
+            "  Layout mismatch: tfiles size {} != numqueues offset {}".format(
+                event.tfiles_size, event.numqueues_offset
+            )
+        )
+    print(
+        "  Array access: queue_mapping={} -> tfiles[{}]".format(
+            event.queue_mapping, event.tfile_index
+        )
+    )
     print()
-    
+
     # Show validation info
     print("Validation Info:")
     print("  TUN struct: 0x{:x}".format(event.tun_ptr))
@@ -495,7 +536,7 @@ def print_event(cpu, data, size):
     print("  TFile ptr: 0x{:x}".format(event.tfile_ptr))
     print("  TFile queue_index: {}".format(event.tfile_queue_index))
     print()
-    
+
     # Always show 5-tuple info section - helps debug filtering issues
     print("5-Tuple Info:")
     if event.saddr != 0 or event.daddr != 0 or event.sport != 0 or event.dport != 0:
@@ -508,7 +549,7 @@ def print_event(cpu, data, size):
         print("  Destination: N/A:N/A")
         print("  Protocol: N/A")
     print()
-    
+
     print("PTR Ring Details:")
     if event.ptr_ring_size > 0:
         print("  Size: {}".format(event.ptr_ring_size))
@@ -516,16 +557,21 @@ def print_event(cpu, data, size):
         print("  Consumer Head: {}".format(event.consumer_head))
         print("  Consumer Tail: {}".format(event.consumer_tail))
         print("  Queue[Producer] Ptr: 0x{:x}".format(event.queue_producer_ptr))
-        
+
         if event.ring_full:
             print("  Status: FULL (queue[producer] != NULL)")
         else:
-            print("  Status: Available (queue[producer] == NULL), {}% used".format(utilization))
+            print(
+                "  Status: Available (queue[producer] == NULL), {}% used".format(
+                    utilization
+                )
+            )
     else:
         print("  Status: Not found (using default search offsets)")
-    
-    print("="*80)
+
+    print("=" * 80)
     print()
+
 
 def str_to_ip(ip_str):
     """Convert IP string to network-ordered hex value (same as icmp_rtt_latency.py)"""
@@ -538,6 +584,7 @@ def str_to_ip(ip_str):
     except socket.error:
         print("Error: Invalid IP address format '{}'".format(ip_str))
         sys.exit(1)
+
 
 def main():
     parser = argparse.ArgumentParser(
@@ -553,28 +600,39 @@ Examples:
   
   # Filter by 5-tuple with source IP (shows 5-tuple info)
   sudo %(prog)s --device vnet12 --src-ip 192.168.1.100 --all
-        """
+        """,
     )
-    
+
     parser.add_argument("--device", "-d", help="Target device name (e.g., vnet12)")
     parser.add_argument("--src-ip", help="Filter by source IP")
     parser.add_argument("--dst-ip", help="Filter by destination IP")
     parser.add_argument("--src-port", type=int, help="Filter by source port")
     parser.add_argument("--dst-port", type=int, help="Filter by destination port")
-    parser.add_argument("--protocol", choices=['tcp', 'udp'], help="Filter by protocol")
-    parser.add_argument("--all", action="store_true", help="Show all events (not just ring full)")
+    parser.add_argument("--protocol", choices=["tcp", "udp"], help="Filter by protocol")
+    parser.add_argument(
+        "--all", action="store_true", help="Show all events (not just ring full)"
+    )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
-    
+
     args = parser.parse_args()
-    
+    major, minor = get_kernel_version()
+    if major == 0:
+        print("Failed to determine the running kernel version.")
+        return
+    kernel_4x = major == 4
+
     # Prepare filter parameters for BPF Maps
-    filter_enabled = 1 if any([args.src_ip, args.dst_ip, args.src_port, args.dst_port, args.protocol]) else 0
+    filter_enabled = (
+        1
+        if any([args.src_ip, args.dst_ip, args.src_port, args.dst_port, args.protocol])
+        else 0
+    )
     filter_saddr = str_to_ip(args.src_ip) if args.src_ip else 0
     filter_daddr = str_to_ip(args.dst_ip) if args.dst_ip else 0
     filter_sport = args.src_port if args.src_port else 0
     filter_dport = args.dst_port if args.dst_port else 0
-    filter_protocol = (6 if args.protocol == 'tcp' else 17) if args.protocol else 0
-    
+    filter_protocol = (6 if args.protocol == "tcp" else 17) if args.protocol else 0
+
     # Load BPF program (no string replacement needed)
     try:
         if args.verbose:
@@ -585,21 +643,25 @@ Examples:
             print("  FILTER_SPORT: {}".format(filter_sport))
             print("  FILTER_DPORT: {}".format(filter_dport))
             print("  FILTER_PROTOCOL: {}".format(filter_protocol))
-        
-        b = BPF(text=bpf_text)
+
+        bpf_program = bpf_text
+        if kernel_4x:
+            bpf_program = "#define KERNEL_VERSION_4X 1\n" + bpf_program
+
+        b = BPF(text=bpf_program)
         b.attach_kprobe(event="tun_net_xmit", fn_name="probe_tun_net_xmit")
     except Exception as e:
         print("Failed to load BPF program: {}".format(e))
         print("Make sure you have proper permissions and BCC is installed.")
         return
-    
+
     b["filter_enabled"][0] = ct.c_uint32(filter_enabled)
     b["filter_saddr"][0] = ct.c_uint32(filter_saddr)
     b["filter_daddr"][0] = ct.c_uint32(filter_daddr)
     b["filter_sport"][0] = ct.c_uint16(filter_sport)
     b["filter_dport"][0] = ct.c_uint16(filter_dport)
     b["filter_protocol"][0] = ct.c_uint8(filter_protocol)
-    
+
     devname_map = b["name_map"]
     _name = Devname()
     if args.device:
@@ -610,34 +672,39 @@ Examples:
         _name.name = b""
         devname_map[0] = _name
         print("Device filter: All TUN devices")
-    
+
     if args.all:
         b["show_all_events"][0] = ct.c_uint32(1)
-    
+
     # Print startup info
     print("TUN Ring Monitor Started with BPF Maps Filters...")
     if args.all:
         print("Mode: Monitoring ALL TUN transmit events")
     else:
         print("Mode: Monitoring ptr_ring FULL conditions only")
-    
+
     filters = []
-    if args.src_ip: filters.append("src-ip={}".format(args.src_ip))
-    if args.dst_ip: filters.append("dst-ip={}".format(args.dst_ip))
-    if args.src_port: filters.append("src-port={}".format(args.src_port))
-    if args.dst_port: filters.append("dst-port={}".format(args.dst_port))
-    if args.protocol: filters.append("protocol={}".format(args.protocol.upper()))
-    
+    if args.src_ip:
+        filters.append("src-ip={}".format(args.src_ip))
+    if args.dst_ip:
+        filters.append("dst-ip={}".format(args.dst_ip))
+    if args.src_port:
+        filters.append("src-port={}".format(args.src_port))
+    if args.dst_port:
+        filters.append("dst-port={}".format(args.dst_port))
+    if args.protocol:
+        filters.append("protocol={}".format(args.protocol.upper()))
+
     if filters:
-        print("5-tuple filters: {}".format(', '.join(filters)))
-    
+        print("5-tuple filters: {}".format(", ".join(filters)))
+
     print(" New feature: Analyzing tun_struct memory layout")
     print("   - tfiles array size calculation")
     print("   - numqueues field offset calculation")
     print("   - Memory layout validation")
     print()
     print("Waiting for TUN device events... Press Ctrl+C to stop")
-    
+
     try:
         b["events"].open_perf_buffer(print_event)
         while True:
@@ -647,8 +714,9 @@ Examples:
                 break
     except KeyboardInterrupt:
         pass
-    
+
     print("\nMonitoring stopped.")
 
+
 if __name__ == "__main__":
-    main() 
+    main()

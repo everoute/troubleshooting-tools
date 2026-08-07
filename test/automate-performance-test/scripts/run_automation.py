@@ -444,6 +444,20 @@ Examples:
             test_cases=test_cases
         )
 
+        execution_config = configs.get('execution', {})
+        if execution_config.get('include_baseline') is False:
+            before_count = len(workflow_spec['test_sequence'])
+            workflow_spec['test_sequence'] = [
+                cycle for cycle in workflow_spec['test_sequence']
+                if cycle.get('cycle_type') != 'baseline'
+            ]
+            workflow_spec['metadata']['total_test_cycles'] = len(workflow_spec['test_sequence'])
+            logger.info(
+                "Filtered baseline cycles: %d -> %d",
+                before_count,
+                len(workflow_spec['test_sequence'])
+            )
+
         # Validate workflow
         if not workflow_generator.validate_workflow(workflow_spec):
             logger.error("Generated workflow is invalid")

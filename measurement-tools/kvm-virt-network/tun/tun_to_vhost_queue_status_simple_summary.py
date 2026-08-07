@@ -9,6 +9,7 @@ import sys
 import datetime
 import re
 import platform
+
 # BCC module import with fallback
 try:
     from bcc import BPF
@@ -25,9 +26,11 @@ except ImportError:
 import ctypes as ct
 from time import sleep, strftime
 
+
 # Devname structure for device filtering
 class Devname(ct.Structure):
-    _fields_=[("name", ct.c_char*16)]
+    _fields_ = [("name", ct.c_char * 16)]
+
 
 def find_kernel_function(base_name, verbose=False):
     """
@@ -43,13 +46,14 @@ def find_kernel_function(base_name, verbose=False):
     #   vmlinux: "ffffffff81234567 t func_name"
     #   module:  "ffffffffc1234567 t func_name\t[module_name]"
     pattern = re.compile(
-        r'^[0-9a-f]+\s+[tT]\s+(' + re.escape(base_name) +
-        r'(?:\.(?:isra|constprop|part|cold|hot)\.\d+)*)(?:\s+\[\w+\])?$'
+        r"^[0-9a-f]+\s+[tT]\s+("
+        + re.escape(base_name)
+        + r"(?:\.(?:isra|constprop|part|cold|hot)\.\d+)*)(?:\s+\[\w+\])?$"
     )
 
     candidates = []
     try:
-        with open('/proc/kallsyms', 'r') as f:
+        with open("/proc/kallsyms", "r") as f:
             for line in f:
                 match = pattern.match(line.strip())
                 if match:
@@ -69,6 +73,7 @@ def find_kernel_function(base_name, verbose=False):
         return base_name
     return min(candidates, key=len)
 
+
 def get_kernel_version():
     """
     Get kernel major.minor version tuple.
@@ -77,10 +82,11 @@ def get_kernel_version():
     try:
         version_str = platform.release()
         # Extract version numbers (e.g., "5.10.0-247.0.0.el7.v72.x86_64" -> (5, 10))
-        parts = version_str.split('-')[0].split('.')
+        parts = version_str.split("-")[0].split(".")
         return (int(parts[0]), int(parts[1]))
     except Exception:
         return (0, 0)
+
 
 def get_distro_id():
     """
@@ -88,15 +94,16 @@ def get_distro_id():
     Returns lowercase distro ID (e.g., 'openeuler', 'centos', 'anolis') or 'unknown'.
     """
     try:
-        with open('/etc/os-release', 'r') as f:
+        with open("/etc/os-release", "r") as f:
             for line in f:
-                if line.startswith('ID='):
+                if line.startswith("ID="):
                     # Remove quotes and newline, convert to lowercase
-                    distro_id = line.split('=')[1].strip().strip('"').lower()
+                    distro_id = line.split("=")[1].strip().strip('"').lower()
                     return distro_id
     except Exception:
         pass
-    return 'unknown'
+    return "unknown"
+
 
 def has_irqbypass_module():
     """
@@ -104,7 +111,9 @@ def has_irqbypass_module():
     This indicates the kernel has IRQ bypass support for vhost.
     """
     import os
-    return os.path.exists('/sys/module/irqbypass')
+
+    return os.path.exists("/sys/module/irqbypass")
+
 
 def needs_5x_vhost_layout():
     """
@@ -134,11 +143,20 @@ def needs_5x_vhost_layout():
 
     # Fallback: openEuler 5.x without irqbypass uses 4.x layout
     distro = get_distro_id()
-    if distro == 'openeuler':
+    if distro == "openeuler":
         return False
 
     # Other 5.x kernels typically use 5.x layout
     return True
+
+
+def needs_6x_vhost_layout():
+    """
+    Check if kernel needs 6.x vhost structure additions.
+    """
+    major, minor = get_kernel_version()
+    return major >= 6
+
 
 # Simple BPF program for queue statistics - only tun_net_xmit and vhost_signal
 bpf_text = """
@@ -148,8 +166,8 @@ bpf_text = """
 #include <linux/udp.h>
 #include <linux/netdevice.h>
 #include <linux/if_ether.h>
-#include <net/ip.h>
 #include <net/sock.h>
+#include <net/xdp.h>
 #include <linux/socket.h>
 #include <linux/ptr_ring.h>
 #include <linux/if_tun.h>
@@ -229,10 +247,23 @@ struct tun_struct {
 	struct tun_prog __rcu *filter_prog;
 };
 
+// Kernel layout versions are set via Python based on the running kernel.
+#ifndef KERNEL_VERSION_4X
+#define KERNEL_VERSION_4X 0
+#endif
+#ifndef KERNEL_VERSION_5X
+#define KERNEL_VERSION_5X 0
+#endif
+#ifndef KERNEL_VERSION_6X
+#define KERNEL_VERSION_6X 0
+#endif
+
 struct tun_file {
 	struct sock sk;
 	struct socket socket;
+#if KERNEL_VERSION_4X
 	struct socket_wq wq;
+#endif
 	struct tun_struct __rcu *tun;
 	struct fasync_struct *fasync;
 	unsigned int flags;
@@ -251,6 +282,9 @@ struct tun_file {
 };
 
 // Complete vhost structures from kernel headers (drivers/vhost/vhost.h)
+
+struct vhost_virtqueue;
+
 struct vhost_work {
     struct llist_node node;
     void *fn;  // vhost_work_fn_t
@@ -264,13 +298,10 @@ struct vhost_poll {
     struct vhost_work work;
     __poll_t mask;
     struct vhost_dev *dev;
-};
-
-// KERNEL_VERSION_5X controls which structure layout to use
-// Set via Python based on kernel version detection
-#ifndef KERNEL_VERSION_5X
-#define KERNEL_VERSION_5X 0
+#if KERNEL_VERSION_6X
+    struct vhost_virtqueue *vq;
 #endif
+};
 
 struct vhost_dev {
     struct mm_struct *mm;
@@ -278,6 +309,20 @@ struct vhost_dev {
     struct vhost_virtqueue **vqs;
     int nvqs;
     struct eventfd_ctx *log_ctx;
+#if KERNEL_VERSION_6X
+    struct vhost_umem *umem;
+    struct vhost_umem *iotlb;
+    spinlock_t iotlb_lock;
+    struct list_head read_list;
+    struct list_head pending_list;
+    wait_queue_head_t wait;
+    int iov_limit;
+    int weight;
+    int byte_weight;
+    char worker_xa[16];
+    bool use_worker;
+    void *msg_handler;
+#else
     struct llist_head work_list;
     struct task_struct *worker;
     struct vhost_umem *umem;
@@ -296,6 +341,7 @@ struct vhost_dev {
     void *msg_handler;                      // 8 bytes (function pointer)
     char __padding_dev[16];                 // Additional padding: 16 bytes
 #endif
+#endif
 };
 
 // Kernel 5.x introduced vhost_vring_call structure for IRQ bypass
@@ -307,6 +353,9 @@ struct vhost_vring_call {
 
 struct vhost_virtqueue {
     struct vhost_dev *dev;
+#if KERNEL_VERSION_6X
+    struct vhost_worker *worker;
+#endif
 
     // The actual ring of buffers
     struct mutex mutex;
@@ -366,7 +415,14 @@ struct vhost_virtqueue {
     void *private_data;            // This is the socket pointer we need!
     u64 acked_features;
     u64 acked_backend_features;
-    
+
+#if KERNEL_VERSION_6X
+    void *log_base;
+    struct vhost_log *log;
+    struct iovec log_iov[64];
+    bool is_le;
+    u32 busyloop_timeout;
+#else
     // Is this vq being used by a worker?
     bool is_le;
     
@@ -390,6 +446,7 @@ struct vhost_virtqueue {
     
     // Memory mapping
     struct mm_struct *mm;
+#endif
 };
 
 // Complete vhost_net structures from kernel headers
@@ -407,9 +464,16 @@ struct vhost_net_virtqueue {
     // vhost zerocopy support fields
     int upend_idx;
     int done_idx;
+#if KERNEL_VERSION_6X
+    int batched_xdp;
+    void *ubuf_info;
+#endif
     struct vhost_net_ubuf_ref *ubufs;
     struct ptr_ring *rx_ring;
     struct vhost_net_buf rxq;
+#if KERNEL_VERSION_6X
+    void *xdp;
+#endif
 };
 
 #define VHOST_NET_VQ_MAX 2
@@ -652,35 +716,36 @@ int trace_vhost_signal(struct pt_regs *ctx) {
 }
 """
 
+
 def print_histogram(hist_table, unit):
     """Print histogram with queue information"""
     if len(hist_table) == 0:
         print("    No data")
         return
-    
+
     # Group by queue and device - kernel filtering already applied
     queue_data = {}
     for k, v in hist_table.items():
-        dev_name = k.dev_name.decode('utf-8', 'replace')
+        dev_name = k.dev_name.decode("utf-8", "replace")
         queue_index = k.queue_index
         queue_key = "{}:q{}".format(dev_name, queue_index)
         if queue_key not in queue_data:
             queue_data[queue_key] = {}
         slot = k.slot
         queue_data[queue_key][slot] = v.value
-    
+
     for queue_name in sorted(queue_data.keys()):
         print("  Queue: {}".format(queue_name))
         slots = queue_data[queue_name]
         if not slots:
             print("    No data")
             continue
-            
+
         max_slot = max(slots.keys())
         total_count = sum(slots.values())
-        
+
         print("    Total: {}".format(total_count))
-        
+
         # For last_used_idx histograms, show actual value ranges
         if "last_used_idx" in unit:
             min_slot = min(slots.keys())
@@ -691,15 +756,23 @@ def print_histogram(hist_table, unit):
                 min_val = 0
             else:
                 min_val = 1 << min_slot
-            
+
             if max_slot > 15:  # u16 max should be slot 15
                 max_val = 65535  # Cap at u16 max
-                print("    WARNING: Detected slot {} (>15), capping display at u16 max".format(max_slot))
+                print(
+                    "    WARNING: Detected slot {} (>15), capping display at u16 max".format(
+                        max_slot
+                    )
+                )
             else:
                 max_val = min(65535, (1 << (max_slot + 1)) - 1)
-            
-            print("    Actual value range in this period: {} - {}".format(min_val, max_val))
-        
+
+            print(
+                "    Actual value range in this period: {} - {}".format(
+                    min_val, max_val
+                )
+            )
+
         for slot in range(max_slot + 1):
             count = slots.get(slot, 0)
             if count > 0:
@@ -711,7 +784,7 @@ def print_histogram(hist_table, unit):
                     low = 1 << slot
                     high = min(65535, (1 << (slot + 1)) - 1)  # Cap at u16 max
                     range_str = "{}-{}".format(low, high)
-                
+
                 pct = (count * 100) // total_count if total_count > 0 else 0
                 print("    {:>10} : {:>8} ({}%)".format(range_str, count, pct))
 
@@ -730,37 +803,65 @@ Examples:
   
   # Monitor specific device and queue with 10 outputs
   sudo %(prog)s --device vnet33 --queue 0 --interval 1 10
-        """
+        """,
     )
-    
+
     parser.add_argument("--device", "-d", help="Target device name (e.g., vnet33)")
     parser.add_argument("--queue", "-q", type=int, help="Filter by queue index")
-    parser.add_argument("--interval", "-i", type=int, default=1, help="Output interval in seconds (default: 1)")
-    parser.add_argument("outputs", nargs="?", type=int, default=99999999, help="Number of outputs (default: unlimited)")
-    parser.add_argument("--timestamp", "-T", action="store_true", help="Include timestamp on output")
-    
+    parser.add_argument(
+        "--interval",
+        "-i",
+        type=int,
+        default=1,
+        help="Output interval in seconds (default: 1)",
+    )
+    parser.add_argument(
+        "outputs",
+        nargs="?",
+        type=int,
+        default=99999999,
+        help="Number of outputs (default: unlimited)",
+    )
+    parser.add_argument(
+        "--timestamp", "-T", action="store_true", help="Include timestamp on output"
+    )
+
     args = parser.parse_args()
     countdown = args.outputs
 
     # Detect kernel version, distro and find functions dynamically
     kernel_5x = needs_5x_vhost_layout()
+    kernel_6x = needs_6x_vhost_layout()
     major, minor = get_kernel_version()
+    kernel_4x = major == 4
     distro = get_distro_id()
-    print("Kernel version: {}.{}, Distro: {} (5.x vhost layout: {})".format(major, minor, distro, kernel_5x))
+    print(
+        "Kernel version: {}.{}, Distro: {} (5.x vhost layout: {}, 6.x vhost layout: {})".format(
+            major, minor, distro, kernel_5x, kernel_6x
+        )
+    )
 
     # Find vhost_add_used_and_signal_n function (handles module symbols and GCC suffixes)
-    vhost_signal_func = find_kernel_function("vhost_add_used_and_signal_n", verbose=True)
+    vhost_signal_func = find_kernel_function(
+        "vhost_add_used_and_signal_n", verbose=True
+    )
     if vhost_signal_func:
         print("Found vhost signal function: {}".format(vhost_signal_func))
     else:
-        print("Warning: vhost_add_used_and_signal_n not found, signal stats will be unavailable")
+        print(
+            "Warning: vhost_add_used_and_signal_n not found, signal stats will be unavailable"
+        )
 
     # Load BPF program with kernel version defines
     try:
         bpf_program = bpf_text
         defines = []
+        if kernel_4x:
+            defines.append("#define KERNEL_VERSION_4X 1")
         if kernel_5x:
             defines.append("#define KERNEL_VERSION_5X 1")
+        if kernel_6x:
+            defines.append("#define KERNEL_VERSION_6X 1")
 
         if defines:
             bpf_program = "\n".join(defines) + "\n" + bpf_program
@@ -778,15 +879,19 @@ Examples:
                 vhost_signal_attached = True
                 print("Attached to {}".format(vhost_signal_func))
             except Exception as e:
-                print("Warning: Failed to attach to {}: {}".format(vhost_signal_func, e))
+                print(
+                    "Warning: Failed to attach to {}: {}".format(vhost_signal_func, e)
+                )
 
         if not vhost_signal_attached:
-            print("Warning: vhost_signal probe not attached, signal stats will be unavailable")
+            print(
+                "Warning: vhost_signal probe not attached, signal stats will be unavailable"
+            )
 
     except Exception as e:
         print("Failed to load BPF program: {}".format(e))
         return
-    
+
     devname_map = b["name_map"]
     _name = Devname()
     if args.device:
@@ -797,7 +902,7 @@ Examples:
         _name.name = b""
         devname_map[0] = _name
         print("Device filter: All TUN devices")
-    
+
     if args.queue is not None:
         b["filter_enabled"][0] = ct.c_uint32(1)
         b["filter_queue"][0] = ct.c_uint32(args.queue)
@@ -805,33 +910,37 @@ Examples:
     else:
         b["filter_enabled"][0] = ct.c_uint32(0)
         print("Queue filter: All queues")
-    
+
     print("Simple VHOST-NET Queue Monitor Started")
     print("Tracking: tun_net_xmit and vhost_signal only")
-    print("Interval: {}s | Outputs: {}".format(args.interval, "unlimited" if args.outputs == 99999999 else args.outputs))
+    print(
+        "Interval: {}s | Outputs: {}".format(
+            args.interval, "unlimited" if args.outputs == 99999999 else args.outputs
+        )
+    )
     print("Collecting statistics... Press Ctrl+C to stop\n")
-    
+
     # Clear maps to avoid stale entries - CRITICAL for correct filtering
     target_queues_map = b["target_queues"]
-    
+
     print("Clearing all maps to ensure clean state...")
     target_queues_map.clear()
-    
+
     # Also clear histogram maps to ensure clean start
     vq_last_used_idx_vhost_signal = b.get_table("vq_last_used_idx_vhost_signal")
     ptr_xmit = b.get_table("ptr_ring_depth_xmit")
     last_used_idx_values = b.get_table("last_used_idx_values")
     last_used_idx_counts = b.get_table("last_used_idx_counts")
     napi_status_values = b.get_table("napi_status_values")
-    
+
     vq_last_used_idx_vhost_signal.clear()
     ptr_xmit.clear()
     last_used_idx_values.clear()
     last_used_idx_counts.clear()
     napi_status_values.clear()
-    
+
     print("All maps cleared.")
-    
+
     exiting = 0
     try:
         while countdown > 0:
@@ -839,13 +948,14 @@ Examples:
                 sleep(args.interval)
             except KeyboardInterrupt:
                 exiting = 1
-            
-            print("\n" + "="*80)
+
+            print("\n" + "=" * 80)
             if args.timestamp:
                 import datetime
+
                 now = datetime.datetime.now()
                 print("Time: {}".format(now.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]))
-            
+
             # Print VQ last_used_idx values for this period
             print("\nVQ last_used_idx Values at vhost_signal (this period):")
             print("Shows actual last_used_idx values when VHOST signals guest")
@@ -855,17 +965,17 @@ Examples:
                 # Group by queue and device
                 queue_data = {}
                 for k, v in last_used_idx_values.items():
-                    dev_name = k.dev_name.decode('utf-8', 'replace')
+                    dev_name = k.dev_name.decode("utf-8", "replace")
                     queue_index = k.queue_index
                     queue_key = "{}:q{}".format(dev_name, queue_index)
                     queue_data[queue_key] = v.value
-                
+
                 for queue_name in sorted(queue_data.keys()):
                     idx_value = queue_data[queue_name]
                     # Get call count for this queue
                     call_count = 0
                     for k, v in last_used_idx_counts.items():
-                        dev_name = k.dev_name.decode('utf-8', 'replace')
+                        dev_name = k.dev_name.decode("utf-8", "replace")
                         queue_index = k.queue_index
                         q_key = "{}:q{}".format(dev_name, queue_index)
                         if q_key == queue_name:
@@ -874,45 +984,57 @@ Examples:
                     # Get napi_enabled status for this queue's tfile
                     napi_enabled_status = "N/A"
                     napi_frags_enabled_status = "N/A"
-                    
+
                     # Find the NAPI status for this queue
                     for k, v in napi_status_values.items():
-                        napi_dev_name = k.dev_name.decode('utf-8', 'replace')
+                        napi_dev_name = k.dev_name.decode("utf-8", "replace")
                         napi_queue_index = k.queue_index
-                        napi_queue_name = "{}:q{}".format(napi_dev_name, napi_queue_index)
+                        napi_queue_name = "{}:q{}".format(
+                            napi_dev_name, napi_queue_index
+                        )
                         if napi_queue_name == queue_name:
                             napi_enabled_status = "True" if v.napi_enabled else "False"
-                            napi_frags_enabled_status = "True" if v.napi_frags_enabled else "False"
+                            napi_frags_enabled_status = (
+                                "True" if v.napi_frags_enabled else "False"
+                            )
                             break
-                    
-                    print("  Queue: {} | last_used_idx: {} | calls: {} | napi_enabled: {} | napi_frags_enabled: {}".format(
-                        queue_name, idx_value, call_count, napi_enabled_status, napi_frags_enabled_status))
-            
+
+                    print(
+                        "  Queue: {} | last_used_idx: {} | calls: {} | napi_enabled: {} | napi_frags_enabled: {}".format(
+                            queue_name,
+                            idx_value,
+                            call_count,
+                            napi_enabled_status,
+                            napi_frags_enabled_status,
+                        )
+                    )
+
             # Print VQ last_used_idx Value Distribution from vhost_signal
             print("\nVQ last_used_idx Value Distribution at vhost_signal:")
             print("Shows last_used_idx value ranges when VHOST signals guest")
             print_histogram(vq_last_used_idx_vhost_signal, "last_used_idx")
-            
+
             # Print PTR Ring Depth at tun_net_xmit
             print("\nPTR Ring Depth Distribution at tun_net_xmit:")
             print("Shows ring buffer utilization when packets are transmitted")
             print_histogram(ptr_xmit, "entries")
-            
+
             # Clear histograms for next interval
             vq_last_used_idx_vhost_signal.clear()
             ptr_xmit.clear()
             last_used_idx_values.clear()
             last_used_idx_counts.clear()
             napi_status_values.clear()
-            
+
             countdown -= 1
             if exiting:
                 break
-                
+
     except KeyboardInterrupt:
         pass
-    
+
     print("\nMonitoring stopped.")
+
 
 if __name__ == "__main__":
     main()

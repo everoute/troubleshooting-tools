@@ -31,6 +31,7 @@ Examples:
 """
 
 from __future__ import print_function
+
 # BCC module import with fallback
 try:
     from bcc import BPF
@@ -294,7 +295,7 @@ static inline int five_tuple_filter(struct five_tuple *tuple) {
     return 1;
 }
 
-int trace_kfree_skb(struct pt_regs *ctx, struct sk_buff *skb)
+static inline int collect_kfree_skb(void *ctx, struct sk_buff *skb)
 {
     // Apply device name filter
     if (!name_filter(skb)) {
@@ -359,30 +360,43 @@ int trace_kfree_skb(struct pt_regs *ctx, struct sk_buff *skb)
 
     return 0;
 }
+
+TRACEPOINT_PROBE(skb, kfree_skb)
+{
+    return collect_kfree_skb(args, (struct sk_buff *)args->skbaddr);
+}
 """
 
 # Signal handler for graceful exit
 exiting = False
 
+
 def signal_handler(signal, frame):
     global exiting
     exiting = True
 
+
 def format_five_tuple(tuple_data):
     """Format five-tuple information for display"""
-    protocol_map = {1: 'ICMP', 6: 'TCP', 17: 'UDP'}
+    protocol_map = {1: "ICMP", 6: "TCP", 17: "UDP"}
 
-    src_ip = inet_ntoa(pack('I', tuple_data.saddr))
-    dst_ip = inet_ntoa(pack('I', tuple_data.daddr))
+    src_ip = inet_ntoa(pack("I", tuple_data.saddr))
+    dst_ip = inet_ntoa(pack("I", tuple_data.daddr))
     protocol = protocol_map.get(tuple_data.protocol, str(tuple_data.protocol))
 
     if tuple_data.protocol in [6, 17]:  # TCP or UDP
-        return "%s:%d -> %s:%d (%s)" % (src_ip, tuple_data.sport,
-                                         dst_ip, tuple_data.dport, protocol)
+        return "%s:%d -> %s:%d (%s)" % (
+            src_ip,
+            tuple_data.sport,
+            dst_ip,
+            tuple_data.dport,
+            protocol,
+        )
     else:
         return "%s -> %s (%s)" % (src_ip, dst_ip, protocol)
 
-def print_histogram_stats(b, top_n=5, group_by='all'):
+
+def print_histogram_stats(b, top_n=5, group_by="all"):
     """Print current histogram statistics"""
     failed_hist = b["failed_hist"]
     stack_traces = b["stack_traces"]
@@ -391,10 +405,14 @@ def print_histogram_stats(b, top_n=5, group_by='all'):
     if len(failed_hist) > 0:
         print("\n  Stack trace failures by device:")
         for devname, count in failed_hist.items():
-            devname_str = devname.name.decode('utf-8', 'replace').rstrip('\x00') if isinstance(devname.name, bytes) else str(devname.name).rstrip('\x00')
+            devname_str = (
+                devname.name.decode("utf-8", "replace").rstrip("\x00")
+                if isinstance(devname.name, bytes)
+                else str(devname.name).rstrip("\x00")
+            )
             print("    %s: %d failed" % (devname_str, count.value))
 
-    if group_by == 'stack':
+    if group_by == "stack":
         # Group by stack only
         stack_hist = b["stack_hist"]
         if len(stack_hist) == 0:
@@ -402,12 +420,21 @@ def print_histogram_stats(b, top_n=5, group_by='all'):
             return
 
         sorted_hist = sorted(stack_hist.items(), key=lambda x: x[1].value, reverse=True)
-        print("  Found %d unique stacks, showing top %d:" % (len(sorted_hist), min(top_n, len(sorted_hist))))
+        print(
+            "  Found %d unique stacks, showing top %d:"
+            % (len(sorted_hist), min(top_n, len(sorted_hist)))
+        )
 
         for i, (key, count) in enumerate(sorted_hist[:top_n]):
-            devname_str = key.devname.decode('utf-8', 'replace').rstrip('\x00') if isinstance(key.devname, bytes) else str(key.devname).rstrip('\x00')
-            print("\n  #%d Count: %d calls [device: %s] [stack_id: %d]" %
-                  (i+1, count.value, devname_str, key.stack_id))
+            devname_str = (
+                key.devname.decode("utf-8", "replace").rstrip("\x00")
+                if isinstance(key.devname, bytes)
+                else str(key.devname).rstrip("\x00")
+            )
+            print(
+                "\n  #%d Count: %d calls [device: %s] [stack_id: %d]"
+                % (i + 1, count.value, devname_str, key.stack_id)
+            )
             print("  Stack trace:")
 
             try:
@@ -415,14 +442,18 @@ def print_histogram_stats(b, top_n=5, group_by='all'):
                 print("    Stack depth: %d frames" % len(stack))
                 for j, addr in enumerate(stack[:5]):  # Show top 5 frames
                     sym = b.sym(addr, -1, show_module=True, show_offset=True)
-                    sym_str = sym.decode('utf-8', 'replace') if isinstance(sym, bytes) else str(sym)
+                    sym_str = (
+                        sym.decode("utf-8", "replace")
+                        if isinstance(sym, bytes)
+                        else str(sym)
+                    )
                     print("    %s" % sym_str)
                 if len(stack) > 5:
                     print("    ... (%d more frames)" % (len(stack) - 5))
             except Exception as e:
                 print("    [Error reading stack: %s]" % e)
 
-    elif group_by == 'fivetuple':
+    elif group_by == "fivetuple":
         # Group by five-tuple only
         tuple_hist = b["tuple_hist"]
         if len(tuple_hist) == 0:
@@ -430,12 +461,22 @@ def print_histogram_stats(b, top_n=5, group_by='all'):
             return
 
         sorted_hist = sorted(tuple_hist.items(), key=lambda x: x[1].value, reverse=True)
-        print("  Found %d unique five-tuples, showing top %d:" % (len(sorted_hist), min(top_n, len(sorted_hist))))
+        print(
+            "  Found %d unique five-tuples, showing top %d:"
+            % (len(sorted_hist), min(top_n, len(sorted_hist)))
+        )
 
         for i, (key, count) in enumerate(sorted_hist[:top_n]):
-            devname_str = key.devname.decode('utf-8', 'replace').rstrip('\x00') if isinstance(key.devname, bytes) else str(key.devname).rstrip('\x00')
+            devname_str = (
+                key.devname.decode("utf-8", "replace").rstrip("\x00")
+                if isinstance(key.devname, bytes)
+                else str(key.devname).rstrip("\x00")
+            )
             tuple_str = format_five_tuple(key.tuple)
-            print("\n  #%d Count: %d calls [device: %s]" % (i+1, count.value, devname_str))
+            print(
+                "\n  #%d Count: %d calls [device: %s]"
+                % (i + 1, count.value, devname_str)
+            )
             print("     Flow: %s" % tuple_str)
 
     else:  # group_by == 'all'
@@ -446,13 +487,22 @@ def print_histogram_stats(b, top_n=5, group_by='all'):
             return
 
         sorted_hist = sorted(drop_hist.items(), key=lambda x: x[1].value, reverse=True)
-        print("  Found %d unique stack+flow combinations, showing top %d:" % (len(sorted_hist), min(top_n, len(sorted_hist))))
+        print(
+            "  Found %d unique stack+flow combinations, showing top %d:"
+            % (len(sorted_hist), min(top_n, len(sorted_hist)))
+        )
 
         for i, (key, count) in enumerate(sorted_hist[:top_n]):
-            devname_str = key.devname.decode('utf-8', 'replace').rstrip('\x00') if isinstance(key.devname, bytes) else str(key.devname).rstrip('\x00')
+            devname_str = (
+                key.devname.decode("utf-8", "replace").rstrip("\x00")
+                if isinstance(key.devname, bytes)
+                else str(key.devname).rstrip("\x00")
+            )
             tuple_str = format_five_tuple(key.tuple)
-            print("\n  #%d Count: %d calls [device: %s] [stack_id: %d]" %
-                  (i+1, count.value, devname_str, key.stack_id))
+            print(
+                "\n  #%d Count: %d calls [device: %s] [stack_id: %d]"
+                % (i + 1, count.value, devname_str, key.stack_id)
+            )
             print("     Flow: %s" % tuple_str)
             print("  Stack trace:")
 
@@ -461,12 +511,17 @@ def print_histogram_stats(b, top_n=5, group_by='all'):
                 print("    Stack depth: %d frames" % len(stack))
                 for j, addr in enumerate(stack[:5]):  # Show top 5 frames
                     sym = b.sym(addr, -1, show_module=True, show_offset=True)
-                    sym_str = sym.decode('utf-8', 'replace') if isinstance(sym, bytes) else str(sym)
+                    sym_str = (
+                        sym.decode("utf-8", "replace")
+                        if isinstance(sym, bytes)
+                        else str(sym)
+                    )
                     print("    %s" % sym_str)
                 if len(stack) > 5:
                     print("    ... (%d more frames)" % (len(stack) - 5))
             except Exception as e:
                 print("    [Error reading stack: %s]" % e)
+
 
 def ip_to_hex(ip):
     """Convert IP address to hex format"""
@@ -475,34 +530,73 @@ def ip_to_hex(ip):
     except:
         return 0
 
+
 def main():
     global exiting
 
     # Parse arguments
-    parser = argparse.ArgumentParser(description="Track kfree_skb call stack statistics with five-tuple granularity")
-    parser.add_argument("-i", "--interval", type=int, default=10,
-                        help="reporting interval in seconds (default: 10)")
-    parser.add_argument("-d", "--duration", type=int, default=0,
-                        help="total duration in seconds (default: unlimited)")
-    parser.add_argument("-t", "--top", type=int, default=5,
-                        help="number of top stacks to show (default: 5)")
-    parser.add_argument("-n", "--name", type=str, default="",
-                        help="filter by device name (e.g., eth0, br-int)")
+    parser = argparse.ArgumentParser(
+        description="Track kfree_skb call stack statistics with five-tuple granularity"
+    )
+    parser.add_argument(
+        "-i",
+        "--interval",
+        type=int,
+        default=10,
+        help="reporting interval in seconds (default: 10)",
+    )
+    parser.add_argument(
+        "-d",
+        "--duration",
+        type=int,
+        default=0,
+        help="total duration in seconds (default: unlimited)",
+    )
+    parser.add_argument(
+        "-t",
+        "--top",
+        type=int,
+        default=5,
+        help="number of top stacks to show (default: 5)",
+    )
+    parser.add_argument(
+        "-n",
+        "--name",
+        type=str,
+        default="",
+        help="filter by device name (e.g., eth0, br-int)",
+    )
     parser.add_argument("--src-ip", type=str, help="source IP address filter")
     parser.add_argument("--dst-ip", type=str, help="destination IP address filter")
     parser.add_argument("--src-port", type=int, help="source port filter (TCP/UDP)")
-    parser.add_argument("--dst-port", type=int, help="destination port filter (TCP/UDP)")
-    parser.add_argument("--l4-protocol", type=str, choices=['all', 'icmp', 'tcp', 'udp'],
-                        default='all', help="L4 protocol filter (TCP/UDP/ICMP)")
-    parser.add_argument("--max-entries", type=int, default=10240,
-                        help="maximum histogram entries (default: 10240)")
-    parser.add_argument("--group-by", type=str, choices=['all', 'stack', 'fivetuple'],
-                        default='all', help="grouping mode (default: all)")
+    parser.add_argument(
+        "--dst-port", type=int, help="destination port filter (TCP/UDP)"
+    )
+    parser.add_argument(
+        "--l4-protocol",
+        type=str,
+        choices=["all", "icmp", "tcp", "udp"],
+        default="all",
+        help="L4 protocol filter (TCP/UDP/ICMP)",
+    )
+    parser.add_argument(
+        "--max-entries",
+        type=int,
+        default=10240,
+        help="maximum histogram entries (default: 10240)",
+    )
+    parser.add_argument(
+        "--group-by",
+        type=str,
+        choices=["all", "stack", "fivetuple"],
+        default="all",
+        help="grouping mode (default: all)",
+    )
     parser.add_argument("--expt-ip", type=str, help="except IP address filter")
     args = parser.parse_args()
 
     # Process five-tuple arguments
-    l4_protocol_map = {'all': 0, 'icmp': 1, 'tcp': 6, 'udp': 17}
+    l4_protocol_map = {"all": 0, "icmp": 1, "tcp": 6, "udp": 17}
     l4_protocol = l4_protocol_map.get(args.l4_protocol, 0)
     src_ip_hex = ip_to_hex(args.src_ip) if args.src_ip else 0
     dst_ip_hex = ip_to_hex(args.dst_ip) if args.dst_ip else 0
@@ -528,21 +622,36 @@ def main():
         filters.append("src port: %d" % args.src_port)
     if args.dst_port:
         filters.append("dst port: %d" % args.dst_port)
-    if args.l4_protocol != 'all':
+    if args.l4_protocol != "all":
         filters.append("protocol: %s" % args.l4_protocol.upper())
 
     filter_info = " (filters: %s)" % ", ".join(filters) if filters else " (no filters)"
-    print("Tracing kfree_skb calls with five-tuple histograms, %ds intervals...%s" % (args.interval, filter_info))
-    print("Max histogram entries: %d, Grouping by: %s" % (args.max_entries, args.group_by))
+    print(
+        "Tracing kfree_skb calls with five-tuple histograms, %ds intervals...%s"
+        % (args.interval, filter_info)
+    )
+    print(
+        "Max histogram entries: %d, Grouping by: %s" % (args.max_entries, args.group_by)
+    )
     if args.duration > 0:
         print("Duration: %ds, Press Ctrl+C to stop early" % args.duration)
     else:
         print("Press Ctrl+C to stop")
-    print("="*60)
+    print("=" * 60)
 
     # Initialize BPF with five-tuple parameters
-    b = BPF(text=bpf_text % (src_ip_hex, dst_ip_hex, src_port, dst_port, l4_protocol, args.max_entries, expt_ip_hex))
-    b.attach_kprobe(event="kfree_skb", fn_name="trace_kfree_skb")
+    b = BPF(
+        text=bpf_text
+        % (
+            src_ip_hex,
+            dst_ip_hex,
+            src_port,
+            dst_port,
+            l4_protocol,
+            args.max_entries,
+            expt_ip_hex,
+        )
+    )
 
     # Set device name filter if specified
     if args.name:
@@ -552,11 +661,11 @@ def main():
 
         # Define ctypes structure for device name
         class Devname(Structure):
-            _fields_ = [('name', c_char * 16)]  # IFNAMSIZ
+            _fields_ = [("name", c_char * 16)]  # IFNAMSIZ
 
-        devname_map = b['name_map']
+        devname_map = b["name_map"]
         _name = Devname()
-        _name.name = args.name.encode('utf-8')
+        _name.name = args.name.encode("utf-8")
         devname_map[0] = _name
         print("Filtering by device: %s" % args.name)
     else:
@@ -576,9 +685,9 @@ def main():
                 break
 
             # Calculate total drops based on grouping mode
-            if args.group_by == 'stack':
+            if args.group_by == "stack":
                 hist = b["stack_hist"]
-            elif args.group_by == 'fivetuple':
+            elif args.group_by == "fivetuple":
                 hist = b["tuple_hist"]
             else:
                 hist = b["drop_hist"]
@@ -587,8 +696,10 @@ def main():
 
             # Print periodic statistics
             current_time = strftime("%Y-%m-%d %H:%M:%S")
-            print("\n[%s] Cycle %d - Interval drops: %d [showing top %d, grouped by: %s]" %
-                  (current_time, cycle, total_drops, args.top, args.group_by))
+            print(
+                "\n[%s] Cycle %d - Interval drops: %d [showing top %d, grouped by: %s]"
+                % (current_time, cycle, total_drops, args.top, args.group_by)
+            )
             print("-" * 60)
 
             # Print histogram statistics
@@ -596,9 +707,9 @@ def main():
             print("=" * 60)
 
             # Clear histograms for next interval
-            if args.group_by == 'stack':
+            if args.group_by == "stack":
                 b["stack_hist"].clear()
-            elif args.group_by == 'fivetuple':
+            elif args.group_by == "fivetuple":
                 b["tuple_hist"].clear()
             else:
                 b["drop_hist"].clear()
@@ -610,9 +721,12 @@ def main():
         exiting = True
 
     # Print final statistics (last interval)
-    print("\n" + "="*60)
-    print("%s kfree_skb Call Stack Statistics - Final Interval Summary" % strftime("%Y-%m-%d %H:%M:%S"))
-    print("="*60)
+    print("\n" + "=" * 60)
+    print(
+        "%s kfree_skb Call Stack Statistics - Final Interval Summary"
+        % strftime("%Y-%m-%d %H:%M:%S")
+    )
+    print("=" * 60)
 
     # Get final interval totals (before clearing)
     drop_hist = b["drop_hist"]
@@ -623,8 +737,10 @@ def main():
 
     print("Last interval packet drops: %d" % total_drops)
     if total_failed > 0:
-        print("Last interval failed stack traces: %d (%.1f%%)\n" %
-              (total_failed, 100.0 * total_failed / (total_drops + total_failed)))
+        print(
+            "Last interval failed stack traces: %d (%.1f%%)\n"
+            % (total_failed, 100.0 * total_failed / (total_drops + total_failed))
+        )
 
     if total_drops == 0:
         print("No packet drops in last interval.")
@@ -636,11 +752,18 @@ def main():
     # Sort histogram by count (descending)
     sorted_hist = sorted(drop_hist.items(), key=lambda x: x[1].value, reverse=True)
 
-    for key, count in sorted_hist[:args.top * 2]:  # Show more in final summary
-        devname_str = key.devname.decode('utf-8', 'replace').rstrip('\x00')
+    for key, count in sorted_hist[: args.top * 2]:  # Show more in final summary
+        devname_str = key.devname.decode("utf-8", "replace").rstrip("\x00")
         tuple_str = format_five_tuple(key.tuple)
-        print("\nCount: %d calls (%.1f%%) [device: %s] [stack_id: %d]" %
-              (count.value, 100.0 * count.value / total_drops, devname_str, key.stack_id))
+        print(
+            "\nCount: %d calls (%.1f%%) [device: %s] [stack_id: %d]"
+            % (
+                count.value,
+                100.0 * count.value / total_drops,
+                devname_str,
+                key.stack_id,
+            )
+        )
         print("Flow: %s" % tuple_str)
         print("Stack trace:")
 
@@ -649,7 +772,11 @@ def main():
             stack = stack_traces.walk(key.stack_id)
             for addr in stack:
                 sym = b.sym(addr, -1, show_module=True, show_offset=True)
-                sym_str = sym.decode('utf-8', 'replace') if isinstance(sym, bytes) else str(sym)
+                sym_str = (
+                    sym.decode("utf-8", "replace")
+                    if isinstance(sym, bytes)
+                    else str(sym)
+                )
                 print("  %s" % sym_str)
         except Exception as e:
             print("  [Error reading stack: %s]" % e)
@@ -657,6 +784,7 @@ def main():
         print("-" * 40)
 
     print("\nTracing completed.")
+
 
 if __name__ == "__main__":
     main()

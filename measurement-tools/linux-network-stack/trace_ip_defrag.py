@@ -3,6 +3,7 @@
 # Note: Added encoding declaration for Python 2
 
 from __future__ import print_function
+
 # BCC module import with fallback
 try:
     from bcc import BPF
@@ -13,6 +14,7 @@ except ImportError:
         from bpfcc.utils import printb
     except ImportError:
         import sys
+
         print("Error: Neither bcc nor bpfcc module found!")
         if sys.version_info[0] == 3:
             print("Please install: python3-bcc or python3-bpfcc")
@@ -30,30 +32,32 @@ import argparse
 import signal
 import traceback
 
-parser = argparse.ArgumentParser(description='Trace IP defragmentation events, focusing on duplicates.')
-parser.add_argument('--src-ip', type=str, help='Source IP address to monitor (e.g., 192.168.1.1)')
-parser.add_argument('--dst-ip', type=str, help='Destination IP address to monitor (e.g., 10.0.0.2)')
-parser.add_argument('--protocol', type=str, help='Protocol to monitor (e.g., tcp, udp, icmp or number)')
-parser.add_argument('--log-file', type=str, help='Path to log file (if specified, output will be written to this file)')
+parser = argparse.ArgumentParser(
+    description="Trace IP defragmentation events, focusing on duplicates."
+)
+parser.add_argument(
+    "--src-ip", type=str, help="Source IP address to monitor (e.g., 192.168.1.1)"
+)
+parser.add_argument(
+    "--dst-ip", type=str, help="Destination IP address to monitor (e.g., 10.0.0.2)"
+)
+parser.add_argument(
+    "--protocol", type=str, help="Protocol to monitor (e.g., tcp, udp, icmp or number)"
+)
+parser.add_argument(
+    "--log-file",
+    type=str,
+    help="Path to log file (if specified, output will be written to this file)",
+)
 args = parser.parse_args()
 
-# --- Helper Functions ---
+
 def ip_to_hex(ip_str):
-    """Converts dotted decimal IP string to network byte order integer, then host byte order for BPF."""
-    if not ip_str:
-        return 0
-    try:
-        # Convert to network byte order binary
-        packed_ip = inet_aton(ip_str)
-        # Unpack as network byte order integer
-        network_order_int = unpack("!I", packed_ip)[0]
-        # BPF usually expects host byte order for direct comparison in C
-        # However, kernel IP addresses are often network byte order. Let's keep it network byte order.
-        # return ntohl(network_order_int) # Convert to host byte order if needed by BPF code logic
-        return network_order_int # Keep as network byte order - consistent with skb fields
-    except socket.error:
-        print("Error: Invalid IP address format: {}".format(ip_str))
-        exit(1)
+    """Convert IP string to hex value matching kernel iphdr read format"""
+    packed_ip = socket.inet_aton(ip_str)
+    host_int = struct.unpack("!I", packed_ip)[0]
+    return socket.htonl(host_int)
+
 
 def proto_to_int(proto_str):
     """Converts protocol name or number string to integer."""
@@ -73,8 +77,13 @@ def proto_to_int(proto_str):
         else:
             raise ValueError
     except ValueError:
-        print("Error: Invalid protocol: {}. Use tcp, udp, icmp or a number 0-255.".format(proto_str))
+        print(
+            "Error: Invalid protocol: {}. Use tcp, udp, icmp or a number 0-255.".format(
+                proto_str
+            )
+        )
         exit(1)
+
 
 # Resolve IPs and Protocol
 src_ip_int = ip_to_hex(args.src_ip)
@@ -89,17 +98,19 @@ protocol_str = "{:d}".format(protocol_num)
 log_f = None
 if args.log_file:
     try:
-        log_f = open(args.log_file, 'w')
+        log_f = open(args.log_file, "w")
     except IOError as e:
         print("Error opening log file {}: {}".format(args.log_file, e))
-        log_f = None # Disable logging if file cannot be opened
+        log_f = None  # Disable logging if file cannot be opened
+
 
 def log_print(message):
     """Prints to console and optionally logs to file."""
     print(message)
     if log_f:
-        log_f.write(message + '\n')
-        log_f.flush() # Ensure it's written immediately
+        log_f.write(message + "\n")
+        log_f.flush()  # Ensure it's written immediately
+
 
 # --- BPF C Code ---
 bpf_text = """
@@ -345,8 +356,8 @@ cleanup:
 }
 
 
-// 3. kfree_skb entry - Check stack trace
-int trace_kfree_skb(struct pt_regs *ctx, struct sk_buff *skb) {
+// 3. kfree_skb tracepoint - Check stack trace
+static inline int collect_kfree_skb(void *ctx, struct sk_buff *skb) {
     struct kfree_skb_data_t data = {};
     int ret = get_skb_details(skb, &data.skb_info);
     if (ret < 0) {
@@ -356,6 +367,10 @@ int trace_kfree_skb(struct pt_regs *ctx, struct sk_buff *skb) {
     kfree_events.perf_submit(ctx, &data, sizeof(data));
     return 0;
 }
+
+TRACEPOINT_PROBE(skb, kfree_skb) {
+    return collect_kfree_skb(args, (struct sk_buff *)args->skbaddr);
+}
 """
 
 # --- Python Processing ---
@@ -363,9 +378,11 @@ int trace_kfree_skb(struct pt_regs *ctx, struct sk_buff *skb) {
 # Load BPF program
 try:
     # Replace the unique placeholders using simple string replacement
-    replaced_bpf_text = bpf_text.replace("@@SRC_IP@@", src_ip_hex_str) \
-                                .replace("@@DST_IP@@", dst_ip_hex_str) \
-                                .replace("@@PROTOCOL@@", protocol_str)
+    replaced_bpf_text = (
+        bpf_text.replace("@@SRC_IP@@", src_ip_hex_str)
+        .replace("@@DST_IP@@", dst_ip_hex_str)
+        .replace("@@PROTOCOL@@", protocol_str)
+    )
 
     # Pass the replaced string to BPF
     b = BPF(text=replaced_bpf_text)
@@ -373,7 +390,7 @@ except Exception as e:
     # Print detailed exception information
     print("Error loading BPF program:")
     print("-" * 20)
-    traceback.print_exc() # Print the full traceback
+    traceback.print_exc()  # Print the full traceback
     print("-" * 20)
     # Also print the specific error message
     print("Error Message: {}".format(e))
@@ -383,7 +400,9 @@ except Exception as e:
     # print("--- End BPF Text ---")
 
     if "inet_frag.h" in str(e):
-        print("\nHint: Ensure kernel headers are installed and accessible (e.g., linux-headers-`uname -r`)")
+        print(
+            "\nHint: Ensure kernel headers are installed and accessible (e.g., linux-headers-`uname -r`)"
+        )
     exit(1)
 
 
@@ -392,20 +411,12 @@ except Exception as e:
 b.attach_kprobe(event="ip_defrag", fn_name="trace_ip_defrag")
 
 # 2. inet_frag_queue_insert (entry and return)
-b.attach_kprobe(event="inet_frag_queue_insert", fn_name="trace_inet_frag_queue_insert_entry")
-b.attach_kretprobe(event="inet_frag_queue_insert", fn_name="trace_inet_frag_queue_insert_return")
-
-# 3. kfree_skb (or a more central variant like __kfree_skb)
-# Try __kfree_skb first, fallback to kfree_skb if it doesn't exist
-kfree_func_name = "__kfree_skb"
-if BPF.get_kprobe_functions(b"__kfree_skb"):
-     b.attach_kprobe(event="__kfree_skb", fn_name="trace_kfree_skb")
-elif BPF.get_kprobe_functions(b"kfree_skb"):
-     kfree_func_name = "kfree_skb"
-     b.attach_kprobe(event="kfree_skb", fn_name="trace_kfree_skb")
-else:
-    print("Warning: Could not find kprobe for '__kfree_skb' or 'kfree_skb'. Free events will not be traced.")
-    kfree_func_name = None
+b.attach_kprobe(
+    event="inet_frag_queue_insert", fn_name="trace_inet_frag_queue_insert_entry"
+)
+b.attach_kretprobe(
+    event="inet_frag_queue_insert", fn_name="trace_inet_frag_queue_insert_return"
+)
 
 
 # --- Data Structures (Matching C structs) ---
@@ -413,15 +424,16 @@ class SkbInfo(ct.Structure):
     _fields_ = [
         ("ts", ct.c_ulonglong),
         ("pid", ct.c_uint),
-        ("comm", ct.c_char * 16), # TASK_COMM_LEN
-        ("ifname", ct.c_char * 16), # IFNAMSIZ
-        ("saddr", ct.c_uint), # Network byte order
-        ("daddr", ct.c_uint), # Network byte order
-        ("sport", ct.c_ushort), # Network byte order
-        ("dport", ct.c_ushort), # Network byte order
+        ("comm", ct.c_char * 16),  # TASK_COMM_LEN
+        ("ifname", ct.c_char * 16),  # IFNAMSIZ
+        ("saddr", ct.c_uint),  # Network byte order
+        ("daddr", ct.c_uint),  # Network byte order
+        ("sport", ct.c_ushort),  # Network byte order
+        ("dport", ct.c_ushort),  # Network byte order
         ("protocol", ct.c_ubyte),
         ("l4_hdr_set", ct.c_ubyte),
     ]
+
 
 class IpDefragData(ct.Structure):
     _fields_ = [
@@ -429,24 +441,31 @@ class IpDefragData(ct.Structure):
         ("user", ct.c_uint),
     ]
 
+
 class FragInsertData(ct.Structure):
-     _fields_ = [
+    _fields_ = [
         ("skb_info", SkbInfo),
-        ("q_saddr", ct.c_uint), # Network byte order
-        ("q_daddr", ct.c_uint), # Network byte order
-        ("q_id", ct.c_ushort),  # Network byte order? Check kernel source - likely host order in struct key, convert if needed
+        ("q_saddr", ct.c_uint),  # Network byte order
+        ("q_daddr", ct.c_uint),  # Network byte order
+        (
+            "q_id",
+            ct.c_ushort,
+        ),  # Network byte order? Check kernel source - likely host order in struct key, convert if needed
         ("q_protocol", ct.c_ubyte),
         ("offset", ct.c_int),
         ("end", ct.c_int),
     ]
 
+
 class KfreeSkbData(ct.Structure):
-     _fields_ = [
+    _fields_ = [
         ("skb_info", SkbInfo),
-        ("stack_id", ct.c_int), # Changed to c_int to match BPF struct
+        ("stack_id", ct.c_int),  # Changed to c_int to match BPF struct
     ]
 
+
 # --- Event Handling Functions ---
+
 
 def get_ip_str(nbo_ip_int):
     """Convert Network Byte Order integer to IP string."""
@@ -455,17 +474,19 @@ def get_ip_str(nbo_ip_int):
         # in host order, and we need to preserve the original network byte layout
         return inet_ntop(AF_INET, pack("I", nbo_ip_int))
     except ValueError:
-        return str(nbo_ip_int) # Fallback if invalid
+        return str(nbo_ip_int)  # Fallback if invalid
+
 
 def get_port_str(nbo_port_short):
     """Convert Network Byte Order short to Port string."""
     return str(ntohs(nbo_port_short))
 
+
 def format_skb_info(skb_info):
     """Formats the SkbInfo structure into a readable string."""
-    time_str = strftime("%H:%M:%S.%f")[:-3] # Time with milliseconds
-    pid_comm = "{}/{}".format(skb_info.pid, skb_info.comm.decode('utf-8', 'replace'))
-    dev = skb_info.ifname.decode('utf-8', 'replace') or "?"
+    time_str = strftime("%H:%M:%S.%f")[:-3]  # Time with milliseconds
+    pid_comm = "{}/{}".format(skb_info.pid, skb_info.comm.decode("utf-8", "replace"))
+    dev = skb_info.ifname.decode("utf-8", "replace") or "?"
 
     src_ip = get_ip_str(skb_info.saddr)
     dst_ip = get_ip_str(skb_info.daddr)
@@ -476,19 +497,23 @@ def format_skb_info(skb_info):
         if proto == socket.IPPROTO_TCP or proto == socket.IPPROTO_UDP:
             sport = get_port_str(skb_info.sport)
             dport = get_port_str(skb_info.dport)
-            l4_info = "{}:{} -> {}:{} Proto={}".format(src_ip, sport, dst_ip, dport, proto)
+            l4_info = "{}:{} -> {}:{} Proto={}".format(
+                src_ip, sport, dst_ip, dport, proto
+            )
         elif proto == socket.IPPROTO_ICMP:
-             l4_info = "{} -> {} Proto=ICMP".format(src_ip, dst_ip)
+            l4_info = "{} -> {} Proto=ICMP".format(src_ip, dst_ip)
     else:
         l4_info = "{} -> {} Proto={} (L4 hdr?)".format(src_ip, dst_ip, proto)
 
     return "{} {:<20} DEV={:<6} {}".format(time_str, pid_comm, dev, l4_info)
+
 
 def print_ip_defrag_event(cpu, data, size):
     """Callback for ip_defrag_events perf buffer."""
     event = ct.cast(data, ct.POINTER(IpDefragData)).contents
     skb_summary = format_skb_info(event.skb_info)
     log_print("[ip_defrag] {} User={}".format(skb_summary, event.user))
+
 
 def print_frag_insert_dup_event(cpu, data, size):
     """Callback for frag_insert_dup_events perf buffer."""
@@ -497,10 +522,22 @@ def print_frag_insert_dup_event(cpu, data, size):
     q_src = get_ip_str(event.q_saddr)
     q_dst = get_ip_str(event.q_daddr)
     # q_id is likely host order in the key struct, but read as network order if needed
-    q_id_val = ntohs(event.q_id) # Assuming kernel stores it host order in frag_v4_compare_key
+    q_id_val = ntohs(
+        event.q_id
+    )  # Assuming kernel stores it host order in frag_v4_compare_key
 
-    log_print("[DUP_INSERT] {} Queue=({}->{} ID={} Proto={}) Offset={} End={}".format(
-        skb_summary, q_src, q_dst, q_id_val, event.q_protocol, event.offset, event.end))
+    log_print(
+        "[DUP_INSERT] {} Queue=({}->{} ID={} Proto={}) Offset={} End={}".format(
+            skb_summary,
+            q_src,
+            q_dst,
+            q_id_val,
+            event.q_protocol,
+            event.offset,
+            event.end,
+        )
+    )
+
 
 def print_kfree_event(cpu, data, size):
     """Callback for kfree_events perf buffer."""
@@ -515,10 +552,10 @@ def print_kfree_event(cpu, data, size):
     if stack_id >= 0:
         try:
             stack_trace = list(b.get_table("stack_traces").walk(stack_id))
-            stack_trace_str = "" # Clear the unavailable message
+            stack_trace_str = ""  # Clear the unavailable message
             for addr in stack_trace:
                 sym = b.ksym(addr, show_offset=True)
-                sym_decoded = sym.decode('utf-8', 'replace')
+                sym_decoded = sym.decode("utf-8", "replace")
                 # Store the full trace line for potential printing later
                 stack_trace_str += "    - {}\n".format(sym_decoded)
                 # if not found_relevant_frame and \
@@ -526,23 +563,29 @@ def print_kfree_event(cpu, data, size):
                 #     "ip_frag_queue" in sym_decoded or \
                 #     "ip_defrag" in sym_decoded):
                 #     found_relevant_frame = True
-                    # Store only the relevant frames if needed for summary
-                    # relevant_frames.append(sym_decoded) # Or just use found_relevant_frame flag
+                # Store only the relevant frames if needed for summary
+                # relevant_frames.append(sym_decoded) # Or just use found_relevant_frame flag
 
         except KeyError:
             # Stack ID was valid but not found in the table (e.g., evicted)
-             stack_trace_str = "[Stack Trace Missing (ID: {})]".format(stack_id)
+            stack_trace_str = "[Stack Trace Missing (ID: {})]".format(stack_id)
         except Exception as e:
             # Handle other potential errors during stack walk
-            stack_trace_str = "[Error getting stack trace (ID: {}): {}]".format(stack_id, e)
-
+            stack_trace_str = "[Error getting stack trace (ID: {}): {}]".format(
+                stack_id, e
+            )
 
     if found_relevant_frame:
         skb_summary = format_skb_info(event.skb_info)
-        log_print("[kfree_skb] {} StackID={} (Fragment Related)".format(skb_summary, stack_id))
+        log_print(
+            "[kfree_skb] {} StackID={} (Fragment Related)".format(skb_summary, stack_id)
+        )
         # Print the full stack trace string we built (or the error message)
-        log_print("  Stack Trace:\n{}".format(stack_trace_str.rstrip())) # rstrip removes trailing newline
+        log_print(
+            "  Stack Trace:\n{}".format(stack_trace_str.rstrip())
+        )  # rstrip removes trailing newline
     # Else: If no relevant frame was found, we don't print the kfree event
+
 
 # --- Main Loop ---
 
@@ -555,16 +598,20 @@ buffer_page_cnt = 128
 
 # Open Perf Buffers with increased size
 b["ip_defrag_events"].open_perf_buffer(print_ip_defrag_event, page_cnt=buffer_page_cnt)
-b["frag_insert_dup_events"].open_perf_buffer(print_frag_insert_dup_event, page_cnt=buffer_page_cnt)
-if kfree_func_name: # Only open if kfree probe was attached
-    b["kfree_events"].open_perf_buffer(print_kfree_event, page_cnt=buffer_page_cnt)
+b["frag_insert_dup_events"].open_perf_buffer(
+    print_frag_insert_dup_event, page_cnt=buffer_page_cnt
+)
+b["kfree_events"].open_perf_buffer(print_kfree_event, page_cnt=buffer_page_cnt)
 
 # Signal handler for clean exit
 running = True
+
+
 def signal_handler(sig, frame):
     global running
     print("\nDetaching probes and exiting...")
     running = False
+
 
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
@@ -573,7 +620,7 @@ signal.signal(signal.SIGTERM, signal_handler)
 # Start polling
 while running:
     try:
-        b.perf_buffer_poll(timeout=100) # Poll with a timeout
+        b.perf_buffer_poll(timeout=100)  # Poll with a timeout
     except KeyboardInterrupt:
         # Redundant due to signal handler, but good practice
         signal_handler(signal.SIGINT, None)

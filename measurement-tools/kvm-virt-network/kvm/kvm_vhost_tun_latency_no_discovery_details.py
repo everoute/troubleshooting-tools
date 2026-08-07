@@ -158,36 +158,51 @@ def get_qemu_pid_from_device(device, verbose=False):
 
 
 def get_vhost_tids(qemu_pid, verbose=False):
-    """Get all vhost kernel thread TIDs for a QEMU process.
-
-    vhost threads are kernel threads named [vhost-<qemu_pid>], not user threads
-    within the QEMU process. They run as separate kernel threads.
-    """
+    """Get all vhost thread TIDs for a QEMU process."""
     tids = []
     vhost_comm = "vhost-{}".format(qemu_pid)
 
-    # Method 1: Scan /proc for kernel threads matching [vhost-<qemu_pid>]
+    # Method 1: Newer kernels expose vhost workers as QEMU threads.
+    task_dir = "/proc/{}/task".format(qemu_pid)
     try:
-        for pid_dir in os.listdir("/proc"):
-            if not pid_dir.isdigit():
+        for tid_dir in os.listdir(task_dir):
+            if not tid_dir.isdigit():
                 continue
             try:
-                comm_path = "/proc/{}/comm".format(pid_dir)
+                comm_path = os.path.join(task_dir, tid_dir, "comm")
                 with open(comm_path) as f:
                     comm = f.read().strip()
                 if comm == vhost_comm:
-                    tids.append(int(pid_dir))
+                    tids.append(int(tid_dir))
             except (OSError, IOError):
                 continue
     except Exception as e:
         if verbose:
-            print("Warning: Failed to scan /proc: {}".format(e))
+            print("Warning: Failed to scan {}: {}".format(task_dir, e))
 
-    # Method 2: Use ps if /proc method failed
+    # Method 2: Older kernels expose vhost workers as separate kthreads.
+    if not tids:
+        try:
+            for pid_dir in os.listdir("/proc"):
+                if not pid_dir.isdigit():
+                    continue
+                try:
+                    comm_path = "/proc/{}/comm".format(pid_dir)
+                    with open(comm_path) as f:
+                        comm = f.read().strip()
+                    if comm == vhost_comm:
+                        tids.append(int(pid_dir))
+                except (OSError, IOError):
+                    continue
+        except Exception as e:
+            if verbose:
+                print("Warning: Failed to scan /proc: {}".format(e))
+
+    # Method 3: Use ps if /proc methods failed.
     if not tids:
         try:
             ps_out = subprocess.check_output(
-                ["ps", "-eo", "pid,comm"],
+                ["ps", "-eLo", "tid,comm"],
                 stderr=subprocess.DEVNULL
             ).decode()
             for line in ps_out.strip().split('\n')[1:]:
@@ -197,8 +212,7 @@ def get_vhost_tids(qemu_pid, verbose=False):
         except subprocess.CalledProcessError:
             pass
 
-    return sorted(tids)
-
+    return sorted(set(tids))
 
 def parse_flow(flow_str):
     """Parse flow string into dict of fields."""

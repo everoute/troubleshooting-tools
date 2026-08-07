@@ -84,6 +84,33 @@ class TestExecutor:
 
         return results
 
+    def _get_execution_config(self) -> Dict:
+        """Return execution behavior switches from the loaded config."""
+        return self.config.get('execution', {}) if isinstance(self.config, dict) else {}
+
+    def _continue_on_failure(self) -> bool:
+        return self._get_execution_config().get('continue_on_failure', False)
+
+    def _fail_on_hook_task_failure(self) -> bool:
+        return self._get_execution_config().get('fail_on_hook_task_failure', False)
+
+    def _failed_hook_tasks(self, hook_result: Dict) -> List[str]:
+        """Extract failed hook task names from a hook result."""
+        failed = []
+        if not isinstance(hook_result, dict):
+            return failed
+
+        if hook_result.get('error'):
+            failed.append(str(hook_result['error']))
+
+        for task in hook_result.get('tasks', []):
+            if isinstance(task, dict) and task.get('status') is False:
+                name = task.get('name', 'unnamed_task')
+                error = task.get('error') or task.get('details')
+                failed.append(f"{name}: {error}" if error else name)
+
+        return failed
+
     def _execute_test_cycle(self, cycle: Dict, workflow_spec: Dict) -> Dict:
         """Execute single test cycle using layered hooks
 
@@ -100,6 +127,9 @@ class TestExecutor:
             "status": "running"
         }
 
+        cycle_context = None
+        case_init_done = False
+
         try:
             # Prepare cycle context
             cycle_context = self._prepare_cycle_context(cycle, workflow_spec)
@@ -111,13 +141,22 @@ class TestExecutor:
                 tool_init_result = self.init_hooks.execute_hook(
                     "tool", "init", tool_context
                 )
+                cycle_result['tool_init'] = tool_init_result
                 logger.info(f"Tool init for {tool_id}: {tool_init_result}")
+                failed_tasks = self._failed_hook_tasks(tool_init_result)
+                if self._fail_on_hook_task_failure() and failed_tasks:
+                    raise RuntimeError("Tool init failed: " + "; ".join(failed_tasks))
 
             # Case-level init
             case_init_result = self.init_hooks.execute_hook(
                 "case", "init", cycle_context
             )
+            case_init_done = True
+            cycle_result['case_init'] = case_init_result
             logger.info(f"Case init: {case_init_result}")
+            failed_tasks = self._failed_hook_tasks(case_init_result)
+            if self._fail_on_hook_task_failure() and failed_tasks:
+                raise RuntimeError("Case init failed: " + "; ".join(failed_tasks))
 
             # Execute performance tests with test-level hooks
             perf_results = self._execute_performance_tests(
@@ -129,15 +168,30 @@ class TestExecutor:
             case_post_result = self.post_hooks.execute_hook(
                 "case", "post", cycle_context
             )
+            cycle_result['case_post'] = case_post_result
             logger.info(f"Case post: {case_post_result}")
+            failed_tasks = self._failed_hook_tasks(case_post_result)
+            if self._fail_on_hook_task_failure() and failed_tasks:
+                raise RuntimeError("Case post failed: " + "; ".join(failed_tasks))
 
             cycle_result['status'] = "completed"
         except Exception as e:
             logger.error(f"Test cycle failed: {str(e)}")
             cycle_result['status'] = "failed"
             cycle_result['error'] = str(e)
-            # Re-raise exception to stop workflow execution
-            raise
+            if case_init_done and cycle_context:
+                try:
+                    case_post_result = self.post_hooks.execute_hook(
+                        "case", "post", cycle_context
+                    )
+                    cycle_result['case_post'] = case_post_result
+                    logger.info(f"Case post after failure: {case_post_result}")
+                except Exception as cleanup_error:
+                    logger.error(f"Case post cleanup failed: {cleanup_error}")
+                    cycle_result['cleanup_error'] = str(cleanup_error)
+
+            if not self._continue_on_failure():
+                raise
         finally:
             cycle_result['end_time'] = datetime.now().isoformat()
 
@@ -297,15 +351,40 @@ class TestExecutor:
                     "test", "init", test_context
                 )
                 logger.info(f"Test init for {test_type}/{config}: {test_init_result}")
+                failed_tasks = self._failed_hook_tasks(test_init_result)
+                if self._fail_on_hook_task_failure() and failed_tasks:
+                    raise RuntimeError(
+                        f"Test init failed for {test_type}/{config}: " +
+                        "; ".join(failed_tasks)
+                    )
 
-                # Execute actual performance test
-                test_result = self._run_performance_test(test_type, config, test_context)
+                test_result = None
+                test_post_result = {"tasks": []}
+                pending_error = None
 
-                # Test-level post (stop servers)
-                test_post_result = self.post_hooks.execute_hook(
-                    "test", "post", test_context
-                )
-                logger.info(f"Test post for {test_type}/{config}: {test_post_result}")
+                try:
+                    # Execute actual performance test
+                    test_result = self._run_performance_test(test_type, config, test_context)
+                    if self._fail_on_hook_task_failure() and test_result.get('status') == 'failed':
+                        pending_error = RuntimeError(
+                            f"Performance test failed for {test_type}/{config}: " +
+                            str(test_result.get('error', 'unknown error'))
+                        )
+                finally:
+                    # Test-level post (stop servers)
+                    test_post_result = self.post_hooks.execute_hook(
+                        "test", "post", test_context
+                    )
+                    logger.info(f"Test post for {test_type}/{config}: {test_post_result}")
+
+                failed_tasks = self._failed_hook_tasks(test_post_result)
+                if self._fail_on_hook_task_failure() and failed_tasks:
+                    raise RuntimeError(
+                        f"Test post failed for {test_type}/{config}: " +
+                        "; ".join(failed_tasks)
+                    )
+                if pending_error:
+                    raise pending_error
 
                 results.append({
                     "test_type": test_type,
@@ -676,7 +755,10 @@ class TestExecutor:
             elif test_type == "icmp_ping":
                 result = self._run_icmp_test(config, test_context)
 
-            result['status'] = "completed"
+            if result.get('error') or result.get('success') is False:
+                result['status'] = "failed"
+            else:
+                result['status'] = "completed"
         except Exception as e:
             logger.error(f"Performance test failed: {str(e)}")
             result['status'] = "failed"

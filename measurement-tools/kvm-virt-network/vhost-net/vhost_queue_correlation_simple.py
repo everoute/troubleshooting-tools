@@ -145,6 +145,17 @@ def needs_5x_vhost_layout():
     # Other 5.x kernels typically use 5.x layout
     return True
 
+def needs_6x_vhost_layout():
+    """
+    Check if kernel needs 6.x vhost structure additions.
+
+    Kernel 6.x vhost_virtqueue has an extra vhost_worker pointer after dev,
+    and vhost_poll has an extra vq pointer at the end. Missing both shifts
+    vhost_virtqueue.private_data by 16 bytes on 6.6 kernels.
+    """
+    major, minor = get_kernel_version()
+    return major >= 6
+
 # BPF program for simple queue monitoring
 bpf_text = """
 #include <linux/skbuff.h>
@@ -153,8 +164,8 @@ bpf_text = """
 #include <linux/udp.h>
 #include <linux/netdevice.h>
 #include <linux/if_ether.h>
-#include <net/ip.h>
 #include <net/sock.h>
+#include <net/xdp.h>
 #include <linux/socket.h>
 #include <linux/ptr_ring.h>
 #include <linux/if_tun.h>
@@ -230,10 +241,23 @@ struct tun_struct {
 	struct tun_prog __rcu *filter_prog;
 };
 
+// Kernel layout versions are set via Python based on the running kernel.
+#ifndef KERNEL_VERSION_4X
+#define KERNEL_VERSION_4X 0
+#endif
+#ifndef KERNEL_VERSION_5X
+#define KERNEL_VERSION_5X 0
+#endif
+#ifndef KERNEL_VERSION_6X
+#define KERNEL_VERSION_6X 0
+#endif
+
 struct tun_file {
 	struct sock sk;
 	struct socket socket;
+#if KERNEL_VERSION_4X
 	struct socket_wq wq;
+#endif
 	struct tun_struct __rcu *tun;
 	struct fasync_struct *fasync;
 	unsigned int flags;
@@ -254,6 +278,8 @@ struct tun_file {
 // Complete vhost structures from kernel headers (drivers/vhost/vhost.h)
 // Need complete definition for correct field offsets
 
+struct vhost_virtqueue;
+
 struct vhost_work {
     struct llist_node node;
     void *fn;  // vhost_work_fn_t
@@ -267,13 +293,10 @@ struct vhost_poll {
     struct vhost_work work;
     __poll_t mask;
     struct vhost_dev *dev;
-};
-
-// KERNEL_VERSION_5X controls which structure layout to use
-// Set via Python based on kernel version detection
-#ifndef KERNEL_VERSION_5X
-#define KERNEL_VERSION_5X 0
+#if KERNEL_VERSION_6X
+    struct vhost_virtqueue *vq;
 #endif
+};
 
 // DEBUG_ENABLED controls debug instrumentation compilation
 // Set via Python based on --debug flag
@@ -336,6 +359,9 @@ struct vhost_vring_call {
 
 struct vhost_virtqueue {
     struct vhost_dev *dev;
+#if KERNEL_VERSION_6X
+    struct vhost_worker *worker;
+#endif
 
     // The actual ring of buffers
     struct mutex mutex;
@@ -396,6 +422,13 @@ struct vhost_virtqueue {
     u64 acked_features;
     u64 acked_backend_features;
 
+#if KERNEL_VERSION_6X
+    void *log_base;
+    struct vhost_log *log;
+    struct iovec log_iov[64];
+    bool is_le;
+    u32 busyloop_timeout;
+#else
     // Is this vq being used by a worker?
     bool is_le;
 
@@ -419,6 +452,7 @@ struct vhost_virtqueue {
 
     // Memory mapping
     struct mm_struct *mm;
+#endif
 };
 
 // Key structure to track queue
@@ -824,16 +858,16 @@ class QueueEvent(ct.Structure):
 
 def print_event(cpu, data, size):
     event = ct.cast(data, ct.POINTER(QueueEvent)).contents
-    
+
     # Format timestamp
     timestamp = datetime.datetime.fromtimestamp(event.timestamp / 1000000000.0)
     timestamp_str = timestamp.strftime('%H:%M:%S.%f')[:-3]
-    
+
     event_names = {
         1: "vhost_signal",
         2: "vhost_notify"
     }
-    
+
     print("="*80)
     print("Event: {} | Time: {} | Timestamp: {}ns".format(
         event_names.get(event.event_type, "unknown"), timestamp_str, event.timestamp))
@@ -841,13 +875,13 @@ def print_event(cpu, data, size):
         event.queue_index, event.dev_name.decode('utf-8', 'replace'),
         event.comm.decode('utf-8', 'replace'), event.pid))
     print("Sock: 0x{:x}".format(event.sock_ptr))
-    
+
     if event.event_type == 1:  # vhost_signal
         print("VQ: 0x{:x}".format(event.vq_ptr))
         print("VQ State: avail_idx={}, last_avail={}, last_used={}, used_flags=0x{:x}".format(
             event.avail_idx, event.last_avail_idx, event.last_used_idx, event.used_flags))
         print("Signal: signalled_used={}, valid={}, log_used={}".format(
-            event.signalled_used, "YES" if event.signalled_used_valid else "NO", 
+            event.signalled_used, "YES" if event.signalled_used_valid else "NO",
             "YES" if event.log_used else "NO"))
         print("Features: acked=0x{:x}, backend=0x{:x}".format(
             event.acked_features, event.acked_backend_features))
@@ -868,14 +902,20 @@ def print_event(cpu, data, size):
                 event.avail_flags, "YES" if no_interrupt else "NO"))
         else:
             print("Guest avail_flags: <failed to read>")
-        
+
         if event.has_event_idx_feature and event.guest_event_valid:
             print("Guest used_event_idx: {} (host last_used={})".format(
                 event.used_event_idx, event.last_used_idx))
         elif event.has_event_idx_feature:
             print("Guest used_event_idx: <failed to read>")
-    
+
     print()
+
+def get_bpf_table(bpf_obj, table_name):
+    try:
+        return bpf_obj[table_name]
+    except Exception:
+        return None
 
 def main():
     parser = argparse.ArgumentParser(
@@ -893,17 +933,19 @@ Examples:
   sudo %(prog)s --device vnet33 --verbose
         """
     )
-    
+
     parser.add_argument("--device", "-d", help="Target device name (e.g., vnet33)")
     parser.add_argument("--queue", "-q", type=int, help="Filter by queue index")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     parser.add_argument("--debug", action="store_true", help="Enable debug statistics output")
-    
+
     args = parser.parse_args()
 
     # Detect kernel version, distro and set appropriate structure layout
     kernel_5x = needs_5x_vhost_layout()
+    kernel_6x = needs_6x_vhost_layout()
     major, minor = get_kernel_version()
+    kernel_4x = major == 4
     distro = get_distro_id()
 
     # Pre-scan for vhost_notify function name to detect constprop variant
@@ -924,7 +966,9 @@ Examples:
             print("Detected kernel version: {}.{}, distro: {}".format(major, minor, distro))
             print("IRQ bypass module: {}".format("loaded" if irqbypass_loaded else "not loaded"))
             print("Using {} vhost structure layout".format(
-                "5.x (with vhost_vring_call, 72 bytes)" if kernel_5x else "4.x (pointer only, 8 bytes)"))
+                "6.x (with vhost_worker/vhost_poll.vq)" if kernel_6x else
+                "5.x (with vhost_vring_call, 72 bytes)" if kernel_5x else
+                "4.x (pointer only, 8 bytes)"))
             if vhost_notify_func:
                 print("vhost_notify function: {} (constprop={})".format(
                     vhost_notify_func, "YES" if is_constprop else "NO"))
@@ -934,8 +978,12 @@ Examples:
         # Set compile-time macros for correct structure/parameter handling
         bpf_program = bpf_text
         defines = []
+        if kernel_4x:
+            defines.append("#define KERNEL_VERSION_4X 1")
         if kernel_5x:
             defines.append("#define KERNEL_VERSION_5X 1")
+        if kernel_6x:
+            defines.append("#define KERNEL_VERSION_6X 1")
         if is_constprop:
             defines.append("#define VHOST_NOTIFY_CONSTPROP 1")
         if args.debug:
@@ -981,14 +1029,14 @@ Examples:
         if not vhost_notify_attached:
             print("Warning: Could not attach to vhost_notify (function not found or attach failed)")
             print("Continuing without vhost_notify monitoring...")
-        
+
         if args.verbose:
             print("All probes attached successfully")
-        
+
     except Exception as e:
         print("Failed to load BPF program: {}".format(e))
         return
-    
+
     devname_map = b["name_map"]
     _name = Devname()
     if args.device:
@@ -999,7 +1047,7 @@ Examples:
         _name.name = b""
         devname_map[0] = _name
         print("Device filter: All TUN devices")
-    
+
     if args.queue is not None:
         b["filter_enabled"][0] = ct.c_uint32(1)
         b["filter_queue"][0] = ct.c_uint32(args.queue)
@@ -1007,27 +1055,27 @@ Examples:
     else:
         b["filter_enabled"][0] = ct.c_uint32(0)
         print("Queue filter: All queues")
-    
+
     print("Simple VHOST Queue Monitor Started")
     print("Monitoring: vhost_signal & vhost_notify events")
     print("Clearing maps to avoid stale entries")
-    
+
     # Clear maps
     target_queues_map = b["target_queues"]
     target_queues_map.clear()
-    
-    if "vhost_notify_params" in b:
-        vhost_notify_params_map = b["vhost_notify_params"]
+
+    vhost_notify_params_map = get_bpf_table(b, "vhost_notify_params")
+    if vhost_notify_params_map is not None:
         vhost_notify_params_map.clear()
-    
+
     print("Waiting for events... Press Ctrl+C to stop\n")
 
     def print_debug_stats():
         """Print debug statistics from BPF map"""
-        if "debug_stats" not in b:
+        debug_map = get_bpf_table(b, "debug_stats")
+        if debug_map is None:
             print("\n[DEBUG] debug_stats map not available (DEBUG_ENABLED=0)")
             return
-        debug_map = b["debug_stats"]
         stats = {i: debug_map[i].value for i in range(16)}
 
         tun_sock_ptr = (stats[7] << 32) | stats[6]
